@@ -65,6 +65,22 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .pure(),
+        CommandSpec::new("view.sideBySide", "View Side by Side", "View › Window", |s, v| toggle(s, v, |x| &mut x.side_by_side)).pure(),
+        CommandSpec::new("view.syncScroll", "Synchronous Scrolling", "View › Window", |s, v| toggle(s, v, |x| &mut x.sync_scroll)).pure(),
+        CommandSpec::new("view.arrangeAll", "Arrange All", "View › Window", |s, v| {
+            let layout = p::str(v, "layout").unwrap_or("tile");
+            s.ui_requests.push(json!({"arrange": layout}));
+            sel_result(s)
+        })
+        .params(r#"{"layout"?: "tile|horizontal|vertical"}"#)
+        .pure(),
+        CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", |s, v| {
+            let w = p::u64(v, "window").unwrap_or(0);
+            s.ui_requests.push(json!({"switchWindow": w}));
+            sel_result(s)
+        })
+        .params(r#"{"window"?: n}"#)
+        .pure(),
         CommandSpec::new("view.state", "View State", "View", |s, _| serde_json::to_value(&s.view).map_err(|e| CmdError::Failed(e.to_string())))
             .pure(),
     ]

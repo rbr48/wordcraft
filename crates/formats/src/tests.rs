@@ -195,6 +195,19 @@ fn numbered_list_after_bullets_keeps_its_kind() {
 }
 
 #[test]
+fn epub_export_produces_valid_zip_package() {
+    let d = sample();
+    let bytes = export("epub", &d).expect("handled").expect("export");
+    assert!(bytes.starts_with(b"PK\x03\x04"));
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    assert!(zip.by_name("mimetype").is_ok());
+    assert!(zip.by_name("META-INF/container.xml").is_ok());
+    assert!(zip.by_name("OEBPS/content.opf").is_ok());
+    assert!(zip.by_name("OEBPS/content.xhtml").is_ok());
+    assert!(zip.by_name("OEBPS/nav.xhtml").is_ok());
+}
+
+#[test]
 fn markdown_round_trip() {
     check_round_trip("md", true);
 }

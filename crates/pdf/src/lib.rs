@@ -390,6 +390,54 @@ fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
             pb.cubic_to(x1, y0, cx, y0, cx, y0 + h * 0.3);
             pb.close();
         }
+        ShapeKind::RightTriangle => poly(&mut pb, &[(x0, y0), (x0, y1), (x1, y1)]),
+        ShapeKind::Pentagon => {
+            let pts: Vec<(f32, f32)> = (0..5)
+                .map(|i| {
+                    let a = std::f32::consts::PI * 2.0 * i as f32 / 5.0 - std::f32::consts::FRAC_PI_2;
+                    (cx + a.cos() * r.w / 2.0, cy + a.sin() * r.h / 2.0)
+                })
+                .collect();
+            poly(&mut pb, &pts);
+        }
+        ShapeKind::Hexagon => {
+            let dx = r.w * 0.25;
+            poly(&mut pb, &[(x0 + dx, y0), (x1 - dx, y0), (x1, cy), (x1 - dx, y1), (x0 + dx, y1), (x0, cy)]);
+        }
+        ShapeKind::Octagon => {
+            let c = r.w.min(r.h) * 0.293;
+            poly(&mut pb, &[(x0 + c, y0), (x1 - c, y0), (x1, y0 + c), (x1, y1 - c), (x1 - c, y1), (x0 + c, y1), (x0, y1 - c), (x0, y0 + c)]);
+        }
+        ShapeKind::Cross => {
+            let (ax0, ax1) = (x0 + r.w * 0.35, x1 - r.w * 0.35);
+            let (ay0, ay1) = (y0 + r.h * 0.35, y1 - r.h * 0.35);
+            poly(
+                &mut pb,
+                &[
+                    (ax0, y0),
+                    (ax1, y0),
+                    (ax1, ay0),
+                    (x1, ay0),
+                    (x1, ay1),
+                    (ax1, ay1),
+                    (ax1, y1),
+                    (ax0, y1),
+                    (ax0, ay1),
+                    (x0, ay1),
+                    (x0, ay0),
+                    (ax0, ay0),
+                ],
+            );
+        }
+        ShapeKind::Callout => {
+            let tip_x = x0 + r.w * 0.15;
+            let tip_y = y1;
+            let y1_rect = y1 - r.h * 0.2;
+            poly(
+                &mut pb,
+                &[(x0, y0), (x1, y0), (x1, y1_rect), (x0 + r.w * 0.45, y1_rect), (tip_x, tip_y), (x0 + r.w * 0.25, y1_rect), (x0, y1_rect)],
+            );
+        }
     }
     pb.finish()
 }

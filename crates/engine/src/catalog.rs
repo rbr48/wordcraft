@@ -132,6 +132,7 @@ Home|Editing|Select Objects|select.objects
 Home|Editing|Select Similar Formatting|select.similar
 Home|Voice|Dictate|tools.dictate
 Home|Editor|Editor|review.editor
+Home|AI|Copilot|tools.copilot
 Insert|Pages|Cover Page|insert.coverPage
 Insert|Pages|Blank Page|insert.blankPage
 Insert|Pages|Page Break|insert.pageBreak

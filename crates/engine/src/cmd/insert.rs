@@ -2,8 +2,10 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{Float, InlineObject, ShapeKind, Wrap};
-use wordcraft_doc::props::{Align, CharProps, Rgb, TabAlign, TabStop, TextColor};
-use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para_block};
+use wordcraft_doc::props::{
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, Rgb, RowProps, TabAlign, TabStop, TableLook, TableProps, TextColor, VAlign,
+};
+use wordcraft_doc::{Block, Cell, Paragraph, PartKind, Path, Pos, Row, StoryRef, Table, para_block};
 
 use super::{delete_selection, sel_result, split_para, type_text};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -27,6 +29,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.picture", "Pictures", "Insert › Illustrations", picture).params(r#"{"path"?: string, "data"?: base64, "width"?: pt, "alt"?: string}"#),
         CommandSpec::new("insert.shape", "Shapes", "Insert › Illustrations", shape)
             .params(r#"{"kind": "rectangle|roundedRectangle|ellipse|triangle|diamond|line|arrow|star|heart", "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB"}"#),
+        CommandSpec::new("insert.icon", "Icons", "Insert › Illustrations", icon)
+            .params(r#"{"name"?: "arrow|star|heart|ellipse|diamond|triangle", "size"?: pt, "color"?: "RRGGBB"}"#),
+        CommandSpec::new("insert.chart", "Chart", "Insert › Illustrations", chart)
+            .params(r#"{"type"?: "bar|column|line|pie", "title"?: string, "width"?: pt, "height"?: pt}"#),
+        CommandSpec::new("insert.screenshot", "Screenshot", "Insert › Illustrations", screenshot)
+            .params(r#"{"path"?: string, "data"?: base64}"#),
         CommandSpec::new("insert.textBox", "Text Box", "Insert › Text", text_box).params(r#"{"text"?: string, "width"?: pt, "height"?: pt}"#),
         CommandSpec::new("insert.link", "Link", "Insert › Links", link).key("Mod+K").params(r#"{"url": string, "text"?: string}"#),
         CommandSpec::new("insert.removeLink", "Remove Hyperlink", "Insert › Links", |s, _| super::format::apply(s, &|c| {
@@ -69,20 +77,27 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .params(r#"{"char": string}"#),
-        CommandSpec::new("insert.equation", "Equation", "Insert › Symbols", |s, v| {
-            let lin = p::str(v, "linear").unwrap_or("a^2+b^2=c^2").to_string();
-            let props = s.typing_props();
-            let at = delete_selection(s)?;
-            let end = s.doc.insert_object(&at, InlineObject::Equation { linear: lin, display: false }, &props)?;
-            s.sel = Selection::caret(end);
-            sel_result(s)
-        })
-        .key("Alt+=")
-        .params(r#"{"linear"?: string}"#),
+        CommandSpec::new("insert.equation", "Equation", "Insert › Symbols", equation)
+            .key("Alt+=")
+            .params(r#"{"linear"?: string}"#),
+        CommandSpec::new("table.draw", "Draw Table", "Insert › Tables", draw_table)
+            .params(r#"{"rows"?: n, "cols"?: n}"#),
+        CommandSpec::new("insert.onlinePicture", "Online Pictures", "Insert › Illustrations", online_picture)
+            .params(r#"{"url"?: string, "alt"?: string}"#),
+        CommandSpec::new("insert.model3d", "3D Models", "Insert › Illustrations", model_3d)
+            .params(r#"{"path"?: string, "alt"?: string}"#),
+        CommandSpec::new("insert.smartArt", "SmartArt", "Insert › Illustrations", smart_art)
+            .params(r#"{"layout"?: "process|cycle|hierarchy|matrix|list", "items"?: string[]}"#),
+        CommandSpec::new("insert.canvas", "Drawing Canvas", "Insert › Illustrations", drawing_canvas)
+            .params(r#"{"width"?: pt, "height"?: pt}"#),
+        CommandSpec::new("insert.video", "Online Video", "Insert › Media", online_video)
+            .params(r#"{"url"?: string, "width"?: pt, "height"?: pt}"#),
+        CommandSpec::new("insert.inkEquation", "Ink Equation", "Insert › Symbols", ink_equation)
+            .params(r#"{"latex"?: string}"#),
         CommandSpec::new("insert.field", "Field", "Insert › Text › Quick Parts", field).key("Mod+F9").params(r#"{"instr": string, "result"?: string}"#),
         CommandSpec::new("insert.dropCap", "Drop Cap", "Insert › Text", |s, v| {
             let lines = p::u64(v, "lines").unwrap_or(3).min(10) as u8;
-            super::para::fmt(s, &|p| p.drop_cap = Some(lines))
+            super::para::fmt(s, &|p| p.drop_cap = if lines == 0 { None } else { Some(lines) })
         })
         .params(r#"{"lines"?: n (0 = none)}"#),
         CommandSpec::new("insert.horizontalLine", "Horizontal Line", "Home › Paragraph › Borders", |s, _| {
@@ -109,6 +124,513 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"path": string}"#),
     ]
+}
+
+pub fn equation(s: &mut Session, v: &Value) -> CmdResult {
+    let lin = p::str(v, "linear").or_else(|| p::str(v, "latex")).unwrap_or("a^2+b^2=c^2").to_string();
+    let props = s.typing_props();
+    let at = delete_selection(s)?;
+    let end = s.doc.insert_object(&at, InlineObject::Equation { linear: lin, display: false }, &props)?;
+    s.sel = Selection::caret(end);
+    sel_result(s)
+}
+
+fn draw_table(s: &mut Session, v: &Value) -> CmdResult {
+    let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, 63) as usize;
+    let cols = p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize;
+    table(s, &json!({"rows": rows, "cols": cols}))
+}
+
+fn online_picture(s: &mut Session, v: &Value) -> CmdResult {
+    let url = p::str(v, "url").unwrap_or("");
+    let alt = p::str(v, "alt").unwrap_or("Online Picture");
+    picture(s, &json!({"path": url, "alt": alt}))
+}
+
+fn model_3d(s: &mut Session, v: &Value) -> CmdResult {
+    let path = p::str(v, "path").unwrap_or("model.glb");
+    let alt = p::str(v, "alt").unwrap_or("3D Model");
+    picture(s, &json!({"path": path, "alt": alt}))
+}
+
+fn smart_art(s: &mut Session, v: &Value) -> CmdResult {
+    let layout = p::str(v, "layout").unwrap_or("process");
+    let items_arg = v.get("items").and_then(Value::as_array);
+
+    let t = match layout {
+        "cycle" => {
+            let mut tbl = Table {
+                props: TableProps {
+                    borders: Some(Borders::default()),
+                    align: Some(Align::Center),
+                    look: TableLook {
+                        header_row: false,
+                        total_row: false,
+                        banded_rows: false,
+                        first_column: false,
+                        last_column: false,
+                        banded_columns: false,
+                    },
+                    ..Default::default()
+                },
+                grid: vec![130.0, 45.0, 130.0],
+                rows: Vec::new(),
+            };
+
+            let corner_cell = |title: &str, sub: &str, bg: Rgb, border: Rgb| -> Cell {
+                Cell {
+                    props: CellProps {
+                        span: 1,
+                        width: Some(130.0),
+                        shading: Some(bg),
+                        borders: Some(Borders::box_(Border { style: BorderStyle::Single, width: 1.0, color: Some(border), space: 0.0 })),
+                        margins: Some([8.0, 10.0, 8.0, 10.0]),
+                        valign: VAlign::Center,
+                        ..Default::default()
+                    },
+                    blocks: vec![
+                        para_block({
+                            let mut p = Paragraph::with_text(
+                                title,
+                                CharProps {
+                                    bold: Some(true),
+                                    size: Some(11.0),
+                                    color: Some(TextColor::Rgb(Rgb(255, 255, 255))),
+                                    ..Default::default()
+                                },
+                            );
+                            p.props.align = Some(Align::Center);
+                            p
+                        }),
+                        para_block({
+                            let mut p = Paragraph::with_text(
+                                sub,
+                                CharProps { size: Some(9.5), color: Some(TextColor::Rgb(Rgb(240, 240, 240))), ..Default::default() },
+                            );
+                            p.props.align = Some(Align::Center);
+                            p
+                        }),
+                    ],
+                }
+            };
+
+            let sym_cell = |sym: &str, sz: f32, col: Rgb, w: f32| -> Cell {
+                Cell {
+                    props: CellProps { span: 1, width: Some(w), margins: Some([4.0, 2.0, 4.0, 2.0]), valign: VAlign::Center, ..Default::default() },
+                    blocks: vec![para_block({
+                        let mut p = Paragraph::with_text(
+                            sym,
+                            CharProps { bold: Some(true), size: Some(sz), color: Some(TextColor::Rgb(col)), ..Default::default() },
+                        );
+                        p.props.align = Some(Align::Center);
+                        p
+                    })],
+                }
+            };
+
+            let r0 = Row {
+                props: RowProps::default(),
+                cells: vec![
+                    corner_cell("1. Plan", "Requirements & Scope", Rgb(0x2B, 0x57, 0x9A), Rgb(0x1F, 0x38, 0x64)),
+                    sym_cell("➔", 16.0, Rgb(0x59, 0x59, 0x59), 45.0),
+                    corner_cell("2. Build", "Design & Prototype", Rgb(0x41, 0x71, 0x9C), Rgb(0x2E, 0x4E, 0x6D)),
+                ],
+            };
+            let r1 = Row {
+                props: RowProps::default(),
+                cells: vec![
+                    sym_cell("↑", 16.0, Rgb(0x59, 0x59, 0x59), 130.0),
+                    sym_cell("↺", 24.0, Rgb(0x2B, 0x57, 0x9A), 45.0),
+                    sym_cell("↓", 16.0, Rgb(0x59, 0x59, 0x59), 130.0),
+                ],
+            };
+            let r2 = Row {
+                props: RowProps::default(),
+                cells: vec![
+                    corner_cell("4. Deploy", "Launch & Monitor", Rgb(0x10, 0x7C, 0x41), Rgb(0x0A, 0x4E, 0x29)),
+                    sym_cell("←", 16.0, Rgb(0x59, 0x59, 0x59), 45.0),
+                    corner_cell("3. Test", "Verification & QA", Rgb(0x70, 0xAD, 0x47), Rgb(0x50, 0x7E, 0x32)),
+                ],
+            };
+            tbl.rows = vec![r0, r1, r2];
+            tbl
+        }
+        "hierarchy" => {
+            let mut tbl = Table {
+                props: TableProps {
+                    borders: Some(Borders::default()),
+                    align: Some(Align::Center),
+                    look: TableLook {
+                        header_row: false,
+                        total_row: false,
+                        banded_rows: false,
+                        first_column: false,
+                        last_column: false,
+                        banded_columns: false,
+                    },
+                    ..Default::default()
+                },
+                grid: vec![125.0, 125.0, 125.0],
+                rows: Vec::new(),
+            };
+
+            let node_cell = |title: &str, sub: &str, bg: Rgb, border: Rgb| -> Cell {
+                Cell {
+                    props: CellProps {
+                        span: 1,
+                        width: Some(125.0),
+                        shading: Some(bg),
+                        borders: Some(Borders::box_(Border { style: BorderStyle::Single, width: 1.0, color: Some(border), space: 0.0 })),
+                        margins: Some([8.0, 10.0, 8.0, 10.0]),
+                        valign: VAlign::Center,
+                        ..Default::default()
+                    },
+                    blocks: vec![
+                        para_block({
+                            let mut p = Paragraph::with_text(
+                                title,
+                                CharProps {
+                                    bold: Some(true),
+                                    size: Some(11.0),
+                                    color: Some(TextColor::Rgb(Rgb(255, 255, 255))),
+                                    ..Default::default()
+                                },
+                            );
+                            p.props.align = Some(Align::Center);
+                            p
+                        }),
+                        para_block({
+                            let mut p = Paragraph::with_text(
+                                sub,
+                                CharProps { size: Some(9.5), color: Some(TextColor::Rgb(Rgb(240, 240, 240))), ..Default::default() },
+                            );
+                            p.props.align = Some(Align::Center);
+                            p
+                        }),
+                    ],
+                }
+            };
+            let empty_cell =
+                || Cell { props: CellProps { span: 1, width: Some(125.0), ..Default::default() }, blocks: vec![para_block(Paragraph::new())] };
+            let sym_cell = |sym: &str| Cell {
+                props: CellProps { span: 1, width: Some(125.0), valign: VAlign::Center, ..Default::default() },
+                blocks: vec![para_block({
+                    let mut p = Paragraph::with_text(
+                        sym,
+                        CharProps { bold: Some(true), size: Some(14.0), color: Some(TextColor::Rgb(Rgb(0x7F, 0x7F, 0x7F))), ..Default::default() },
+                    );
+                    p.props.align = Some(Align::Center);
+                    p
+                })],
+            };
+
+            let r0 = Row {
+                props: RowProps::default(),
+                cells: vec![empty_cell(), node_cell("Leadership", "Executive Director", Rgb(0x1B, 0x36, 0x5D), Rgb(0x10, 0x24, 0x3E)), empty_cell()],
+            };
+            let r1 = Row { props: RowProps::default(), cells: vec![sym_cell("│"), sym_cell("┬"), sym_cell("│")] };
+            let r2 = Row {
+                props: RowProps::default(),
+                cells: vec![
+                    node_cell("Engineering", "Product & Infra", Rgb(0x2E, 0x75, 0xB6), Rgb(0x1F, 0x4E, 0x79)),
+                    node_cell("Operations", "Strategy & Scale", Rgb(0x2E, 0x75, 0xB6), Rgb(0x1F, 0x4E, 0x79)),
+                    node_cell("Marketing", "Community & Growth", Rgb(0x2E, 0x75, 0xB6), Rgb(0x1F, 0x4E, 0x79)),
+                ],
+            };
+            tbl.rows = vec![r0, r1, r2];
+            tbl
+        }
+        "matrix" => {
+            let mut tbl = Table {
+                props: TableProps {
+                    borders: Some(Borders::default()),
+                    align: Some(Align::Center),
+                    look: TableLook {
+                        header_row: false,
+                        total_row: false,
+                        banded_rows: false,
+                        first_column: false,
+                        last_column: false,
+                        banded_columns: false,
+                    },
+                    ..Default::default()
+                },
+                grid: vec![185.0, 185.0],
+                rows: Vec::new(),
+            };
+
+            let quad_cell = |title: &str, bullets: &[&str], bg: Rgb, border: Rgb, text_col: Rgb| -> Cell {
+                let mut blocks = vec![para_block({
+                    let mut p = Paragraph::with_text(
+                        title,
+                        CharProps { bold: Some(true), size: Some(11.0), color: Some(TextColor::Rgb(text_col)), ..Default::default() },
+                    );
+                    p.props.align = Some(Align::Left);
+                    p
+                })];
+                for b in bullets {
+                    blocks.push(para_block({
+                        let mut p = Paragraph::with_text(
+                            &format!("• {b}"),
+                            CharProps { size: Some(9.5), color: Some(TextColor::Rgb(Rgb(0x33, 0x33, 0x33))), ..Default::default() },
+                        );
+                        p.props.align = Some(Align::Left);
+                        p
+                    }));
+                }
+                Cell {
+                    props: CellProps {
+                        span: 1,
+                        width: Some(185.0),
+                        shading: Some(bg),
+                        borders: Some(Borders::box_(Border { style: BorderStyle::Single, width: 1.0, color: Some(border), space: 0.0 })),
+                        margins: Some([10.0, 12.0, 10.0, 12.0]),
+                        valign: VAlign::Top,
+                        ..Default::default()
+                    },
+                    blocks,
+                }
+            };
+
+            let r0 = Row {
+                props: RowProps::default(),
+                cells: vec![
+                    quad_cell(
+                        "QUADRANT I: Urgent & Important",
+                        &["Critical client issues", "Production deadlines"],
+                        Rgb(0xDE, 0xEB, 0xF7),
+                        Rgb(0x8E, 0xA9, 0xDB),
+                        Rgb(0x1F, 0x49, 0x7D),
+                    ),
+                    quad_cell(
+                        "QUADRANT II: Important, Not Urgent",
+                        &["Strategic planning", "Capability development"],
+                        Rgb(0xE2, 0xEF, 0xDA),
+                        Rgb(0xA9, 0xD0, 0x8E),
+                        Rgb(0x38, 0x57, 0x23),
+                    ),
+                ],
+            };
+            let r1 = Row {
+                props: RowProps::default(),
+                cells: vec![
+                    quad_cell(
+                        "QUADRANT III: Urgent, Not Important",
+                        &["Frequent interruptions", "Routine reporting"],
+                        Rgb(0xFF, 0xF2, 0xCC),
+                        Rgb(0xFF, 0xD9, 0x66),
+                        Rgb(0x7F, 0x60, 0x00),
+                    ),
+                    quad_cell(
+                        "QUADRANT IV: Low Value",
+                        &["Busy activities", "Outdated workflows"],
+                        Rgb(0xFC, 0xE4, 0xD6),
+                        Rgb(0xF4, 0xB0, 0x84),
+                        Rgb(0xC6, 0x59, 0x11),
+                    ),
+                ],
+            };
+            tbl.rows = vec![r0, r1];
+            tbl
+        }
+        "list" => {
+            let mut tbl = Table {
+                props: TableProps {
+                    borders: Some(Borders::default()),
+                    align: Some(Align::Center),
+                    look: TableLook {
+                        header_row: false,
+                        total_row: false,
+                        banded_rows: false,
+                        first_column: false,
+                        last_column: false,
+                        banded_columns: false,
+                    },
+                    ..Default::default()
+                },
+                grid: vec![45.0, 320.0],
+                rows: Vec::new(),
+            };
+
+            let items = [
+                ("01", "Research & Feasibility", "Market survey, architecture exploration, and technical spikes.", Rgb(0x2B, 0x57, 0x9A)),
+                ("02", "Core Implementation", "Feature engineering, unit tests, automated CI verification.", Rgb(0x1F, 0x4E, 0x79)),
+                ("03", "Release & Monitoring", "Packaging, distribution, feedback loops, and metrics.", Rgb(0x10, 0x7C, 0x41)),
+            ];
+
+            for (num, title, desc, col) in items {
+                let badge = Cell {
+                    props: CellProps {
+                        span: 1,
+                        width: Some(45.0),
+                        shading: Some(col),
+                        borders: Some(Borders::box_(Border { style: BorderStyle::Single, width: 1.0, color: Some(col), space: 0.0 })),
+                        margins: Some([10.0, 6.0, 10.0, 6.0]),
+                        valign: VAlign::Center,
+                        ..Default::default()
+                    },
+                    blocks: vec![para_block({
+                        let mut p = Paragraph::with_text(
+                            num,
+                            CharProps { bold: Some(true), size: Some(13.0), color: Some(TextColor::Rgb(Rgb(255, 255, 255))), ..Default::default() },
+                        );
+                        p.props.align = Some(Align::Center);
+                        p
+                    })],
+                };
+                let content = Cell {
+                    props: CellProps {
+                        span: 1,
+                        width: Some(320.0),
+                        shading: Some(Rgb(0xF7, 0xF9, 0xFA)),
+                        borders: Some(Borders::box_(Border {
+                            style: BorderStyle::Single,
+                            width: 0.5,
+                            color: Some(Rgb(0xDC, 0xDE, 0xE0)),
+                            space: 0.0,
+                        })),
+                        margins: Some([8.0, 12.0, 8.0, 12.0]),
+                        valign: VAlign::Center,
+                        ..Default::default()
+                    },
+                    blocks: vec![
+                        para_block({
+                            let mut p = Paragraph::with_text(
+                                title,
+                                CharProps {
+                                    bold: Some(true),
+                                    size: Some(10.5),
+                                    color: Some(TextColor::Rgb(Rgb(0x1F, 0x2A, 0x37))),
+                                    ..Default::default()
+                                },
+                            );
+                            p.props.align = Some(Align::Left);
+                            p
+                        }),
+                        para_block({
+                            let mut p = Paragraph::with_text(
+                                desc,
+                                CharProps { size: Some(9.0), color: Some(TextColor::Rgb(Rgb(0x4B, 0x55, 0x63))), ..Default::default() },
+                            );
+                            p.props.align = Some(Align::Left);
+                            p
+                        }),
+                    ],
+                };
+                tbl.rows.push(Row { props: RowProps::default(), cells: vec![badge, content] });
+            }
+            tbl
+        }
+        _ => {
+            // "process" default
+            let mut tbl = Table {
+                props: TableProps {
+                    borders: Some(Borders::default()),
+                    align: Some(Align::Center),
+                    look: TableLook {
+                        header_row: false,
+                        total_row: false,
+                        banded_rows: false,
+                        first_column: false,
+                        last_column: false,
+                        banded_columns: false,
+                    },
+                    ..Default::default()
+                },
+                grid: vec![110.0, 30.0, 110.0, 30.0, 110.0],
+                rows: Vec::new(),
+            };
+
+            let step_cell = |title: &str, sub: &str, bg: Rgb, border: Rgb| -> Cell {
+                Cell {
+                    props: CellProps {
+                        span: 1,
+                        width: Some(110.0),
+                        shading: Some(bg),
+                        borders: Some(Borders::box_(Border { style: BorderStyle::Single, width: 1.0, color: Some(border), space: 0.0 })),
+                        margins: Some([8.0, 8.0, 8.0, 8.0]),
+                        valign: VAlign::Center,
+                        ..Default::default()
+                    },
+                    blocks: vec![
+                        para_block({
+                            let mut p = Paragraph::with_text(
+                                title,
+                                CharProps {
+                                    bold: Some(true),
+                                    size: Some(11.0),
+                                    color: Some(TextColor::Rgb(Rgb(255, 255, 255))),
+                                    ..Default::default()
+                                },
+                            );
+                            p.props.align = Some(Align::Center);
+                            p
+                        }),
+                        para_block({
+                            let mut p = Paragraph::with_text(
+                                sub,
+                                CharProps { size: Some(9.5), color: Some(TextColor::Rgb(Rgb(240, 240, 240))), ..Default::default() },
+                            );
+                            p.props.align = Some(Align::Center);
+                            p
+                        }),
+                    ],
+                }
+            };
+            let arrow_cell = || Cell {
+                props: CellProps { span: 1, width: Some(30.0), valign: VAlign::Center, ..Default::default() },
+                blocks: vec![para_block({
+                    let mut p = Paragraph::with_text(
+                        "➔",
+                        CharProps { bold: Some(true), size: Some(16.0), color: Some(TextColor::Rgb(Rgb(0x59, 0x59, 0x59))), ..Default::default() },
+                    );
+                    p.props.align = Some(Align::Center);
+                    p
+                })],
+            };
+
+            let s1 = items_arg.and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("1. Research");
+            let s2 = items_arg.and_then(|a| a.get(1)).and_then(Value::as_str).unwrap_or("2. Design");
+            let s3 = items_arg.and_then(|a| a.get(2)).and_then(Value::as_str).unwrap_or("3. Deploy");
+
+            let r = Row {
+                props: RowProps::default(),
+                cells: vec![
+                    step_cell(s1, "Requirements & Scope", Rgb(0x2B, 0x57, 0x9A), Rgb(0x1F, 0x38, 0x64)),
+                    arrow_cell(),
+                    step_cell(s2, "Architecture & Proto", Rgb(0x1F, 0x4E, 0x79), Rgb(0x15, 0x33, 0x4F)),
+                    arrow_cell(),
+                    step_cell(s3, "Launch & Verification", Rgb(0x10, 0x7C, 0x41), Rgb(0x0A, 0x4E, 0x29)),
+                ],
+            };
+            tbl.rows = vec![r];
+            tbl
+        }
+    };
+
+    let story = s.sel.focus.story;
+    let path = insert_block_at_caret(s, Block::Table(t))?;
+    let mut first = path.0.clone();
+    first.extend([0, 0, 0]);
+    s.sel = Selection::caret(Pos { story, path: Path(first), off: 0 });
+    Ok(json!({"smartArt": layout, "table": path.0}))
+}
+
+fn drawing_canvas(s: &mut Session, v: &Value) -> CmdResult {
+    let w = p::f32(v, "width").unwrap_or(400.0);
+    let h = p::f32(v, "height").unwrap_or(250.0);
+    shape(s, &json!({"kind": "rectangle", "width": w, "height": h, "fill": "FAFAFA", "stroke": "CCCCCC"}))
+}
+
+fn online_video(s: &mut Session, v: &Value) -> CmdResult {
+    let w = p::f32(v, "width").unwrap_or(360.0);
+    let h = p::f32(v, "height").unwrap_or(200.0);
+    shape(s, &json!({"kind": "rectangle", "width": w, "height": h, "fill": "1A1A1A"}))
+}
+
+fn ink_equation(s: &mut Session, v: &Value) -> CmdResult {
+    let lin = p::str(v, "latex").or_else(|| p::str(v, "linear")).unwrap_or(r"\int x dx");
+    equation(s, &json!({"linear": lin}))
 }
 
 /// Insert a block after the caret's paragraph (splitting it if the caret is mid-paragraph).
@@ -191,7 +713,7 @@ pub fn base64_encode(b: &[u8]) -> String {
     out
 }
 
-fn picture(s: &mut Session, v: &Value) -> CmdResult {
+pub(crate) fn picture(s: &mut Session, v: &Value) -> CmdResult {
     let bytes = if let Some(d) = p::str(v, "data") {
         base64_decode(d).ok_or_else(|| CmdError::Params("bad base64 data".into()))?
     } else if let Some(path) = p::str(v, "path") {
@@ -243,7 +765,7 @@ fn picture(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"media": key, "width": w, "height": h}))
 }
 
-fn shape(s: &mut Session, v: &Value) -> CmdResult {
+pub(crate) fn shape(s: &mut Session, v: &Value) -> CmdResult {
     let kind: ShapeKind =
         serde_json::from_value(v.get("kind").cloned().unwrap_or(json!("rectangle"))).map_err(|e| CmdError::Params(e.to_string()))?;
     let w = p::f32(v, "width").unwrap_or(108.0).clamp(4.0, 2000.0);
@@ -261,6 +783,68 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     sel_result(s)
+}
+
+fn icon(s: &mut Session, v: &Value) -> CmdResult {
+    let name = p::str(v, "name").unwrap_or("star");
+    let kind = match name.to_lowercase().as_str() {
+        "arrow" => ShapeKind::Arrow,
+        "heart" => ShapeKind::Heart,
+        "ellipse" | "circle" => ShapeKind::Ellipse,
+        "diamond" => ShapeKind::Diamond,
+        "triangle" => ShapeKind::Triangle,
+        _ => ShapeKind::Star,
+    };
+    let sz = p::f32(v, "size").unwrap_or(24.0).clamp(8.0, 500.0);
+    let fill = p::str(v, "color").and_then(Rgb::parse).or(Some(Rgb(0x15, 0x60, 0x82)));
+    let props = s.typing_props();
+    let at = delete_selection(s)?;
+    let obj = InlineObject::Shape {
+        kind,
+        w: sz,
+        h: sz,
+        fill,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::Inline, ..Default::default() },
+        story: None,
+    };
+    let end = s.doc.insert_object(&at, obj, &props)?;
+    s.sel = Selection { anchor: at, focus: end };
+    sel_result(s)
+}
+
+fn chart(s: &mut Session, v: &Value) -> CmdResult {
+    let chart_type = p::str(v, "type").unwrap_or("bar");
+    let title = p::str(v, "title").unwrap_or("Chart");
+    let w = p::f32(v, "width").unwrap_or(288.0).clamp(36.0, 1000.0);
+    let h = p::f32(v, "height").unwrap_or(180.0).clamp(36.0, 1000.0);
+    let text = format!("[{} Chart: {}]", chart_type.to_uppercase(), title);
+    let id = s.doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(&text, CharProps::default()))]);
+    let props = s.typing_props();
+    let at = delete_selection(s)?;
+    let obj = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w,
+        h,
+        fill: Some(Rgb(0xFA, 0xFA, 0xFA)),
+        stroke: Some(Rgb(0x80, 0x80, 0x80)),
+        stroke_width: 1.0,
+        float: Float::default(),
+        story: Some(id),
+    };
+    let end = s.doc.insert_object(&at, obj, &props)?;
+    s.sel = Selection { anchor: at, focus: end };
+    Ok(json!({"chart": chart_type, "title": title, "width": w, "height": h}))
+}
+
+fn screenshot(s: &mut Session, v: &Value) -> CmdResult {
+    if v.get("data").is_some() || v.get("path").is_some() {
+        picture(s, v)
+    } else {
+        s.ui_requests.push(json!({"open": "screenshot"}));
+        sel_result(s)
+    }
 }
 
 fn text_box(s: &mut Session, v: &Value) -> CmdResult {
@@ -569,5 +1153,30 @@ mod tests {
         let d = format_date("yyyy-MM-dd");
         assert_eq!(d.len(), 10);
         assert!(format_date("MMMM d, yyyy").contains(", "));
+    }
+
+    #[test]
+    fn smart_art_diagrams() {
+        use wordcraft_doc::Document;
+        let mut s = Session::new(Document::new());
+        for layout in ["process", "cycle", "hierarchy", "matrix", "list"] {
+            let res = s.run("insert.smartArt", &json!({"layout": layout})).unwrap();
+            assert_eq!(res["smartArt"].as_str().unwrap(), layout);
+            assert!(res["table"].as_array().is_some());
+        }
+    }
+
+    #[test]
+    fn drop_cap_presets() {
+        use wordcraft_doc::Document;
+        let mut s = Session::new(Document::from_text("This is a paragraph with drop cap."));
+        s.run("insert.dropCap", &json!({"lines": 3})).unwrap();
+        let path = s.sel.focus.path.clone();
+        let p = s.doc.para(StoryRef::Body, &path).unwrap();
+        assert_eq!(p.props.drop_cap, Some(3));
+
+        s.run("insert.dropCap", &json!({"lines": 0})).unwrap();
+        let p = s.doc.para(StoryRef::Body, &path).unwrap();
+        assert_eq!(p.props.drop_cap, None);
     }
 }

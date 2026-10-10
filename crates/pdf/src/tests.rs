@@ -229,6 +229,12 @@ fn shapes_have_paths() {
         ShapeKind::Line,
         ShapeKind::Diamond,
         ShapeKind::Triangle,
+        ShapeKind::RightTriangle,
+        ShapeKind::Hexagon,
+        ShapeKind::Octagon,
+        ShapeKind::Pentagon,
+        ShapeKind::Cross,
+        ShapeKind::Callout,
     ] {
         assert!(shape_path(k, &r).is_some(), "{k:?}");
     }

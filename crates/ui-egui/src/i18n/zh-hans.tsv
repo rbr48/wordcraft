@@ -788,3 +788,52 @@
 	{selected} of {words} words	{selected}/{words} 个字
 	Scroll ribbon left	向左滚动功能区
 	Scroll ribbon right	向右滚动功能区
+	Advanced Find	高级查找
+	Block Authors	阻止作者
+	Clipboard Pane	剪贴板窗格
+	Hide Ink	隐藏墨迹
+	Ink	墨迹
+	Manage Styles	管理样式
+	Paste Special	选择性粘贴
+	Screenshot	屏幕截图
+	Style Inspector	样式检查器
+	Synchronous Scrolling	同步滚动
+	View Side by Side	并排查看
+	3D Models	3D 模型
+	Add Pen	添加笔
+	Add-ins	加载项
+	Align Text	对齐文本
+	Arrange All	全部重排
+	Asian Typography	中文版式
+	Character Border	字符边框
+	Column Selection	列选择
+	Create Link	创建链接
+	Customize Keyboard	自定义键盘
+	Customize Ribbon	自定义功能区
+	Customize	自定义
+	Draw Table	绘制表格
+	Drawing Canvas	绘图画布
+	Enclose Characters	带圈字符
+	Get Add-ins	获取加载项
+	Ink Equation	墨迹公式
+	Ink Replay	墨迹重放
+	Ink to Math	墨迹转数学公式
+	Ink to Shape	墨迹转形状
+	Lasso Select	套索选择
+	Media	媒体
+	Online Pictures	联机图片
+	Online Video	联机视频
+	Pens	笔
+	Phonetic Guide	拼音指南
+	Shape Effects	形状效果
+	Switch Windows	切换窗口
+	Templates and Add-ins	模板和加载项
+	Templates	模板
+	Tools	工具
+	Accessibility Checker	辅助功能检查器
+	Enter page number or section (e.g. 3, s2):	输入页码或节编号（例如 3、s2）：
+	No accessibility issues found. People with disabilities should have no difficulty reading this document.	未发现辅助功能问题。残障人士阅读本文档应该没有任何困难。
+	{count} issue(s) found:	发现 {count} 个问题：
+	AI	AI
+	Copilot	Copilot
+	Copilot / AI Assistant	Copilot / AI 助手

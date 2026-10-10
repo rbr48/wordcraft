@@ -194,6 +194,21 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"align"?: "left|center|right"}"#)),
         CommandSpec::new("table.fromText", "Convert Text to Table", "Insert › Tables", from_text).params(r#"{"separator"?: "tab|comma"}"#),
         CommandSpec::new("table.quick", "Quick Tables", "Insert › Tables", quick_table).params(r#"{"kind"?: "calendar|tabular|matrix"}"#),
+        t(CommandSpec::new("table.eraser", "Eraser", "Table Layout › Draw", |s, _| {
+            let (tp, r, c) = cell(s)?;
+            let story = s.sel.focus.story;
+            let t = s.doc.table_mut(story, &tp)?;
+            if let Some(row) = t.rows.get_mut(r)
+                && c + 1 < row.cells.len()
+            {
+                let next = row.cells.remove(c + 1);
+                if let Some(cur) = row.cells.get_mut(c) {
+                    cur.blocks.extend(next.blocks);
+                }
+            }
+            touch_cells(s, &tp)?;
+            sel_result(s)
+        })),
     ]
 }
 
@@ -447,18 +462,31 @@ fn to_text(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// `=SUM(ABOVE)`, `=SUM(LEFT)`, `=AVERAGE(ABOVE)`, `=COUNT(...)`, `=MAX`, `=MIN`, `=PRODUCT`.
+/// `=SUM(ABOVE)`, `=SUM(LEFT)`, `=SUM(RIGHT)`, `=SUM(BELOW)`, `=AVERAGE(...)`, `=COUNT(...)`, `=MAX`, `=MIN`, `=PRODUCT`.
 fn formula(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
     let f = p::str(v, "formula").unwrap_or("=SUM(ABOVE)").to_ascii_uppercase();
     let t = s.doc.table(s.sel.focus.story, &tp).cloned().ok_or_else(|| CmdError::Failed("no table".into()))?;
-    let nums: Vec<f64> = if f.contains("LEFT") {
-        t.rows
-            .get(r)
-            .map(|row| row.cells.iter().take(c).filter_map(|x| cell_text(x).trim().replace([',', '$'], "").parse().ok()).collect())
-            .unwrap_or_default()
+    let parse_num = |x: &wordcraft_doc::table::Cell| cell_text(x).trim().replace([',', '$', '€', '£'], "").parse::<f64>().ok();
+    let above: Vec<f64> = t.rows.iter().take(r).filter_map(|row| row.cells.get(c)).filter_map(parse_num).collect();
+    let left: Vec<f64> = t.rows.get(r).map(|row| row.cells.iter().take(c).filter_map(parse_num).collect()).unwrap_or_default();
+    let right: Vec<f64> = t.rows.get(r).map(|row| row.cells.iter().skip(c + 1).filter_map(parse_num).collect()).unwrap_or_default();
+    let below: Vec<f64> = t.rows.iter().skip(r + 1).filter_map(|row| row.cells.get(c)).filter_map(parse_num).collect();
+
+    let nums = if f.contains("LEFT") {
+        left
+    } else if f.contains("RIGHT") {
+        right
+    } else if f.contains("BELOW") {
+        below
+    } else if f.contains("ABOVE") || !above.is_empty() {
+        above
+    } else if !left.is_empty() {
+        left
+    } else if !right.is_empty() {
+        right
     } else {
-        t.rows.iter().take(r).filter_map(|row| row.cells.get(c)).filter_map(|x| cell_text(x).trim().replace([',', '$'], "").parse().ok()).collect()
+        below
     };
     let val = if f.starts_with("=AVERAGE") {
         if nums.is_empty() { 0.0 } else { nums.iter().sum::<f64>() / nums.len() as f64 }
@@ -475,7 +503,7 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     };
     let text = if val.fract() == 0.0 && val.abs() < 1e15 { format!("{}", val as i64) } else { format!("{val:.2}") };
     let props = s.typing_props();
-    let at = s.sel.focus.clone();
+    let at = super::delete_selection(s)?;
     let end = s.doc.insert_object(&at, wordcraft_doc::InlineObject::Field { instr: f.clone(), result: text.clone(), locked: false }, &props)?;
     s.sel = Selection::caret(end);
     Ok(json!({"result": text}))

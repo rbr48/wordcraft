@@ -725,3 +725,29 @@ fn styles_apply_rejected_on_protected_document() {
     assert_eq!(para_style(&s, 0), None);
     assert_eq!(s.undo_labels(), undo);
 }
+
+#[test]
+fn table_formula_supports_all_directions_and_auto() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    let tp = wordcraft_doc::Path::top(0);
+    if let Ok(t) = s.doc.table_mut(wordcraft_doc::StoryRef::Body, &tp) {
+        t.rows[0].cells[0].blocks[0] = wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("10", Default::default()));
+        t.rows[1].cells[0].blocks[0] = wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("20", Default::default()));
+        t.rows[0].cells[1].blocks[0] = wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("5", Default::default()));
+    }
+    // Set caret in cell (2, 0) and sum ABOVE: 10 + 20 = 30
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 2, 0, 0]), off: 0 });
+    let r_above = run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}));
+    assert_eq!(r_above["result"], "30");
+
+    // Set caret in cell (0, 2) and sum LEFT: 10 + 5 = 15
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 2, 0]), off: 0 });
+    let r_left = run(&mut s, "table.formula", json!({"formula": "=SUM(LEFT)"}));
+    assert_eq!(r_left["result"], "15");
+
+    // Set caret in empty cell (2, 1) and auto-detect: numbers above is 5
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 2, 1, 0]), off: 0 });
+    let r_auto = run(&mut s, "table.formula", json!({"formula": "=SUM"}));
+    assert_eq!(r_auto["result"], "5");
+}

@@ -8,3 +8,5 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+*.zip
+*.msi

@@ -777,3 +777,52 @@
 	{selected} of {words} words	{selected}/{words} 語
 	Scroll ribbon left	リボンを左にスクロール
 	Scroll ribbon right	リボンを右にスクロール
+	Advanced Find	高度な検索
+	Block Authors	作成者のブロック
+	Clipboard Pane	クリップボード ウィンドウ
+	Hide Ink	インクの非表示
+	Ink	インク
+	Manage Styles	スタイルの管理
+	Paste Special	形式を選択して貼り付け
+	Screenshot	スクリーンショット
+	Style Inspector	スタイル変更の確認
+	Synchronous Scrolling	並行スクロール
+	View Side by Side	並べて比較
+	3D Models	3D モデル
+	Add Pen	ペンの追加
+	Add-ins	アドイン
+	Align Text	文字の配置
+	Arrange All	並べて表示
+	Asian Typography	アジア言語の文字体裁
+	Character Border	文字の囲み線
+	Column Selection	列の選択
+	Create Link	リンクの作成
+	Customize Keyboard	キーボードのユーザー設定
+	Customize Ribbon	リボンのユーザー設定
+	Customize	ユーザー設定
+	Draw Table	罫線を引く
+	Drawing Canvas	描画キャンバス
+	Enclose Characters	囲い文字
+	Get Add-ins	アドインの取得
+	Ink Equation	インク数式
+	Ink Replay	インクの再生
+	Ink to Math	インクを数式に変換
+	Ink to Shape	インクを図形に変換
+	Lasso Select	なげなわ選択
+	Media	メディア
+	Online Pictures	オンライン画像
+	Online Video	オンライン ビデオ
+	Pens	ペン
+	Phonetic Guide	ルビ
+	Shape Effects	図形の効果
+	Switch Windows	ウィンドウの切り替え
+	Templates and Add-ins	テンプレートとアドイン
+	Templates	テンプレート
+	Tools	ツール
+	Accessibility Checker	アクセシビリティ チェック
+	Enter page number or section (e.g. 3, s2):	ページ番号またはセクションを入力 (例: 3、s2):
+	No accessibility issues found. People with disabilities should have no difficulty reading this document.	アクセシビリティの問題は見つかりませんでした。障がいのある方でもこの文書を問題なく読むことができます。
+	{count} issue(s) found:	{count} 件の問題が見つかりました:
+	AI	AI
+	Copilot	Copilot
+	Copilot / AI Assistant	Copilot / AI アシスタント

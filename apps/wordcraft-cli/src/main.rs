@@ -19,6 +19,7 @@ USAGE:
                                               run commands headlessly, then save
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
+  wordcraft-cli corpus <dir>                  test & benchmark DOCX files in directory
   wordcraft-cli mcp [--connect HOST:PORT]     MCP server on stdio (headless, or bridged to the app)
   wordcraft-cli --version
 ";
@@ -186,6 +187,68 @@ fn run(args: &[String]) -> Result<(), String> {
                 print!("{}", parity_markdown(&p));
             } else {
                 println!("{}", serde_json::to_string_pretty(&p).unwrap_or_default());
+            }
+            Ok(())
+        }
+        "corpus" => {
+            validate_options("corpus", &rest, NO_OPTIONS)?;
+            let dir_path = pos(0)?;
+            let dir = std::path::Path::new(&dir_path);
+            if !dir.is_dir() {
+                return Err(format!("not a directory: {dir_path}"));
+            }
+            let mut entries: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("docx")) {
+                        entries.push(p);
+                    }
+                }
+            }
+            entries.sort();
+            if entries.is_empty() {
+                println!("No .docx files found in {}", dir.display());
+                return Ok(());
+            }
+            println!("Benchmarking {} DOCX files in {}...", entries.len(), dir.display());
+            println!("{:<36} {:<8} {:<8} {:<10} {:<10}", "File", "Status", "Pages", "Words", "Layout");
+            println!("{}", "-".repeat(76));
+            let mut passed = 0;
+            let mut failed = 0;
+            let mut total_layout_ms = 0.0;
+            for p in &entries {
+                let fname = p.file_name().and_then(|f| f.to_str()).unwrap_or("file");
+                let t0 = std::time::Instant::now();
+                match wordcraft_engine::io::open_path(p) {
+                    Ok(doc) => {
+                        let mut s = Session::new(doc);
+                        match s.run("file.info", &json!({})) {
+                            Ok(info) => {
+                                let pages = info.get("pages").and_then(Value::as_u64).unwrap_or(0);
+                                let words = info.get("words").and_then(Value::as_u64).unwrap_or(0);
+                                let lms = info.get("layoutMs").and_then(Value::as_f64).unwrap_or_else(|| t0.elapsed().as_secs_f64() * 1000.0);
+                                total_layout_ms += lms;
+                                passed += 1;
+                                println!("{:<36} {:<8} {:<8} {:<10} {:.1} ms", fname, "PASS", pages, words, lms);
+                            }
+                            Err(e) => {
+                                failed += 1;
+                                println!("{:<36} {:<8} error: {}", fname, "FAIL", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        println!("{:<36} {:<8} open error: {}", fname, "FAIL", e);
+                    }
+                }
+            }
+            println!("{}", "-".repeat(76));
+            let avg = if passed > 0 { total_layout_ms / (passed as f64) } else { 0.0 };
+            println!("Summary: {} passed, {} failed, avg layout {:.1} ms", passed, failed, avg);
+            if failed > 0 {
+                return Err(format!("{failed} corpus files failed validation"));
             }
             Ok(())
         }

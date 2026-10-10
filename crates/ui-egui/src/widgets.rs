@@ -12,8 +12,13 @@ pub const LABEL_H: f32 = 16.0;
 
 /// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere).
 pub fn shortcut_text(app: &WordApp, id: &str) -> String {
-    let Some(spec) = app.session.registry.get(id) else { return String::new() };
-    let sc = spec.shortcut.split(" / ").next().unwrap_or("");
+    let custom = app.session.cmd_shortcuts.get(id);
+    let sc = if let Some(c) = custom {
+        c.as_str()
+    } else {
+        let Some(spec) = app.session.registry.get(id) else { return String::new() };
+        spec.shortcut.split(" / ").next().unwrap_or("")
+    };
     if sc.is_empty() {
         return String::new();
     }
@@ -321,19 +326,49 @@ pub fn combo(
         ui.painter().rect(ar, 0.0, if aresp.hovered() { t.hover } else { t.input }, Stroke::new(1.0, t.input_border), egui::StrokeKind::Inside);
         icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(9.0, 9.0)), "dropdown", t.icon, t.accent);
         egui::Popup::menu(&aresp).show(|ui| {
-            egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                ui.set_min_width(width + 60.0);
-                for it in items {
-                    let clicked = match preview {
-                        Some(p) => p(ui, it).clicked(),
-                        None => ui.selectable_label(it == current, it).clicked(),
-                    };
-                    if clicked {
-                        out = Some(it.clone());
-                        ui.close();
+            let filter_id = ui.id().with(("combo_filter", id));
+            let mut filter = ui.data_mut(|d| d.get_temp::<String>(filter_id)).unwrap_or_default();
+            if items.len() > 10 {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+                    let fe = egui::TextEdit::singleline(&mut filter).hint_text("Search...").desired_width(width + 30.0).font(regular(11.5));
+                    let fresp = ui.add(fe);
+                    if fresp.changed() {
+                        ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
                     }
-                }
-            });
+                    if !filter.is_empty() && ui.small_button("✕").clicked() {
+                        filter.clear();
+                        ui.data_mut(|d| d.remove::<String>(filter_id));
+                    }
+                });
+                ui.separator();
+            }
+            let filtered: Vec<&String> = if filter.trim().is_empty() {
+                items.iter().collect()
+            } else {
+                let needle = filter.trim().to_lowercase();
+                items.iter().filter(|s| s.to_lowercase().contains(&needle)).collect()
+            };
+            if filtered.is_empty() {
+                ui.label(egui::RichText::new("No matches").color(t.text_dim).font(regular(11.0)));
+            } else {
+                let row_height = if preview.is_some() { 24.0 } else { 20.0 };
+                egui::ScrollArea::vertical().max_height(420.0).show_rows(ui, row_height, filtered.len(), |ui, row_range| {
+                    ui.set_min_width(width + 60.0);
+                    for idx in row_range {
+                        if let Some(it) = filtered.get(idx) {
+                            let clicked = match preview {
+                                Some(p) => p(ui, it).clicked(),
+                                None => ui.selectable_label(it.as_str() == current, it.as_str()).clicked(),
+                            };
+                            if clicked {
+                                out = Some((*it).clone());
+                                ui.close();
+                            }
+                        }
+                    }
+                });
+            }
         });
     });
     out

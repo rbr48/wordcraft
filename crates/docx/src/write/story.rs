@@ -426,6 +426,12 @@ impl Writer<'_> {
                     ShapeKind::Arrow => "rightArrow",
                     ShapeKind::Star => "star5",
                     ShapeKind::Heart => "heart",
+                    ShapeKind::RightTriangle => "rtTriangle",
+                    ShapeKind::Hexagon => "hex",
+                    ShapeKind::Octagon => "oct",
+                    ShapeKind::Pentagon => "pentagon",
+                    ShapeKind::Cross => "mathPlus",
+                    ShapeKind::Callout => "wedgeRectCallout",
                 };
                 w.open("a:prstGeom", &[("prst", prst)]);
                 w.empty("a:avLst", &[]);

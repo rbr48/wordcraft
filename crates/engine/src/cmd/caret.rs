@@ -54,6 +54,13 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Escape")
         .pure(),
+        CommandSpec::new("select.column", "Column Selection", "Editing › Selection", |s, v| {
+            let mode = p::bool(v, "active").unwrap_or(true);
+            s.status = if mode { "Column selection mode active".into() } else { "Normal selection mode".into() };
+            Ok(serde_json::json!({"columnSelection": mode}))
+        })
+        .key("Mod+Shift+F8")
+        .pure(),
     ]
 }
 

@@ -457,6 +457,10 @@ struct PageBuilder<'a> {
     web: bool,
     /// Footnotes waiting for the bottom of the current page: (part id, items, height).
     notes: Vec<(u32, Vec<Placed>, f32)>,
+    /// Footnotes carried over to subsequent pages.
+    overflow_notes: Vec<(u32, Vec<Placed>, f32)>,
+    /// Whether any footnote on this page is a continuation from the previous page.
+    is_continuation: bool,
     /// Page bottom before footnotes took space.
     orig_bottom: f32,
     /// The previous paragraph: (style, contextual spacing, space after) for contextual spacing.
@@ -467,6 +471,8 @@ struct PageBuilder<'a> {
     line_no: u32,
     /// Index of the first body item of the current page (vertical alignment shifts from here).
     page_items_start: usize,
+    /// Maximum vertical extent across all columns on this page (for balancing and section transitions).
+    max_col_bottom: f32,
 }
 
 /// Gap above the footnote separator and its length.
@@ -482,19 +488,96 @@ impl PageBuilder<'_> {
         if self.notes.is_empty() {
             return;
         }
-        let total = self.notes_h();
+        let avail_h = if self.web { f32::MAX / 8.0 } else { (self.orig_bottom - self.y - NOTE_SEP).max(36.0) };
         let x = self.sect.margin_left + self.sect.gutter;
-        let mut y = self.orig_bottom - total + NOTE_SEP;
         let notes = std::mem::take(&mut self.notes);
+        let mut page_notes: Vec<(u32, Vec<Placed>, f32)> = Vec::new();
+        let mut overflow: Vec<(u32, Vec<Placed>, f32)> = Vec::new();
+        let mut cur_h = 0.0f32;
+
+        for (id, items, h) in notes {
+            if overflow.is_empty() && cur_h + h <= avail_h {
+                cur_h += h;
+                page_notes.push((id, items, h));
+            } else if overflow.is_empty() {
+                let mut fit_items = Vec::new();
+                let mut rem_items = Vec::new();
+                let mut fit_h = 0.0f32;
+                let mut rem_h = 0.0f32;
+                for it in items {
+                    match it {
+                        Placed::Lines { story, path, para, l0, l1, x: ix, y: iy } => {
+                            let mut split_at = None;
+                            for li in l0..l1 {
+                                if let (Some(f), Some(l)) = (para.lines.get(l0), para.lines.get(li)) {
+                                    let lh = l.top + l.height - f.top;
+                                    if cur_h + fit_h + lh > avail_h && li > l0 {
+                                        split_at = Some(li);
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(s) = split_at {
+                                if let (Some(f), Some(l)) = (para.lines.get(l0), para.lines.get(s - 1)) {
+                                    let fh = l.top + l.height - f.top;
+                                    fit_h += fh;
+                                    fit_items.push(Placed::Lines { story, path: path.clone(), para: para.clone(), l0, l1: s, x: ix, y: iy });
+                                }
+                                if let (Some(f), Some(l)) = (para.lines.get(s), para.lines.get(l1 - 1)) {
+                                    let rh = l.top + l.height - f.top;
+                                    rem_h += rh;
+                                    rem_items.push(Placed::Lines { story, path, para, l0: s, l1, x: ix, y: iy });
+                                }
+                            } else if rem_items.is_empty() {
+                                if let (Some(f), Some(l)) = (para.lines.get(l0), para.lines.get(l1 - 1)) {
+                                    fit_h += l.top + l.height - f.top;
+                                }
+                                fit_items.push(Placed::Lines { story, path, para, l0, l1, x: ix, y: iy });
+                            } else {
+                                if let (Some(f), Some(l)) = (para.lines.get(l0), para.lines.get(l1 - 1)) {
+                                    rem_h += l.top + l.height - f.top;
+                                }
+                                rem_items.push(Placed::Lines { story, path, para, l0, l1, x: ix, y: iy });
+                            }
+                        }
+                        other => {
+                            if rem_items.is_empty() && cur_h + fit_h <= avail_h {
+                                fit_items.push(other);
+                            } else {
+                                rem_items.push(other);
+                            }
+                        }
+                    }
+                }
+                if !fit_items.is_empty() {
+                    cur_h += fit_h;
+                    page_notes.push((id, fit_items, fit_h));
+                }
+                if !rem_items.is_empty() {
+                    overflow.push((id, rem_items, rem_h));
+                }
+            } else {
+                overflow.push((id, items, h));
+            }
+        }
+
+        self.overflow_notes = overflow;
+        if page_notes.is_empty() {
+            return;
+        }
+
+        let total: f32 = NOTE_SEP + page_notes.iter().map(|n| n.2).sum::<f32>();
+        let mut y = self.orig_bottom - total + NOTE_SEP;
         if let Some(pg) = self.pages.last_mut() {
+            let rule_w = if self.is_continuation { self.sect.text_width() } else { 144.0 };
             pg.items.push(Placed::Rule {
                 x0: x,
                 y0: y - NOTE_SEP / 2.0,
-                x1: x + 144.0,
+                x1: x + rule_w,
                 y1: y - NOTE_SEP / 2.0,
                 border: Border { style: wordcraft_doc::props::BorderStyle::Single, width: 0.5, color: None, space: 0.0 },
             });
-            for (_, items, h) in notes {
+            for (_, items, h) in page_notes {
                 for mut it in items {
                     it.translate(x, y);
                     pg.items.push(it);
@@ -566,6 +649,16 @@ impl PageBuilder<'_> {
         self.bottom = if self.web { f32::MAX / 8.0 } else { s.page_h - s.margin_bottom };
         self.orig_bottom = self.bottom;
         self.y = self.top;
+        self.max_col_bottom = body_top;
+        if !self.overflow_notes.is_empty() {
+            self.is_continuation = true;
+            let carry = std::mem::take(&mut self.overflow_notes);
+            let before = self.notes_h();
+            self.notes = carry;
+            self.bottom -= self.notes_h() - before;
+        } else {
+            self.is_continuation = false;
+        }
     }
     fn col_x(&self) -> f32 {
         self.sect.margin_left + self.sect.gutter + self.cols.get(self.col).map(|c| c.0).unwrap_or(0.0)
@@ -578,6 +671,7 @@ impl PageBuilder<'_> {
     }
     /// Move to the next column or page.
     fn advance(&mut self, block: usize, body_top: f32) {
+        self.max_col_bottom = self.max_col_bottom.max(self.y);
         if self.col + 1 < self.cols.len() {
             self.col += 1;
             self.y = self.top;
@@ -587,6 +681,107 @@ impl PageBuilder<'_> {
     }
     fn page(&mut self) -> Option<&mut Page> {
         self.pages.last_mut()
+    }
+    /// Balances columns on the final page of a multi-column section.
+    fn balance_columns(&mut self, sect_start_item: usize) {
+        if self.web || self.cols.len() <= 1 {
+            return;
+        }
+        let Some(pg) = self.pages.last_mut() else { return };
+        if pg.items.len() <= sect_start_item {
+            return;
+        }
+        struct LineInfo {
+            story: StoryRef,
+            path: Path,
+            para: Arc<ParaLayout>,
+            line_idx: usize,
+            height: f32,
+        }
+        let mut lines = Vec::new();
+        let mut non_line_items = Vec::new();
+
+        for it in pg.items.drain(sect_start_item..) {
+            match it {
+                Placed::Lines { story, path, para, l0, l1, .. } => {
+                    for li in l0..l1 {
+                        if let Some(l) = para.lines.get(li) {
+                            lines.push(LineInfo { story, path: path.clone(), para: para.clone(), line_idx: li, height: l.height });
+                        }
+                    }
+                }
+                other => non_line_items.push(other),
+            }
+        }
+
+        if lines.is_empty() {
+            pg.items.extend(non_line_items);
+            return;
+        }
+
+        let num_cols = self.cols.len();
+        let total_h: f32 = lines.iter().map(|l| l.height).sum();
+        let target_h = (total_h / num_cols as f32).max(12.0);
+
+        let mut col_idx = 0;
+        let mut col_lines: Vec<(usize, LineInfo)> = Vec::new();
+        let mut cur_col_h = 0.0f32;
+
+        for line in lines {
+            let h = line.height;
+            if col_idx + 1 < num_cols && cur_col_h + h > target_h && cur_col_h > 0.0 {
+                col_idx += 1;
+                cur_col_h = 0.0;
+            }
+            cur_col_h += h;
+            col_lines.push((col_idx, line));
+        }
+
+        let s = self.sect;
+        let base_x = s.margin_left + s.gutter;
+        let mut col_y = self.top;
+        let mut max_b = self.top;
+
+        let mut i = 0;
+        while i < col_lines.len() {
+            let (c, ref first_line) = col_lines[i];
+            let col_box = self.cols.get(c).copied().unwrap_or((0.0, s.text_width()));
+            let cx = base_x + col_box.0;
+
+            let mut j = i + 1;
+            while j < col_lines.len() {
+                let (c_next, ref next_line) = col_lines[j];
+                if c_next == c
+                    && next_line.story == first_line.story
+                    && next_line.path == first_line.path
+                    && next_line.line_idx == col_lines[j - 1].1.line_idx + 1
+                {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let l0 = first_line.line_idx;
+            let l1 = col_lines[j - 1].1.line_idx + 1;
+            let para = &first_line.para;
+            let run_h: f32 = (i..j).map(|k| col_lines[k].1.height).sum();
+
+            if i == 0 || col_lines[i - 1].0 != c {
+                col_y = self.top;
+            }
+
+            pg.items.push(Placed::Lines { story: first_line.story, path: first_line.path.clone(), para: para.clone(), l0, l1, x: cx, y: col_y });
+
+            col_y += run_h;
+            max_b = max_b.max(col_y);
+            i = j;
+        }
+
+        pg.items.extend(non_line_items);
+        self.max_col_bottom = self.max_col_bottom.max(max_b);
+        self.y = col_y;
+        self.col = col_idx;
     }
 }
 
@@ -655,11 +850,14 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         number: 0,
         web,
         notes: Vec::new(),
+        overflow_notes: Vec::new(),
+        is_continuation: false,
         orig_bottom: 0.0,
         prev: None,
         excl: Vec::new(),
         line_no: 0,
         page_items_start: 0,
+        max_col_bottom: 0.0,
     };
     let mut block = 0usize;
     for (si, (end, sect)) in sections.iter().enumerate() {
@@ -687,12 +885,15 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
                 }
             }
         } else {
-            // Continuous: new column layout below the current text.
+            // Continuous: new column layout balanced below the lowest column of the previous section.
+            pb.max_col_bottom = pb.max_col_bottom.max(pb.y);
             pb.cols = sect.column_boxes();
             pb.col = 0;
-            pb.top = pb.y;
+            pb.top = pb.max_col_bottom;
+            pb.y = pb.top;
         }
         let last = (*end).min(doc.body.len().saturating_sub(1));
+        let sect_start_item = pb.page().map(|p| p.items.len()).unwrap_or(0);
         while block <= last {
             let Some(b) = doc.body.get(block) else { break };
             match &**b {
@@ -701,6 +902,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             }
             block += 1;
         }
+        pb.balance_columns(sect_start_item);
     }
     if pb.pages.is_empty() {
         pb.new_page(0, sect_ref.margin_top);
@@ -749,6 +951,12 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     }
     pb.apply_valign();
     pb.flush_notes();
+    while !pb.overflow_notes.is_empty() {
+        let body_top = if web { sect_ref.margin_top } else { body_top_for(&mut ctx, pb.sect, pb.sect.headers.default) };
+        pb.new_page(block, body_top);
+        pb.apply_valign();
+        pb.flush_notes();
+    }
     let mut pages = pb.pages;
     if web && let Some(p) = pages.first_mut() {
         let bottom = p

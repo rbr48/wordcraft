@@ -160,6 +160,12 @@ pub enum ShapeKind {
     Arrow,
     Star,
     Heart,
+    RightTriangle,
+    Hexagon,
+    Octagon,
+    Pentagon,
+    Cross,
+    Callout,
     /// A text box (rectangle with a text story).
     TextBox,
 }

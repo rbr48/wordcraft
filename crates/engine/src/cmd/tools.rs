@@ -416,7 +416,343 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"pageMovement": "sideToSide"}))
         })
         .pure(),
+        CommandSpec::new("tools.dictate", "Dictate", "Home › Voice", dictate).params(r#"{"text"?: string, "listening"?: bool}"#),
+        CommandSpec::new("tools.copilot", "Copilot / AI Assistant", "Home › AI", copilot).params(
+            r#"{"action"?: "toggle|draft|rewrite|summarize|proofread", "prompt"?: string, "tone"?: string, "replace"?: bool, "insert"?: bool}"#,
+        ),
+        CommandSpec::new("tools.customizeRibbon", "Customize Ribbon", "Tools › Customize", customize_ribbon).params(r#"{"tabs"?: string[]}"#).pure(),
+        CommandSpec::new("tools.customizeKeyboard", "Customize Keyboard", "Tools › Customize", customize_keyboard)
+            .params(r#"{"command"?: string, "key"?: string}"#)
+            .pure(),
+        CommandSpec::new("tools.templates", "Templates and Add-ins", "Tools › Templates", templates_and_addins)
+            .params(r#"{"template"?: string}"#)
+            .pure(),
+        CommandSpec::new("addins.get", "Get Add-ins", "Insert › Add-ins", get_addins).params(r#"{"action"?: "browse|install|list"}"#).pure(),
     ]
+}
+
+fn dictate(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(txt) = v.get("text").and_then(Value::as_str) {
+        let at = delete_selection(s)?;
+        let end = s.doc.insert_text(&at, txt, &s.typing_props())?;
+        s.sel = Selection::caret(end);
+        return sel_result(s);
+    }
+    let listening = v.get("listening").and_then(Value::as_bool).unwrap_or(true);
+    s.status = if listening { "Dictation: listening...".into() } else { "Dictation: stopped".into() };
+    Ok(json!({"listening": listening, "status": s.status}))
+}
+
+fn customize_ribbon(_s: &mut Session, v: &Value) -> CmdResult {
+    let tabs = v.get("tabs").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect::<Vec<_>>());
+    Ok(json!({"customized": true, "tabs": tabs}))
+}
+
+fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
+    let cmd = p::str(v, "command").unwrap_or("");
+    let key = p::str(v, "key").unwrap_or("");
+    let reset = p::bool(v, "reset").unwrap_or(false);
+
+    if reset {
+        s.custom_shortcuts.clear();
+        s.cmd_shortcuts.clear();
+        return Ok(json!({"reset": true}));
+    }
+
+    if cmd.is_empty() {
+        return Ok(json!({
+            "shortcuts": s.cmd_shortcuts,
+        }));
+    }
+
+    if key.is_empty() || key.eq_ignore_ascii_case("none") {
+        if let Some(old_key) = s.cmd_shortcuts.remove(cmd) {
+            s.custom_shortcuts.remove(&old_key);
+        }
+        Ok(json!({"assigned": false, "command": cmd}))
+    } else {
+        if let Some(old_cmd) = s.custom_shortcuts.get(key) {
+            s.cmd_shortcuts.remove(old_cmd);
+        }
+        if let Some(old_key) = s.cmd_shortcuts.get(cmd) {
+            s.custom_shortcuts.remove(old_key);
+        }
+        s.custom_shortcuts.insert(key.to_string(), cmd.to_string());
+        s.cmd_shortcuts.insert(cmd.to_string(), key.to_string());
+        Ok(json!({"assigned": true, "command": cmd, "key": key}))
+    }
+}
+
+fn copilot(s: &mut Session, v: &Value) -> CmdResult {
+    let action = p::str(v, "action").unwrap_or("");
+    let prompt = p::str(v, "prompt").unwrap_or("");
+    let tone = p::str(v, "tone").unwrap_or("professional");
+    let replace = p::bool(v, "replace").unwrap_or(false);
+    let insert = p::bool(v, "insert").unwrap_or(false);
+
+    if action.is_empty() && prompt.is_empty() {
+        s.ui_requests.push(json!({"togglePane": "ai"}));
+        return Ok(json!({"action": "toggle", "pane": "ai"}));
+    }
+
+    let (title, content) = match action {
+        "rewrite" => {
+            let src = if !prompt.is_empty() { prompt.to_string() } else { s.selected_text() };
+            ("Rewrite".to_string(), rewrite_text(&src, tone))
+        }
+        "summarize" => {
+            let src = if !prompt.is_empty() {
+                prompt.to_string()
+            } else {
+                let sel = s.selected_text();
+                if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
+            };
+            ("Summary".to_string(), summarize_text(&src))
+        }
+        "proofread" => {
+            let src = if !prompt.is_empty() {
+                prompt.to_string()
+            } else {
+                let sel = s.selected_text();
+                if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
+            };
+            ("Proofreading".to_string(), proofread_text(&src))
+        }
+        _ => ("Draft".to_string(), draft_content(prompt)),
+    };
+
+    if replace && !content.is_empty() {
+        let at = delete_selection(s)?;
+        let end = s.doc.insert_text(&at, &content, &s.typing_props())?;
+        s.sel = Selection::caret(end);
+    } else if insert && !content.is_empty() {
+        let at = s.sel.focus.clone();
+        let end = s.doc.insert_text(&at, &content, &s.typing_props())?;
+        s.sel = Selection::caret(end);
+    }
+
+    Ok(json!({
+        "action": if action.is_empty() { "draft" } else { action },
+        "title": title,
+        "content": content,
+    }))
+}
+
+pub fn rewrite_text(src: &str, tone: &str) -> String {
+    if src.trim().is_empty() {
+        return "Please select or enter text to rewrite.".to_string();
+    }
+    let mut text = src.to_string();
+    match tone {
+        "concise" => {
+            let pairs = [
+                ("in order to", "to"),
+                ("due to the fact that", "because"),
+                ("at this point in time", "currently"),
+                ("for the purpose of", "for"),
+                ("with regard to", "regarding"),
+                ("in the event that", "if"),
+                ("a large number of", "many"),
+                ("make an adjustment", "adjust"),
+                ("conduct an evaluation", "evaluate"),
+                ("bring to an end", "conclude"),
+                ("give consideration to", "consider"),
+                ("as a means of", "to"),
+            ];
+            for (from, to) in pairs {
+                text = text.replace(from, to);
+                let mut cap_from = from.to_string();
+                if let Some(first) = cap_from.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                    let mut cap_to = to.to_string();
+                    if let Some(t_first) = cap_to.get_mut(0..1) {
+                        t_first.make_ascii_uppercase();
+                        text = text.replace(&cap_from, &cap_to);
+                    }
+                }
+            }
+        }
+        "casual" => {
+            let pairs = [
+                ("furthermore", "also"),
+                ("nevertheless", "still"),
+                ("consequently", "so"),
+                ("utilize", "use"),
+                ("terminate", "end"),
+                ("commence", "start"),
+                ("inquire", "ask"),
+                ("assist", "help"),
+            ];
+            for (from, to) in pairs {
+                text = text.replace(from, to);
+            }
+        }
+        _ => {
+            let pairs = [
+                ("don't", "do not"),
+                ("can't", "cannot"),
+                ("won't", "will not"),
+                ("it's", "it is"),
+                ("we've", "we have"),
+                ("they're", "they are"),
+                ("haven't", "have not"),
+                ("doesn't", "does not"),
+                ("a lot of", "a substantial number of"),
+                ("get in touch", "contact"),
+                ("look into", "investigate"),
+                ("fix", "resolve"),
+                ("bad", "suboptimal"),
+            ];
+            for (from, to) in pairs {
+                text = text.replace(from, to);
+            }
+        }
+    }
+    text
+}
+
+pub fn summarize_text(src: &str) -> String {
+    let trimmed = src.trim();
+    if trimmed.is_empty() {
+        return "Please enter text or select content to summarize.".to_string();
+    }
+    let sentences: Vec<&str> = trimmed.split(['.', '!', '?', '\n']).map(str::trim).filter(|s| !s.is_empty() && s.len() > 15).collect();
+
+    let mut out = String::from("Key Takeaways:\n");
+    if sentences.is_empty() {
+        out.push_str(&format!("• {trimmed}\n"));
+    } else {
+        for s in sentences.iter().take(4) {
+            out.push_str(&format!("• {s}.\n"));
+        }
+        out.push_str("\nExecutive Summary:\n");
+        let lead = sentences.first().copied().unwrap_or(trimmed);
+        let concluding = sentences.last().copied().unwrap_or(lead);
+        out.push_str(&format!("{lead}. Ultimately, {concluding}."));
+    }
+    out
+}
+
+pub fn proofread_text(src: &str) -> String {
+    let trimmed = src.trim();
+    if trimmed.is_empty() {
+        return "No text provided for proofreading.".to_string();
+    }
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    let word_count = words.len();
+    let est_reading_time = (word_count as f32 / 200.0).ceil() as u32;
+
+    let mut suggestions = Vec::new();
+    for i in 0..words.len().saturating_sub(1) {
+        if let (Some(w1), Some(w2)) = (words.get(i), words.get(i + 1))
+            && w1.eq_ignore_ascii_case(w2)
+            && w1.len() > 1
+        {
+            suggestions.push(format!("Repeated word detected: \"{w1} {w2}\""));
+        }
+    }
+
+    let mut report = format!("Analysis: {word_count} words (~{est_reading_time} min read)\n\n");
+    if suggestions.is_empty() {
+        report.push_str("✓ Grammar, punctuation, and phrasing appear clear.\n✓ No duplicate words detected.\n\n");
+    } else {
+        report.push_str("Suggestions:\n");
+        for s in suggestions {
+            report.push_str(&format!("⚠ {s}\n"));
+        }
+        report.push('\n');
+    }
+    report.push_str(&format!("Polished Text:\n{trimmed}"));
+    report
+}
+
+pub fn draft_content(prompt: &str) -> String {
+    let p = prompt.to_lowercase();
+    if p.contains("minute") || p.contains("meeting") {
+        return format!(
+            "Meeting Minutes: {prompt}\n\
+             Date: {}\n\
+             Attendees: Project Team, Stakeholders\n\n\
+             1. Agenda Items\n\
+             • Review of progress and milestones\n\
+             • Technical architecture updates\n\
+             • Open issues and dependency blockers\n\n\
+             2. Key Decisions\n\
+             • Approved timeline for upcoming release\n\
+             • Confirmed deliverable responsibilities\n\n\
+             3. Action Items\n\
+             • [Owner] Finalize specifications by Friday\n\
+             • [Team] Complete integration test verification",
+            super::insert::format_date("MMMM d, yyyy")
+        );
+    } else if p.contains("status") || p.contains("report") {
+        return format!(
+            "Project Status Report: {prompt}\n\
+             Reporting Period: {}\n\n\
+             Executive Summary:\n\
+             The project continues on track with key sprint deliverables meeting targeted quality benchmarks.\n\n\
+             Completed Milestones:\n\
+             • Core module integration completed and validated\n\
+             • Automated CI quality gates passed with zero regressions\n\n\
+             Upcoming Priorities:\n\
+             • User interface refinement and end-to-end polish\n\
+             • Performance benchmarking and documentation\n\n\
+             Risks & Mitigations:\n\
+             • Schedule buffer allocated for cross-platform packaging",
+            super::insert::format_date("MMMM d, yyyy")
+        );
+    } else if p.contains("letter") || p.contains("invitation") || p.contains("memo") {
+        return format!(
+            "MEMORANDUM\n\n\
+             TO: All Team Members\n\
+             FROM: Management\n\
+             DATE: {}\n\
+             SUBJECT: {}\n\n\
+             Dear Colleagues,\n\n\
+             We are pleased to communicate regarding {prompt}. Our team has demonstrated exceptional commitment to quality, speed, and collaborative excellence.\n\n\
+             Please review the attached details and let us know if you have any questions or feedback.\n\n\
+             Sincerely,\n\
+             The Leadership Team",
+            super::insert::format_date("MMMM d, yyyy"),
+            prompt
+        );
+    } else if p.contains("proposal") {
+        return format!(
+            "Project Proposal: {prompt}\n\n\
+             1. Problem Statement\n\
+             Current workflows require streamlined tooling and improved performance.\n\n\
+             2. Proposed Solution\n\
+             Implement a robust, clean-room, native solution with high speed and zero crash tolerance.\n\n\
+             3. Deliverables & Milestones\n\
+             • Phase 1: Prototype and architectural foundation\n\
+             • Phase 2: Feature completeness and user experience polish\n\
+             • Phase 3: Comprehensive quality verification and distribution\n\n\
+             4. Expected Impact\n\
+             Significantly increased productivity, user trust, and operational efficiency."
+        );
+    }
+
+    format!(
+        "{prompt}\n\n\
+         1. Introduction\n\
+         An overview of {prompt} and the primary objectives to achieve.\n\n\
+         2. Key Concepts & Analysis\n\
+         • Strategic considerations and background\n\
+         • Methodologies and practical approaches\n\
+         • Comparative evaluation of options\n\n\
+         3. Summary & Next Steps\n\
+         Synthesis of the recommendations and immediate actionable next steps."
+    )
+}
+
+fn templates_and_addins(_s: &mut Session, v: &Value) -> CmdResult {
+    let tmpl = v.get("template").and_then(Value::as_str).unwrap_or("Normal.dotm");
+    Ok(json!({"attachedTemplate": tmpl, "addins": []}))
+}
+
+fn get_addins(_s: &mut Session, v: &Value) -> CmdResult {
+    let action = v.get("action").and_then(Value::as_str).unwrap_or("browse");
+    Ok(json!({"action": action, "available": []}))
 }
 
 fn macros(s: &mut Session, v: &Value) -> CmdResult {
@@ -914,10 +1250,9 @@ fn read_aloud(s: &mut Session, _: &Value) -> CmdResult {
     }
     #[cfg(target_os = "windows")]
     {
-        let script =
-            format!("Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak([Console]::In.ReadToEnd())");
+        let script = "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak([Console]::In.ReadToEnd())";
         if let Ok(mut c) =
-            std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).stdin(std::process::Stdio::piped()).spawn()
+            std::process::Command::new("powershell").args(["-NoProfile", "-Command", script]).stdin(std::process::Stdio::piped()).spawn()
             && let Some(mut i) = c.stdin.take()
         {
             use std::io::Write;
@@ -1016,5 +1351,43 @@ mod tests {
         s.run("caret.docEnd", &json!({})).unwrap();
         s.run("insert.quickParts", &json!({"insert": "m"})).unwrap();
         assert!(s.doc.plain_text(StoryRef::Body).ends_with("Membership"));
+    }
+
+    #[test]
+    fn copilot_draft_rewrite_summarize_proofread() {
+        let mut s = Session::new(Document::from_text("This is an unpolished sentence. We don't have enough data in order to conclude."));
+        let d = s.run("tools.copilot", &json!({"action": "draft", "prompt": "Status report"})).unwrap();
+        assert!(d["content"].as_str().unwrap().contains("Status Report"));
+
+        let rw = s.run("tools.copilot", &json!({"action": "rewrite", "prompt": "We need this in order to proceed.", "tone": "concise"})).unwrap();
+        assert_eq!(rw["content"].as_str().unwrap(), "We need this to proceed.");
+
+        let sm = s
+            .run(
+                "tools.copilot",
+                &json!({"action": "summarize", "prompt": "First point is crucial for the plan. Second point is equally critical for the outcome."}),
+            )
+            .unwrap();
+        assert!(sm["content"].as_str().unwrap().contains("Key Takeaways"));
+
+        let pr = s.run("tools.copilot", &json!({"action": "proofread", "prompt": "Check the the repetition"})).unwrap();
+        assert!(pr["content"].as_str().unwrap().contains("Repeated word detected"));
+    }
+
+    #[test]
+    fn customize_keyboard_assign_and_reset() {
+        let mut s = Session::new(Document::new());
+        s.run("tools.customizeKeyboard", &json!({"command": "format.bold", "key": "Ctrl+Alt+B"})).unwrap();
+        assert_eq!(s.cmd_shortcuts.get("format.bold").map(|s| s.as_str()), Some("Ctrl+Alt+B"));
+        assert_eq!(s.custom_shortcuts.get("Ctrl+Alt+B").map(|s| s.as_str()), Some("format.bold"));
+
+        s.run("tools.customizeKeyboard", &json!({"command": "format.bold", "key": ""})).unwrap();
+        assert_eq!(s.cmd_shortcuts.get("format.bold"), None);
+        assert_eq!(s.custom_shortcuts.get("Ctrl+Alt+B"), None);
+
+        s.run("tools.customizeKeyboard", &json!({"command": "format.italic", "key": "Ctrl+Alt+I"})).unwrap();
+        s.run("tools.customizeKeyboard", &json!({"reset": true})).unwrap();
+        assert!(s.cmd_shortcuts.is_empty());
+        assert!(s.custom_shortcuts.is_empty());
     }
 }

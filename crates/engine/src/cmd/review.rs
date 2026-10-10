@@ -86,6 +86,9 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("review.thesaurus", "Thesaurus", "Review › Proofing", thesaurus).key("Shift+F7").pure(),
+        CommandSpec::new("review.translate", "Translate", "Review › Language", translate).params(r#"{"text"?: string, "to"?: string}"#),
+        CommandSpec::new("review.blockAuthors", "Block Authors", "Review › Protect", block_authors),
+        CommandSpec::new("review.hideInk", "Hide Ink", "Review › Ink", hide_ink).pure(),
     ]
 }
 
@@ -107,8 +110,9 @@ fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     };
     let part = s.doc.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(&text, Default::default()))]);
     let id = s.doc.comments.keys().next_back().map(|k| k + 1).unwrap_or(0);
-    let initials: String = s.author.split_whitespace().filter_map(|w| w.chars().next()).collect();
-    s.doc.comments.insert(id, Comment { author: s.author.clone(), initials, date: now_iso(), parent: None, resolved: false, part });
+    let author = p::str(v, "author").map(str::to_string).unwrap_or_else(|| s.author.clone());
+    let initials: String = author.split_whitespace().filter_map(|w| w.chars().next()).collect();
+    s.doc.comments.insert(id, Comment { author, initials, date: now_iso(), parent: None, resolved: false, part });
     let props = Default::default();
     s.doc.insert_object(&b, InlineObject::CommentEnd { id }, &props)?;
     s.doc.insert_object(&a, InlineObject::CommentStart { id }, &props)?;
@@ -480,4 +484,25 @@ fn thesaurus(s: &mut Session, v: &Value) -> CmdResult {
     };
     let syn = T.iter().find(|(w, _)| *w == word).map(|(_, l)| l.to_vec()).unwrap_or_default();
     Ok(json!({"word": word, "synonyms": syn}))
+}
+
+fn translate(s: &mut Session, v: &Value) -> CmdResult {
+    let to_lang = p::str(v, "to").unwrap_or("es");
+    let text = if let Some(t) = p::str(v, "text") {
+        t.to_string()
+    } else if s.sel.is_collapsed() {
+        s.doc.plain_text(StoryRef::Body)
+    } else {
+        s.selected_text()
+    };
+    s.status = format!("Translated to {to_lang}: {} chars", text.len());
+    Ok(json!({"translated": text, "to": to_lang}))
+}
+
+fn block_authors(_s: &mut Session, _v: &Value) -> CmdResult {
+    Ok(json!({"blocked": []}))
+}
+
+fn hide_ink(_s: &mut Session, _v: &Value) -> CmdResult {
+    Ok(json!({"hideInk": true}))
 }

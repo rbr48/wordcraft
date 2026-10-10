@@ -466,6 +466,57 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect) -> BezPath {
             p.close_path();
             p
         }
+        ShapeKind::RightTriangle => poly(&[(r.x0, r.y0), (r.x0, r.y1), (r.x1, r.y1)]),
+        ShapeKind::Pentagon => {
+            let mut pts = Vec::with_capacity(5);
+            for i in 0..5 {
+                let a = std::f64::consts::PI * 2.0 * (i as f64) / 5.0 - std::f64::consts::FRAC_PI_2;
+                pts.push((cx + a.cos() * r.width() / 2.0, cy + a.sin() * r.height() / 2.0));
+            }
+            poly(&pts)
+        }
+        ShapeKind::Hexagon => {
+            let dx = r.width() * 0.25;
+            poly(&[(r.x0 + dx, r.y0), (r.x1 - dx, r.y0), (r.x1, cy), (r.x1 - dx, r.y1), (r.x0 + dx, r.y1), (r.x0, cy)])
+        }
+        ShapeKind::Octagon => {
+            let c = r.width().min(r.height()) * 0.293;
+            poly(&[
+                (r.x0 + c, r.y0),
+                (r.x1 - c, r.y0),
+                (r.x1, r.y0 + c),
+                (r.x1, r.y1 - c),
+                (r.x1 - c, r.y1),
+                (r.x0 + c, r.y1),
+                (r.x0, r.y1 - c),
+                (r.x0, r.y0 + c),
+            ])
+        }
+        ShapeKind::Cross => {
+            let (w, h) = (r.width(), r.height());
+            let (ax0, ax1) = (r.x0 + w * 0.35, r.x1 - w * 0.35);
+            let (ay0, ay1) = (r.y0 + h * 0.35, r.y1 - h * 0.35);
+            poly(&[
+                (ax0, r.y0),
+                (ax1, r.y0),
+                (ax1, ay0),
+                (r.x1, ay0),
+                (r.x1, ay1),
+                (ax1, ay1),
+                (ax1, r.y1),
+                (ax0, r.y1),
+                (ax0, ay1),
+                (r.x0, ay1),
+                (r.x0, ay0),
+                (ax0, ay0),
+            ])
+        }
+        ShapeKind::Callout => {
+            let (x0, y0, x1, y1) = (r.x0, r.y0, r.x1, r.y1 - r.height() * 0.2);
+            let tip_x = x0 + r.width() * 0.15;
+            let tip_y = r.y1;
+            poly(&[(x0, y0), (x1, y0), (x1, y1), (x0 + r.width() * 0.45, y1), (tip_x, tip_y), (x0 + r.width() * 0.25, y1), (x0, y1)])
+        }
     }
 }
 
@@ -548,7 +599,23 @@ mod tests {
     #[test]
     fn shapes_have_paths() {
         let r = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0);
-        for k in [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::Star, ShapeKind::Heart, ShapeKind::Arrow, ShapeKind::Line] {
+        for k in [
+            ShapeKind::Rectangle,
+            ShapeKind::RoundedRectangle,
+            ShapeKind::Ellipse,
+            ShapeKind::Triangle,
+            ShapeKind::Diamond,
+            ShapeKind::Line,
+            ShapeKind::Arrow,
+            ShapeKind::Star,
+            ShapeKind::Heart,
+            ShapeKind::RightTriangle,
+            ShapeKind::Hexagon,
+            ShapeKind::Octagon,
+            ShapeKind::Pentagon,
+            ShapeKind::Cross,
+            ShapeKind::Callout,
+        ] {
             assert!(!shape_path(k, r).elements().is_empty());
         }
     }

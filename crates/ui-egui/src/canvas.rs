@@ -18,6 +18,24 @@ pub const PX_PER_PT: f32 = 96.0 / 72.0;
 const GAP: f32 = 18.0;
 const RULER: f32 = 22.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawTool {
+    Pen,
+    Pencil,
+    Highlighter,
+    Eraser,
+    Lasso,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InkStroke {
+    pub page: usize,
+    pub color: Color32,
+    pub width: f32,
+    pub is_highlighter: bool,
+    pub points: Vec<Pos2>,
+}
+
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
     pub scroll_to_caret: bool,
@@ -38,6 +56,13 @@ pub struct CanvasState {
     pub want_focus: bool,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
+    pub draw_tool: Option<DrawTool>,
+    pub ink_color: Color32,
+    pub ink_width: f32,
+    pub ink_strokes: Vec<InkStroke>,
+    pub current_stroke: Option<InkStroke>,
+    pub replay_started_at: Option<f64>,
+    pub replay_speed: f32,
 }
 
 impl Default for CanvasState {
@@ -60,8 +85,43 @@ impl Default for CanvasState {
             want_focus: true,
             context_issue: None,
             context_synonyms: None,
+            draw_tool: None,
+            ink_color: Color32::BLACK,
+            ink_width: 2.0,
+            ink_strokes: Vec::new(),
+            current_stroke: None,
+            replay_started_at: None,
+            replay_speed: 1.0,
         }
     }
+}
+
+/// Chaikin's corner-cutting algorithm for organically smooth hand-drawn ink curves.
+pub fn smooth_points(pts: &[Pos2]) -> Vec<Pos2> {
+    if pts.len() <= 2 {
+        return pts.to_vec();
+    }
+    let mut current = pts.to_vec();
+    for _ in 0..2 {
+        if current.len() < 3 {
+            break;
+        }
+        let mut next = Vec::with_capacity(current.len() * 2);
+        if let Some(first) = current.first() {
+            next.push(*first);
+        }
+        for w in current.windows(2) {
+            let p0 = w[0];
+            let p1 = w[1];
+            next.push(pos2(p0.x * 0.75 + p1.x * 0.25, p0.y * 0.75 + p1.y * 0.25));
+            next.push(pos2(p0.x * 0.25 + p1.x * 0.75, p0.y * 0.25 + p1.y * 0.75));
+        }
+        if let Some(last) = current.last() {
+            next.push(*last);
+        }
+        current = next;
+    }
+    current
 }
 
 /// Page positions in content space (points), for the current zoom.
@@ -206,6 +266,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let t0 = crate::now_ms();
         let mut rects = Vec::with_capacity(geo.rects.len());
         let content_origin = ui.min_rect().min;
+        let replay_budget = if let Some(started) = app.canvas.replay_started_at {
+            let dur = (2000.0 / app.canvas.replay_speed.max(0.1) as f64).max(500.0);
+            let elapsed = crate::now_ms() - started;
+            if elapsed >= dur {
+                app.canvas.replay_started_at = None;
+                None
+            } else {
+                ui.ctx().request_repaint();
+                let total_pts: usize = app.canvas.ink_strokes.iter().map(|s| s.points.len()).sum();
+                let frac = (elapsed / dur).clamp(0.0, 1.0) as f32;
+                Some((total_pts as f32 * frac).round() as usize)
+            }
+        } else {
+            None
+        };
         for (i, pr) in geo.rects.iter().enumerate() {
             let sr = pr.translate(content_origin.to_vec2());
             rects.push(sr);
@@ -274,6 +349,38 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
             }
+            // Ink strokes on this page.
+            let mut remaining_budget = replay_budget;
+            for st in app.canvas.ink_strokes.iter().chain(app.canvas.current_stroke.as_ref()) {
+                if let Some(budget) = &mut remaining_budget {
+                    if *budget < 2 {
+                        break;
+                    }
+                    if st.page == i {
+                        let take_pts = st.points.len().min(*budget);
+                        *budget -= take_pts;
+                        if take_pts >= 2 {
+                            let pts: Vec<Pos2> =
+                                st.points[..take_pts].iter().map(|pt| pos2(sr.min.x + pt.x * geo.scale, sr.min.y + pt.y * geo.scale)).collect();
+                            let stroke_w = (st.width * geo.scale).max(0.5);
+                            let color = if st.is_highlighter {
+                                Color32::from_rgba_unmultiplied(st.color.r(), st.color.g(), st.color.b(), 110)
+                            } else {
+                                st.color
+                            };
+                            painter.add(egui::Shape::line(pts, Stroke::new(stroke_w, color)));
+                        }
+                    } else {
+                        *budget = budget.saturating_sub(st.points.len());
+                    }
+                } else if st.page == i && st.points.len() >= 2 {
+                    let pts: Vec<Pos2> = st.points.iter().map(|pt| pos2(sr.min.x + pt.x * geo.scale, sr.min.y + pt.y * geo.scale)).collect();
+                    let stroke_w = (st.width * geo.scale).max(0.5);
+                    let color =
+                        if st.is_highlighter { Color32::from_rgba_unmultiplied(st.color.r(), st.color.g(), st.color.b(), 110) } else { st.color };
+                    painter.add(egui::Shape::line(pts, Stroke::new(stroke_w, color)));
+                }
+            }
         }
         if rendered > 0 {
             app.canvas.render_ms = crate::now_ms() - t0;
@@ -324,6 +431,59 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 painter.line_segment([pos2(g.min.x, g.max.y), pos2(g.max.x, g.max.y)], Stroke::new(1.0, caret_color));
             }
         }
+        // Object handles (selected picture or shape).
+        if let Some((pos, _)) = wordcraft_engine::cmd::objects::selected(&app.session) {
+            for (pi, p) in layout.pages.iter().enumerate() {
+                if let Some(pr) = rects.get(pi) {
+                    for it in &p.items {
+                        let rect = match it {
+                            Placed::Image { rect, story, path, off, .. } if *story == pos.story && path == &pos.path && *off == pos.off => {
+                                Some(*rect)
+                            }
+                            _ => None,
+                        };
+                        if let Some(r) = rect {
+                            let obj_rect = Rect::from_min_size(
+                                pos2(pr.min.x + r.x * geo.scale, pr.min.y + r.y * geo.scale),
+                                vec2(r.w * geo.scale, r.h * geo.scale),
+                            );
+                            painter.rect_stroke(obj_rect, 0.0, Stroke::new(1.5, t.accent), egui::StrokeKind::Middle);
+                            let hs = vec2(7.0, 7.0);
+                            let pts = [
+                                obj_rect.left_top(),
+                                pos2(obj_rect.center().x, obj_rect.top()),
+                                obj_rect.right_top(),
+                                pos2(obj_rect.right(), obj_rect.center().y),
+                                obj_rect.right_bottom(),
+                                pos2(obj_rect.center().x, obj_rect.bottom()),
+                                obj_rect.left_bottom(),
+                                pos2(obj_rect.left(), obj_rect.center().y),
+                            ];
+                            for pt in pts {
+                                let hr = Rect::from_center_size(pt, hs);
+                                painter.rect_filled(hr, 1.0, Color32::WHITE);
+                                painter.rect_stroke(hr, 1.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                            }
+                            let stem_top = pos2(obj_rect.center().x, obj_rect.top() - 15.0);
+                            painter.line_segment([pos2(obj_rect.center().x, obj_rect.top()), stem_top], Stroke::new(1.0, t.accent));
+                            painter.circle_filled(stem_top, 4.0, Color32::WHITE);
+                            painter.circle_stroke(stem_top, 4.0, Stroke::new(1.5, t.accent));
+                        }
+                    }
+                }
+            }
+        }
+        // Visual AI cursor / agent indicator.
+        if let Some(c) = layout.caret_on(&app.session.sel.focus, app.session.page_hint)
+            && let Some(pr) = rects.get(c.page)
+            && (app.session.author.to_lowercase().contains("ai") || app.session.author.to_lowercase().contains("agent"))
+        {
+            let x = pr.min.x + c.x * geo.scale;
+            let y0 = pr.min.y + c.top * geo.scale;
+            let badge_rect = Rect::from_min_size(pos2(x + 4.0, y0 - 13.0), vec2(18.0, 12.0));
+            painter.rect_filled(badge_rect, 2.0, t.accent);
+            painter.text(badge_rect.center(), egui::Align2::CENTER_CENTER, "AI", semibold(9.0), Color32::WHITE);
+        }
         (resp, rects)
     });
     let (resp, rects) = out.inner;
@@ -354,7 +514,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     resp.context_menu(|ui| context_menu(app, ui));
     if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        if app.canvas.draw_tool.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        } else {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        }
     }
     if app.canvas.focused {
         crate::keys::canvas_events(app, ui.ctx());
@@ -469,12 +633,72 @@ pub fn page_at(rects: &[Rect], scale: f32, p: Pos2) -> Option<(usize, f32, f32)>
     let r = rects.get(i)?;
     Some((i, (p.x - r.min.x) / scale, (p.y - r.min.y) / scale))
 }
+fn erase_stroke_at(strokes: &mut Vec<InkStroke>, page: usize, pt: Pos2, radius: f32) {
+    strokes.retain(|st| {
+        if st.page != page {
+            return true;
+        }
+        !st.points.iter().any(|p| p.distance(pt) <= radius)
+    });
+}
 
 fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
     let Some(p) = resp.interact_pointer_pos().or_else(|| resp.hover_pos()) else { return };
     let Some((page, x, y)) = page_at(rects, scale, p) else { return };
     let mods = ui.input(|i| i.modifiers);
     let story = app.session.sel.focus.story;
+    // Active draw tool routes mouse interaction to freehand ink drawing or erasing.
+    if let Some(tool) = app.canvas.draw_tool {
+        let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer();
+        if pressed {
+            match tool {
+                DrawTool::Pen | DrawTool::Pencil | DrawTool::Highlighter => {
+                    let is_highlighter = tool == DrawTool::Highlighter;
+                    let width = match tool {
+                        DrawTool::Pencil => 1.0,
+                        DrawTool::Highlighter => 14.0,
+                        _ => app.canvas.ink_width,
+                    };
+                    let color = if is_highlighter {
+                        Color32::from_rgb(0xFF, 0xEB, 0x3B)
+                    } else if tool == DrawTool::Pencil {
+                        Color32::from_rgb(0x75, 0x75, 0x75)
+                    } else {
+                        app.canvas.ink_color
+                    };
+                    app.canvas.current_stroke = Some(InkStroke { page, color, width, is_highlighter, points: vec![pos2(x, y)] });
+                }
+                DrawTool::Eraser => {
+                    erase_stroke_at(&mut app.canvas.ink_strokes, page, pos2(x, y), 16.0);
+                }
+                DrawTool::Lasso => {
+                    app.canvas.current_stroke = Some(InkStroke {
+                        page,
+                        color: Color32::from_rgb(0x2B, 0x47, 0xB5),
+                        width: 1.0,
+                        is_highlighter: false,
+                        points: vec![pos2(x, y)],
+                    });
+                }
+            }
+        } else if ui.input(|i| i.pointer.primary_down()) {
+            if let Some(st) = &mut app.canvas.current_stroke
+                && let Some(last) = st.points.last()
+                && last.distance(pos2(x, y)) >= 1.5
+            {
+                st.points.push(pos2(x, y));
+            } else if tool == DrawTool::Eraser {
+                erase_stroke_at(&mut app.canvas.ink_strokes, page, pos2(x, y), 16.0);
+            }
+        } else if ui.input(|i| i.pointer.primary_released())
+            && let Some(mut st) = app.canvas.current_stroke.take()
+            && st.points.len() >= 2
+        {
+            st.points = smooth_points(&st.points);
+            app.canvas.ink_strokes.push(st);
+        }
+        return;
+    }
     // Double-click in the header/footer area edits it; double-click in the body leaves it.
     if resp.double_clicked() {
         if let Some((s, header)) = layout.header_footer_at(page, y)

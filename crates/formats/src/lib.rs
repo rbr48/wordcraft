@@ -8,6 +8,7 @@
 //! depth-limited and sizes are capped.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod epub;
 pub mod html;
 pub mod latex;
 pub mod markdown;
@@ -19,7 +20,7 @@ pub mod txt;
 use wordcraft_doc::Document;
 
 /// Extensions this crate handles.
-pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt", "tex", "latex", "ltx"];
+pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt", "tex", "latex", "ltx", "epub"];
 
 /// Import `bytes` in the format named by `ext` (no dot, any case). `None` = not our format.
 pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
@@ -49,6 +50,7 @@ pub fn export(ext: &str, doc: &Document) -> Option<Result<Vec<u8>, String>> {
         "rtf" => Ok(rtf::export(doc).into_bytes()),
         "odt" => odt::export(doc),
         "tex" | "latex" | "ltx" => Ok(latex::export(doc).into_bytes()),
+        "epub" => epub::export(doc),
         _ => return None,
     })
 }

@@ -73,6 +73,14 @@ pub struct UiState {
     pub language: String,
     /// View › Switch Modes: show pages dark (white text on black), kept between runs.
     pub dark_page: bool,
+    /// Side pane: AI Copilot & Writing Assistant.
+    pub ai_pane: bool,
+    #[serde(skip)]
+    pub ai_prompt: String,
+    #[serde(skip)]
+    pub ai_response: String,
+    #[serde(skip)]
+    pub ai_mode: String,
 }
 
 impl Default for UiState {
@@ -90,6 +98,10 @@ impl Default for UiState {
             window: None,
             language: i18n::AUTO.into(),
             dark_page: false,
+            ai_pane: false,
+            ai_prompt: String::new(),
+            ai_response: String::new(),
+            ai_mode: "Draft".into(),
         }
     }
 }
@@ -128,6 +140,8 @@ pub struct WordApp {
 
 impl WordApp {
     pub fn new(session: Session, services: Services) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        wordcraft_fonts::FontDb::global().scan_in_background();
         WordApp {
             session,
             ui: UiState::default(),
@@ -228,6 +242,31 @@ impl WordApp {
             let s = std::mem::take(&mut self.session.status);
             self.status(s);
         }
+        match id {
+            "draw.select" => self.canvas.draw_tool = None,
+            "draw.lasso" => self.canvas.draw_tool = Some(canvas::DrawTool::Lasso),
+            "draw.eraser" => self.canvas.draw_tool = Some(canvas::DrawTool::Eraser),
+            "draw.pen" => self.canvas.draw_tool = Some(canvas::DrawTool::Pen),
+            "draw.pencil" => self.canvas.draw_tool = Some(canvas::DrawTool::Pencil),
+            "draw.highlighter" => self.canvas.draw_tool = Some(canvas::DrawTool::Highlighter),
+            "draw.replay" => {
+                self.canvas.replay_started_at = Some(now_ms());
+                self.canvas.replay_speed = 1.0;
+            }
+            "draw.inkToShape" => {
+                if let Some(stroke) = self.canvas.ink_strokes.pop() {
+                    let (min_x, max_x, min_y, max_y) =
+                        stroke.points.iter().fold((f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY), |(mx, mx2, my, my2), p| {
+                            (mx.min(p.x), mx2.max(p.x), my.min(p.y), my2.max(p.y))
+                        });
+                    let w = (max_x - min_x).clamp(24.0, 500.0);
+                    let h = (max_y - min_y).clamp(24.0, 500.0);
+                    let kind = if (w - h).abs() < (w.max(h) * 0.25) { "ellipse" } else { "rectangle" };
+                    let _ = self.run("insert.shape", json!({"kind": kind, "width": w, "height": h}));
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Requests commands make of the UI (open a dialog…).
@@ -248,6 +287,11 @@ impl WordApp {
                 other => self.dialog = dialogs::Dialog::open(other, self),
             }
         }
+        if let Some(pane) = req.get("togglePane").and_then(Value::as_str)
+            && pane == "ai"
+        {
+            self.ui.ai_pane = !self.ui.ai_pane;
+        }
         if req.get("close").is_some() {
             self.quit_requested = true;
         }
@@ -257,6 +301,11 @@ impl WordApp {
     fn ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         Some(Ok(match id {
+            "ui.aiPane" | "ui.copilot" => {
+                let val = p.get("value").or_else(|| p.get("open")).and_then(Value::as_bool).unwrap_or(!self.ui.ai_pane);
+                self.ui.ai_pane = val;
+                json!({"aiPane": self.ui.ai_pane})
+            }
             "ui.tab" => {
                 let tab = s("tab").unwrap_or("Home").to_string();
                 if tab == "File" {

@@ -143,6 +143,37 @@ pub fn tool_definitions() -> Value {
             obj(json!({}), &[]),
             true
         ),
+        tool(
+            "format_document",
+            "Format document style",
+            "Format document layout and typography according to major publishing guidelines (APA, MLA, Chicago, IEEE).",
+            obj(json!({"style": s("Style guide name: APA, MLA, Chicago, or IEEE")}), &["style"]),
+            false
+        ),
+        tool(
+            "ai_review",
+            "Add AI review comments",
+            "Attach automated AI review comments and suggestions to targeted text passages in the document.",
+            obj(
+                json!({
+                    "comments": {
+                        "type": "array",
+                        "description": "List of review comments to anchor to document text",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string", "description": "Text substring to anchor comment to"},
+                                "comment": {"type": "string", "description": "Feedback or suggestion text"},
+                                "author": {"type": "string", "description": "Author name (defaults to 'AI Reviewer')"}
+                            },
+                            "required": ["text", "comment"]
+                        }
+                    }
+                }),
+                &["comments"]
+            ),
+            false
+        ),
     ])
 }
 
@@ -278,6 +309,54 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "click" => wrap(b.call("ui.click", a.clone())),
         "key" => wrap(b.call("ui.key", a.clone())),
         "ui_inspect" => wrap(b.call("ui.inspect", json!({}))),
+        "format_document" => {
+            let style = st("style").unwrap_or("APA").to_uppercase();
+            let (font_name, font_size, line_spacing, citation_style) = match style.as_str() {
+                "MLA" => ("Times New Roman", 12.0, 2.0, "MLA"),
+                "CHICAGO" => ("Times New Roman", 12.0, 2.0, "Chicago"),
+                "IEEE" => ("Times New Roman", 10.0, 1.0, "IEEE"),
+                _ => ("Calibri", 11.0, 2.0, "APA"),
+            };
+            let _ = exec(b, "select.all", json!({}));
+            let _ = exec(b, "format.font", json!({"name": font_name}));
+            let _ = exec(b, "format.size", json!({"size": font_size}));
+            let _ = exec(b, "layout.margins", json!({"preset": "normal"}));
+            let _ = exec(b, "para.lineSpacing", json!({"rule": "multiple", "value": line_spacing}));
+            let _ = exec(b, "references.citationStyle", json!({"style": citation_style}));
+            ToolResult::json(&json!({
+                "status": "applied",
+                "style": style,
+                "font": font_name,
+                "size": font_size,
+                "margins": "1 inch (normal)",
+                "lineSpacing": line_spacing,
+                "citationStyle": citation_style
+            }))
+        }
+        "ai_review" => {
+            let comments = a.get("comments").and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut added = 0;
+            let mut errors = Vec::new();
+            for c in comments {
+                let target_text = c.get("text").and_then(Value::as_str).unwrap_or("");
+                let comment_text = c.get("comment").and_then(Value::as_str).unwrap_or("");
+                let author = c.get("author").and_then(Value::as_str).unwrap_or("AI Reviewer");
+                if target_text.is_empty() || comment_text.is_empty() {
+                    continue;
+                }
+                match exec(b, "select.text", json!({"text": target_text})) {
+                    Ok(_) => match exec(b, "review.newComment", json!({"text": comment_text, "author": author})) {
+                        Ok(_) => added += 1,
+                        Err(e) => errors.push(format!("failed adding comment for `{target_text}`: {e}")),
+                    },
+                    Err(e) => errors.push(format!("could not find text `{target_text}`: {e}")),
+                }
+            }
+            ToolResult::json(&json!({
+                "added": added,
+                "errors": errors
+            }))
+        }
         other => ToolResult::error(format!("unknown tool `{other}`")),
     }
 }

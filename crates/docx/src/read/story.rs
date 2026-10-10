@@ -310,12 +310,20 @@ impl Reader<'_> {
             "w:smartTag" | "w:customXml" | "w:dir" | "w:bdo" => self.read_inline_children(sc, pb, k, rels, ctx, depth + 1),
             "m:oMath" => {
                 let props = self.run_props_none(ctx);
-                self.emit_obj(sc, pb, InlineObject::Equation { linear: k.deep_text(), display: false }, &props);
+                let linear = {
+                    let s = omml_to_linear(k);
+                    if s.trim().is_empty() { k.deep_text() } else { s }
+                };
+                self.emit_obj(sc, pb, InlineObject::Equation { linear, display: false }, &props);
             }
             "m:oMathPara" => {
                 let props = self.run_props_none(ctx);
                 for m in k.children("m:oMath") {
-                    self.emit_obj(sc, pb, InlineObject::Equation { linear: m.deep_text(), display: true }, &props);
+                    let linear = {
+                        let s = omml_to_linear(m);
+                        if s.trim().is_empty() { m.deep_text() } else { s }
+                    };
+                    self.emit_obj(sc, pb, InlineObject::Equation { linear, display: true }, &props);
                 }
             }
             "mc:AlternateContent" => {
@@ -607,12 +615,18 @@ impl Reader<'_> {
         let mut kind = match prst {
             "roundRect" => ShapeKind::RoundedRectangle,
             "ellipse" => ShapeKind::Ellipse,
-            "triangle" | "rtTriangle" => ShapeKind::Triangle,
+            "triangle" => ShapeKind::Triangle,
+            "rtTriangle" => ShapeKind::RightTriangle,
             "diamond" => ShapeKind::Diamond,
             "line" | "straightConnector1" => ShapeKind::Line,
             "rightArrow" | "leftArrow" | "upArrow" | "downArrow" => ShapeKind::Arrow,
             "star5" | "star4" | "star6" => ShapeKind::Star,
             "heart" => ShapeKind::Heart,
+            "hex" | "hexagon" => ShapeKind::Hexagon,
+            "oct" | "octagon" => ShapeKind::Octagon,
+            "pentagon" => ShapeKind::Pentagon,
+            "mathPlus" | "plus" => ShapeKind::Cross,
+            "wedgeRectCallout" | "callout" => ShapeKind::Callout,
             _ => ShapeKind::Rectangle,
         };
         let is_tb = wsp.child("wps:cNvSpPr").and_then(|c| c.attr("txBox")).is_some_and(|v| v == "1" || v == "true");
@@ -790,4 +804,41 @@ fn anchor_float(c: &El) -> Float {
     f.dist_top = dist("distT");
     f.dist_bottom = dist("distB");
     f
+}
+
+fn omml_to_linear(k: &El) -> String {
+    let mut out = String::new();
+    match k.name.as_str() {
+        "m:f" => {
+            let num = k.child("m:num").map(omml_to_linear).unwrap_or_default();
+            let den = k.child("m:den").map(omml_to_linear).unwrap_or_default();
+            out.push_str(&format!("({num})/({den})"));
+        }
+        "m:sSup" => {
+            let base = k.child("m:e").map(omml_to_linear).unwrap_or_default();
+            let sup = k.child("m:sup").map(omml_to_linear).unwrap_or_default();
+            out.push_str(&format!("{base}^({sup})"));
+        }
+        "m:sSub" => {
+            let base = k.child("m:e").map(omml_to_linear).unwrap_or_default();
+            let sub = k.child("m:sub").map(omml_to_linear).unwrap_or_default();
+            out.push_str(&format!("{base}_({sub})"));
+        }
+        "m:rad" => {
+            let base = k.child("m:e").map(omml_to_linear).unwrap_or_default();
+            out.push_str(&format!("sqrt({base})"));
+        }
+        "m:t" => {
+            out.push_str(&k.text());
+        }
+        _ => {
+            for node in &k.kids {
+                match node {
+                    crate::xml::Node::El(e) => out.push_str(&omml_to_linear(e)),
+                    crate::xml::Node::Text(t) => out.push_str(t),
+                }
+            }
+        }
+    }
+    out
 }

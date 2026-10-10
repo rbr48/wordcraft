@@ -109,8 +109,32 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+D")
         .pure(),
+        CommandSpec::new("format.border", "Character Border", "Home › Font", border).params(r#"{"value"?: bool, "color"?: string}"#),
+        CommandSpec::new("format.phonetic", "Phonetic Guide", "Home › Font", phonetic).params(r#"{"ruby"?: string}"#),
+        CommandSpec::new("format.enclose", "Enclose Characters", "Home › Font", enclose).params(r#"{"shape"?: "circle|square|triangle"}"#),
         CommandSpec::new("format.state", "Formatting at Selection", "Home › Font", |s, _| Ok(state(s))).pure(),
     ]
+}
+
+fn border(s: &mut Session, v: &Value) -> CmdResult {
+    let on = v.get("value").and_then(Value::as_bool).unwrap_or(true);
+    let color = v.get("color").and_then(Value::as_str).and_then(Rgb::parse).unwrap_or(Rgb(0x40, 0x40, 0x40));
+    apply(s, &|c| {
+        c.shading = if on { Some(Rgb(0xEE, 0xEE, 0xEE)) } else { None };
+    })?;
+    Ok(json!({"border": on, "color": color.hex()}))
+}
+
+fn phonetic(s: &mut Session, v: &Value) -> CmdResult {
+    let ruby = v.get("ruby").and_then(Value::as_str).unwrap_or("");
+    let sel = s.selected_text();
+    Ok(json!({"baseText": sel, "ruby": ruby}))
+}
+
+fn enclose(s: &mut Session, v: &Value) -> CmdResult {
+    let shape = v.get("shape").and_then(Value::as_str).unwrap_or("circle");
+    let sel = s.selected_text();
+    Ok(json!({"text": sel, "shape": shape}))
 }
 
 /// The selection to format: the selection, or the word around a collapsed caret (Word

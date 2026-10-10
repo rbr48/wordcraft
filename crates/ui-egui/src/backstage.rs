@@ -225,12 +225,44 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn export_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, if app.ui.backstage_page == "print" { "Print" } else { "Export" });
-    ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
-    ui.add_space(12.0);
+    let is_print = app.ui.backstage_page == "print";
+    heading(ui, if is_print { "Print" } else { "Export" });
+    if is_print {
+        ui.label(tl!("Print your document directly to your system's printer or export to PDF."));
+        ui.add_space(8.0);
+        let print_btn = ui.add(
+            egui::Button::new(egui::RichText::new(tl!("🖨 Print to Default Printer")).font(medium(14.0)).color(egui::Color32::WHITE))
+                .fill(crate::theme::APP_COLOR)
+                .min_size(vec2(320.0, 38.0)),
+        );
+        if print_btn.clicked() {
+            let tmp = std::env::temp_dir().join(format!("{}.pdf", app.title_stem()));
+            let p_str = tmp.to_string_lossy().to_string();
+            if app.run("file.saveAs", json!({"path": p_str})).is_ok() {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("powershell")
+                        .args(["-NoProfile", "-Command", &format!("Start-Process -FilePath '{}' -Verb Print", p_str.replace('\'', "''"))])
+                        .spawn();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = std::process::Command::new("lpr").arg(&p_str).spawn();
+                }
+                app.status(tl!("Sent document to printer"));
+            }
+        }
+        ui.add_space(16.0);
+        ui.label(egui::RichText::new(tl!("Export to Other Formats")).font(semibold(13.0)));
+        ui.add_space(4.0);
+    } else {
+        ui.label(tl!("Save a copy in another format."));
+        ui.add_space(12.0);
+    }
     for (label, ext) in [
         ("PDF document (*.pdf)", "pdf"),
         ("Word document (*.docx)", "docx"),
+        ("EPUB 3 eBook (*.epub)", "epub"),
         ("OpenDocument Text (*.odt)", "odt"),
         ("Rich Text Format (*.rtf)", "rtf"),
         ("Web page (*.html)", "html"),
@@ -287,6 +319,17 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     let mut ruler = app.session.view.ruler;
     if ui.checkbox(&mut ruler, tl!("Show rulers")).changed() {
         let _ = app.run("view.ruler", json!({"value": ruler}));
+    }
+    ui.add_space(10.0);
+    ui.label(egui::RichText::new(tl!("Keyboard Shortcuts")).font(semibold(15.0)));
+    if ui.button(tl!("Customize Keyboard Shortcuts…")).clicked() {
+        app.dialog = Some(crate::dialogs::Dialog::open("customizeKeyboard", app).unwrap_or(crate::dialogs::Dialog::CustomizeKeyboard {
+            category: "All Commands".into(),
+            query: String::new(),
+            selected_cmd: String::new(),
+            new_key: String::new(),
+        }));
+        app.ui.backstage = false;
     }
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Agents")).font(semibold(15.0)));

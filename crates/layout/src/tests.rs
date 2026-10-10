@@ -359,6 +359,48 @@ fn footnotes_sit_at_page_bottom() {
 }
 
 #[test]
+fn long_footnote_splits_across_pages_with_continuation_rule() {
+    let mut d = Document::from_text(&"Body text line.\n".repeat(40));
+    let long_note_text = "This is a very long footnote paragraph that goes on and on to fill multiple lines. ".repeat(150);
+    let mut note = wordcraft_doc::Paragraph::with_text(&long_note_text, Default::default()).styled("FootnoteText");
+    note.props.space_after = Some(0.0);
+    let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+    d.insert_object(
+        &Pos::body(0, 4),
+        InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    let l = lay(&d);
+    assert!(l.pages.len() >= 2, "pages: {}", l.pages.len());
+    let note_on_p0 = l.pages[0].items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Part(nid), .. } if *nid == id));
+    let note_on_p1 = l
+        .pages
+        .get(1)
+        .map(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Part(nid), .. } if *nid == id)))
+        .unwrap_or(false);
+    assert!(note_on_p0, "note on page 0");
+    assert!(note_on_p1, "note continues on page 1");
+    let p1_cont_rule = l.pages[1].items.iter().find(|it| matches!(it, Placed::Rule { x0, x1, .. } if (x1 - x0) > 200.0));
+    assert!(p1_cont_rule.is_some(), "continuation separator rule on page 1");
+}
+
+#[test]
+fn multi_column_section_balances_columns_on_last_page() {
+    let mut d = Document::from_text(&"Column paragraph text with multiple words for testing layout balancing.\n".repeat(12));
+    d.last_section.columns = wordcraft_doc::section::Columns { count: 2, space: 18.0, separator: false, widths: Vec::new() };
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1, "all text fits on 1 page");
+    let p = &l.pages[0];
+    let col0_lines = p.items.iter().filter(|it| matches!(it, Placed::Lines { x, .. } if *x < 250.0)).count();
+    let col1_lines = p.items.iter().filter(|it| matches!(it, Placed::Lines { x, .. } if *x > 250.0)).count();
+    assert!(col0_lines > 0, "col 0 has lines");
+    assert!(col1_lines > 0, "col 1 has lines");
+    let diff = (col0_lines as isize - col1_lines as isize).abs();
+    assert!(diff <= 3, "columns are balanced: col0={col0_lines}, col1={col1_lines}");
+}
+
+#[test]
 fn text_wraps_around_square_float() {
     let mut d = Document::from_text(&"Words flow around the picture here. ".repeat(30));
     let float = wordcraft_doc::para::Float {

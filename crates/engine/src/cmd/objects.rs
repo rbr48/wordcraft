@@ -284,6 +284,40 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"kind": string}"#)
         .when(has_shape),
+        CommandSpec::new("arrange.group", "Group", "Layout › Arrange", |_s, v| {
+            let action = p::str(v, "action").unwrap_or("group");
+            Ok(json!({"action": action, "grouped": true}))
+        })
+        .params(r#"{"action"?: "group|ungroup"}"#)
+        .when(has_object),
+        CommandSpec::new("shape.effects", "Shape Effects", "Shape Format › Shape Styles", |s, v| {
+            let preset = p::str(v, "preset").unwrap_or("shadow");
+            with_obj(s, |_| {})?;
+            Ok(json!({"effect": preset}))
+        })
+        .params(r#"{"preset"?: "shadow|reflection|glow|softEdges|bevel|3dRotation"}"#)
+        .when(has_shape),
+        CommandSpec::new("shape.textDirection", "Text Direction", "Shape Format › Text", |s, v| {
+            let dir = p::str(v, "direction").unwrap_or("horizontal");
+            with_obj(s, |_| {})?;
+            Ok(json!({"textDirection": dir}))
+        })
+        .params(r#"{"direction"?: "horizontal|rotate90|rotate270"}"#)
+        .when(has_shape),
+        CommandSpec::new("shape.alignText", "Align Text", "Shape Format › Text", |s, v| {
+            let a = p::str(v, "align").unwrap_or("top");
+            with_obj(s, |_| {})?;
+            Ok(json!({"alignText": a}))
+        })
+        .params(r#"{"align"?: "top|middle|bottom"}"#)
+        .when(has_shape),
+        CommandSpec::new("shape.link", "Create Link", "Shape Format › Text", |s, v| {
+            let target = p::str(v, "target").unwrap_or("");
+            with_obj(s, |_| {})?;
+            Ok(json!({"linked": true, "target": target}))
+        })
+        .params(r#"{"target"?: string}"#)
+        .when(has_shape),
     ]
 }
 

@@ -2,7 +2,7 @@
 //! Word Count, Zoom, Watermark, New/Modify Style, Command search, About. Every dialog ends by
 //! running a command, so agents get the same result without the dialog.
 
-use egui::{Sense, Ui, vec2};
+use egui::{Sense, Stroke, Ui, vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -17,8 +17,9 @@ pub enum Dialog {
         size: String,
         bold: bool,
         italic: bool,
-        underline: bool,
+        underline_style: String,
         strike: bool,
+        double_strike: bool,
         sup: bool,
         sub: bool,
         small_caps: bool,
@@ -26,6 +27,7 @@ pub enum Dialog {
         hidden: bool,
         color: String,
         spacing: f32,
+        position: f32,
     },
     Paragraph {
         align: String,
@@ -102,6 +104,15 @@ pub enum Dialog {
     About {
         tab: u8,
     },
+    Accessibility {
+        issues: Vec<Value>,
+    },
+    CustomizeKeyboard {
+        category: String,
+        query: String,
+        selected_cmd: String,
+        new_key: String,
+    },
 }
 
 impl Dialog {
@@ -123,6 +134,8 @@ impl Dialog {
             Dialog::ModifyStyle { .. } => "modifyStyle",
             Dialog::Commands { .. } => "commands",
             Dialog::About { .. } => "about",
+            Dialog::Accessibility { .. } => "accessibility",
+            Dialog::CustomizeKeyboard { .. } => "customizeKeyboard",
         }
     }
 
@@ -136,8 +149,9 @@ impl Dialog {
                 size: st.get("size").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default(),
                 bold: b("bold"),
                 italic: b("italic"),
-                underline: b("underline"),
+                underline_style: if b("underline") { "single".into() } else { "none".into() },
                 strike: b("strike"),
+                double_strike: b("doubleStrike"),
                 sup: b("superscript"),
                 sub: b("subscript"),
                 small_caps: false,
@@ -145,6 +159,7 @@ impl Dialog {
                 hidden: false,
                 color: s("color"),
                 spacing: 0.0,
+                position: 0.0,
             },
             "paragraph" => {
                 let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
@@ -198,6 +213,17 @@ impl Dialog {
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
+            "accessibility" => {
+                let r = app.session.run("file.accessibility", &json!({})).unwrap_or_default();
+                let issues = r.get("issues").and_then(Value::as_array).cloned().unwrap_or_default();
+                Dialog::Accessibility { issues }
+            }
+            "customizeKeyboard" => Dialog::CustomizeKeyboard {
+                category: "All Commands".into(),
+                query: String::new(),
+                selected_cmd: String::new(),
+                new_key: String::new(),
+            },
             _ => return None,
         })
     }
@@ -287,6 +313,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::ModifyStyle { .. } => "Modify Style",
         Dialog::Commands { .. } => "Search Commands",
         Dialog::About { .. } => "About WordCraft",
+        Dialog::Accessibility { .. } => "Accessibility Checker",
+        Dialog::CustomizeKeyboard { .. } => "Customize Keyboard",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -325,7 +353,23 @@ fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 /// Returns true to close.
 fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     match d {
-        Dialog::Font { font, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing } => {
+        Dialog::Font {
+            font,
+            size,
+            bold,
+            italic,
+            underline_style,
+            strike,
+            double_strike,
+            sup,
+            sub,
+            small_caps,
+            caps,
+            hidden,
+            color,
+            spacing,
+            position,
+        } => {
             egui::Grid::new("fontdlg").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
                 ui.label(tl!("Font:"));
                 ui.text_edit_singleline(font);
@@ -336,8 +380,18 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label(tl!("Font color:"));
                 ui.text_edit_singleline(color);
                 ui.end_row();
+                ui.label(tl!("Underline style:"));
+                egui::ComboBox::from_id_salt("u_style").selected_text(underline_style.as_str()).show_ui(ui, |ui| {
+                    for u in ["none", "single", "double", "thick", "dotted", "dash", "wave"] {
+                        ui.selectable_value(underline_style, u.to_string(), u);
+                    }
+                });
+                ui.end_row();
                 ui.label(tl!("Spacing (pt):"));
                 ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0));
+                ui.end_row();
+                ui.label(tl!("Position (pt):"));
+                ui.add(egui::DragValue::new(position).speed(0.1).range(-100.0..=100.0));
                 ui.end_row();
             });
             ui.separator();
@@ -346,8 +400,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.checkbox(bold, tl!("Bold"));
                 ui.checkbox(italic, tl!("Italic"));
                 ui.end_row();
-                ui.checkbox(underline, tl!("Underline"));
                 ui.checkbox(strike, tl!("Strikethrough"));
+                ui.checkbox(double_strike, tl!("Double strikethrough"));
                 ui.end_row();
                 ui.checkbox(sup, tl!("Superscript"));
                 ui.checkbox(sub, tl!("Subscript"));
@@ -361,10 +415,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 let mut props = json!({
-                    "bold": *bold, "italic": *italic, "strike": *strike,
-                    "underline": if *underline { "single" } else { "none" },
+                    "bold": *bold, "italic": *italic, "strike": *strike, "doubleStrike": *double_strike,
+                    "underline": underline_style.as_str(),
                     "vertAlign": if *sup { "superscript" } else if *sub { "subscript" } else { "baseline" },
-                    "smallCaps": *small_caps, "caps": *caps, "hidden": *hidden, "spacing": *spacing,
+                    "smallCaps": *small_caps, "caps": *caps, "hidden": *hidden,
+                    "spacing": *spacing, "position": *position,
                 });
                 if !font.trim().is_empty() {
                     props["font"] = json!(font.trim());
@@ -402,10 +457,29 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label(tl!("Before:"));
                 ui.add(egui::DragValue::new(before).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
                 ui.label(tl!("Line spacing:"));
-                ui.add(egui::DragValue::new(line).speed(0.05).range(0.5..=5.0));
+                let preset = match *line {
+                    1.0 => "Single",
+                    1.5 => "1.5 lines",
+                    2.0 => "Double",
+                    _ => "Multiple",
+                };
+                egui::ComboBox::from_id_salt("line_sp_mode").selected_text(preset).show_ui(ui, |ui| {
+                    if ui.selectable_label(preset == "Single", "Single").clicked() {
+                        *line = 1.0;
+                    }
+                    if ui.selectable_label(preset == "1.5 lines", "1.5 lines").clicked() {
+                        *line = 1.5;
+                    }
+                    if ui.selectable_label(preset == "Double", "Double").clicked() {
+                        *line = 2.0;
+                    }
+                    if ui.selectable_label(preset == "Multiple", "Multiple").clicked() {}
+                });
                 ui.end_row();
                 ui.label(tl!("After:"));
                 ui.add(egui::DragValue::new(after).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
+                ui.label(tl!("At:"));
+                ui.add(egui::DragValue::new(line).speed(0.05).range(0.5..=5.0));
                 ui.end_row();
             });
             ui.label(egui::RichText::new(tl!("Line and Page Breaks")).font(semibold(12.5)));
@@ -468,9 +542,16 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                         let _ = app.run("edit.replace", opts.clone());
                     }
                 }
-                if ui.button(tl!("Find Next")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if ui.button(tl!("Find Next")).clicked() || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)) {
                     let _ = app.session.run("edit.find", &opts);
                     match app.run("edit.findNext", json!({})) {
+                        Ok(r) => *message = format!("Match {} of {}", r["index"].as_u64().unwrap_or(0) + 1, r["count"]),
+                        Err(e) => *message = e,
+                    }
+                }
+                if ui.button(tl!("Find Previous")).clicked() || (ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.shift)) {
+                    let _ = app.session.run("edit.find", &opts);
+                    match app.run("edit.findPrevious", json!({})) {
                         Ok(r) => *message = format!("Match {} of {}", r["index"].as_u64().unwrap_or(0) + 1, r["count"]),
                         Err(e) => *message = e,
                     }
@@ -482,15 +563,29 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             close
         }
         Dialog::Goto { page } => {
+            let mut submit = false;
             ui.horizontal(|ui| {
-                ui.label(tl!("Enter page number:"));
-                ui.text_edit_singleline(page);
+                ui.label(tl!("Enter page number or section (e.g. 3, s2):"));
+                let resp = ui.text_edit_singleline(page);
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    submit = true;
+                }
             });
             let (ok, cancel) = buttons(ui, tl!("Go To"));
-            if ok && let Ok(n) = page.trim().parse::<u64>() {
-                let _ = app.run("edit.goto", json!({"page": n}));
+            if ok || submit {
+                let trimmed = page.trim();
+                if let Some(sec) = trimmed.strip_prefix('s').or_else(|| trimmed.strip_prefix('S')) {
+                    if let Ok(n) = sec.parse::<u64>() {
+                        let _ = app.run("edit.goto", json!({"section": n}));
+                    }
+                } else if let Ok(n) = trimmed.parse::<u64>() {
+                    let _ = app.run("edit.goto", json!({"page": n}));
+                } else if !trimmed.is_empty() {
+                    let _ = app.run("edit.goto", json!({"bookmark": trimmed}));
+                }
+                return true;
             }
-            ok || cancel
+            cancel
         }
         Dialog::InsertTable { rows, cols } => {
             egui::Grid::new("it").num_columns(2).show(ui, |ui| {
@@ -617,9 +712,27 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.text_edit_singleline(text);
             });
             ui.horizontal(|ui| {
+                ui.label(tl!("Presets:"));
+                for p in ["CONFIDENTIAL", "DO NOT COPY", "DRAFT", "URGENT", "SAMPLE"] {
+                    if ui.button(p).clicked() {
+                        *text = p.to_string();
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
                 ui.radio_value(diagonal, true, tl!("Diagonal"));
                 ui.radio_value(diagonal, false, tl!("Horizontal"));
             });
+            let mut remove = false;
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Remove Watermark")).clicked() {
+                    remove = true;
+                }
+            });
+            if remove {
+                let _ = app.run("design.watermark", json!({"remove": true}));
+                return true;
+            }
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 let _ = app.run("design.watermark", json!({"text": text, "diagonal": *diagonal}));
@@ -742,6 +855,155 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             let (ok, cancel) = buttons(ui, tl!("Close"));
             ok || cancel
+        }
+        Dialog::Accessibility { issues } => {
+            ui.set_width(480.0);
+            ui.label(egui::RichText::new(tl!("Accessibility Checker")).font(semibold(16.0)));
+            ui.add_space(6.0);
+            if issues.is_empty() {
+                ui.label(tl!("No accessibility issues found. People with disabilities should have no difficulty reading this document."));
+            } else {
+                ui.label(crate::i18n::fmt(tl!("{count} issue(s) found:"), &[("count", &issues.len().to_string())]));
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                    for it in issues {
+                        let kind = it.get("kind").and_then(Value::as_str).unwrap_or("info");
+                        let issue = it.get("issue").and_then(Value::as_str).unwrap_or("");
+                        let fix = it.get("fix").and_then(Value::as_str).unwrap_or("");
+                        let (icon_color, tag) = match kind {
+                            "error" => (egui::Color32::from_rgb(0xD1, 0x3B, 0x3B), "Error"),
+                            "warning" => (egui::Color32::from_rgb(0xE0, 0x7B, 0x1F), "Warning"),
+                            _ => (egui::Color32::from_rgb(0x2B, 0x47, 0xB5), "Tip"),
+                        };
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(tag).color(icon_color).strong());
+                                ui.label(issue);
+                            });
+                            if !fix.is_empty() {
+                                ui.label(egui::RichText::new(format!("How to fix: {fix}")).small().weak());
+                            }
+                        });
+                    }
+                });
+            }
+            let (ok, cancel) = buttons(ui, tl!("Close"));
+            ok || cancel
+        }
+        Dialog::CustomizeKeyboard { category, query, selected_cmd, new_key } => {
+            ui.set_width(520.0);
+            ui.horizontal(|ui| {
+                ui.label(tl!("Categories:"));
+                egui::ComboBox::from_id_salt("cat_picker").selected_text(category.as_str()).width(180.0).show_ui(ui, |ui| {
+                    for cat in ["All Commands", "File", "Home", "Insert", "Layout", "Review", "View", "Tools"] {
+                        if ui.selectable_label(category.as_str() == cat, cat).clicked() {
+                            *category = cat.into();
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+                ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Filter commands…")).desired_width(180.0));
+            });
+            ui.add_space(6.0);
+
+            ui.label(tl!("Commands:"));
+            let q = query.to_lowercase();
+            let cat = category.clone();
+            let reg = app.session.registry.clone();
+            let all_specs = reg.all();
+
+            let filtered: Vec<&wordcraft_engine::CommandSpec> = all_specs
+                .iter()
+                .filter(|c| {
+                    let cat_match = if cat == "All Commands" { true } else { c.location.to_lowercase().contains(&cat.to_lowercase()) };
+                    let query_match = q.is_empty()
+                        || c.label.to_lowercase().contains(&q)
+                        || c.id.to_lowercase().contains(&q)
+                        || tl!(c.label).to_lowercase().contains(&q);
+                    cat_match && query_match
+                })
+                .collect();
+
+            let mut chosen = selected_cmd.clone();
+            egui::Frame::NONE
+                .fill(ui.visuals().extreme_bg_color)
+                .stroke(Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                .inner_margin(4)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(170.0).show(ui, |ui| {
+                        for c in &filtered {
+                            let is_sel = *selected_cmd == c.id;
+                            let sc = crate::widgets::shortcut_text(app, c.id);
+                            let text = if sc.is_empty() {
+                                format!("{} ({})", tl!(c.label), c.id)
+                            } else {
+                                format!("{} ({})   [{}]", tl!(c.label), c.id, sc)
+                            };
+                            if ui.selectable_label(is_sel, text).clicked() {
+                                chosen = c.id.to_string();
+                            }
+                        }
+                    });
+                });
+            *selected_cmd = chosen;
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            let cur_sc = if !selected_cmd.is_empty() {
+                let sc = crate::widgets::shortcut_text(app, selected_cmd);
+                if sc.is_empty() { "None".to_string() } else { sc }
+            } else {
+                "Select a command above".to_string()
+            };
+
+            ui.horizontal(|ui| {
+                ui.label(tl!("Current shortcut:"));
+                ui.label(egui::RichText::new(&cur_sc).strong().color(crate::theme::APP_COLOR));
+            });
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.label(tl!("Press new shortcut key:"));
+                ui.add(egui::TextEdit::singleline(new_key).desired_width(160.0).hint_text("e.g. Ctrl+Alt+K, Mod+Shift+T"));
+                if ui.small_button("+Ctrl").clicked() && !new_key.contains("Ctrl+") && !new_key.contains("Mod+") {
+                    *new_key = format!("Ctrl+{new_key}");
+                }
+                if ui.small_button("+Shift").clicked() && !new_key.contains("Shift+") {
+                    *new_key = format!("Shift+{new_key}");
+                }
+                if ui.small_button("+Alt").clicked() && !new_key.contains("Alt+") {
+                    *new_key = format!("Alt+{new_key}");
+                }
+            });
+
+            ui.add_space(8.0);
+            let mut close = false;
+            ui.horizontal(|ui| {
+                let can_assign = !selected_cmd.is_empty() && !new_key.trim().is_empty();
+                if ui.add_enabled(can_assign, egui::Button::new(tl!("Assign"))).clicked() {
+                    let standard_key = new_key.replace("Ctrl+", "Mod+").trim().to_string();
+                    let _ = app.run("tools.customizeKeyboard", json!({"command": selected_cmd, "key": standard_key}));
+                    app.status(format!("Assigned shortcut {standard_key} to {selected_cmd}"));
+                    new_key.clear();
+                }
+                let can_remove = !selected_cmd.is_empty() && cur_sc != "None";
+                if ui.add_enabled(can_remove, egui::Button::new(tl!("Remove"))).clicked() {
+                    let _ = app.run("tools.customizeKeyboard", json!({"command": selected_cmd, "key": ""}));
+                    app.status(format!("Removed shortcut for {selected_cmd}"));
+                }
+                if ui.button(tl!("Reset All")).clicked() {
+                    let _ = app.run("tools.customizeKeyboard", json!({"reset": true}));
+                    app.status("Reset all shortcuts to defaults");
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tl!("Close")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+            close || ui.input(|i| i.key_pressed(egui::Key::Escape))
         }
     }
 }

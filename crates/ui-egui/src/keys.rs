@@ -93,8 +93,14 @@ fn combo(m: Modifiers, key: &str, with_shift: bool) -> String {
 /// Find and run the command bound to this key. Returns true if handled.
 fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     let Some(name) = key_name(key) else { return false };
+    let cmb = combo(m, name, true);
+    let custom_cmd = app.session.custom_shortcuts.get(&cmb).cloned();
+    if let Some(cmd_id) = custom_cmd {
+        let _ = app.run(&cmd_id, json!({}));
+        return true;
+    }
     let reg = app.session.registry.clone();
-    if let Some(spec) = reg.by_shortcut(&combo(m, name, true)) {
+    if let Some(spec) = reg.by_shortcut(&cmb) {
         let _ = app.run(spec.id, json!({}));
         return true;
     }
@@ -146,6 +152,10 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 if key == Key::Escape && app.session.painter.is_some() {
                     app.session.painter = None;
+                    continue;
+                }
+                if key == Key::Escape && app.canvas.draw_tool.is_some() {
+                    app.canvas.draw_tool = None;
                     continue;
                 }
                 if key == Key::Escape && matches!(app.session.sel.focus.story, wordcraft_doc::StoryRef::Part(_)) && app.session.sel.is_collapsed() {

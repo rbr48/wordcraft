@@ -178,7 +178,26 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             sel_result(s)
         }),
+        CommandSpec::new("styles.inspector", "Style Inspector", "Home › Styles", style_inspector).pure(),
+        CommandSpec::new("styles.manage", "Manage Styles", "Home › Styles", |s, _| {
+            s.ui_requests.push(json!({"open": "manageStyles"}));
+            Ok(json!({"styles": s.doc.styles.styles.len()}))
+        })
+        .pure(),
+        CommandSpec::new("para.asianTypography", "Asian Typography", "Home › Paragraph", asian_typography)
+            .params(r#"{"kinsoku"?: bool, "halfWidthPunctuation"?: bool, "overflow"?: bool}"#),
     ]
+}
+
+fn asian_typography(_s: &mut Session, v: &Value) -> CmdResult {
+    let kinsoku = v.get("kinsoku").and_then(Value::as_bool).unwrap_or(true);
+    let half_width = v.get("halfWidthPunctuation").and_then(Value::as_bool).unwrap_or(false);
+    let overflow = v.get("overflow").and_then(Value::as_bool).unwrap_or(false);
+    Ok(json!({
+        "kinsoku": kinsoku,
+        "halfWidthPunctuation": half_width,
+        "overflow": overflow,
+    }))
 }
 
 /// Resolved paragraph props at the caret.
@@ -554,4 +573,50 @@ fn update_to_match(s: &mut Session, v: &Value) -> CmdResult {
 /// nothing needs touching here (kept as the one place to hook style-change side effects).
 pub fn touch_all(s: &mut Session) {
     s.dirty = true;
+}
+
+fn style_inspector(s: &mut Session, _: &Value) -> CmdResult {
+    let focus = &s.sel.focus;
+    let para = s.doc.para_at(focus);
+    let p_style = para.as_ref().and_then(|p| p.props.style.clone()).unwrap_or_else(|| "Normal".into());
+    let mut p_direct = Vec::new();
+    if let Some(p) = &para {
+        if p.props.align.is_some() {
+            p_direct.push("alignment");
+        }
+        if p.props.indent_left.is_some() || p.props.indent_right.is_some() || p.props.indent_first.is_some() {
+            p_direct.push("indentation");
+        }
+        if p.props.space_before.is_some() || p.props.space_after.is_some() || p.props.line_spacing.is_some() {
+            p_direct.push("spacing");
+        }
+    }
+    let c_props = s.typing_props();
+    let c_style = c_props.style.clone().unwrap_or_else(|| "Default Paragraph Font".into());
+    let mut c_direct = Vec::new();
+    if c_props.bold.is_some() {
+        c_direct.push("bold");
+    }
+    if c_props.italic.is_some() {
+        c_direct.push("italic");
+    }
+    if c_props.underline.is_some() {
+        c_direct.push("underline");
+    }
+    if c_props.font.is_some() {
+        c_direct.push("font");
+    }
+    if c_props.size.is_some() {
+        c_direct.push("size");
+    }
+    if c_props.color.is_some() {
+        c_direct.push("color");
+    }
+
+    Ok(json!({
+        "paragraphStyle": p_style,
+        "paragraphDirectFormatting": p_direct,
+        "characterStyle": c_style,
+        "characterDirectFormatting": c_direct,
+    }))
 }

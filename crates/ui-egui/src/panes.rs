@@ -30,6 +30,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| comments(app, ui));
     }
+    if app.ui.ai_pane {
+        egui::Panel::right("ai_pane")
+            .default_size(320.0)
+            .resizable(true)
+            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
+            .show(ui, |ui| ai_copilot(app, ui));
+    }
 }
 
 fn header(ui: &mut Ui, title: &str) -> bool {
@@ -263,4 +270,131 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
         }
     });
     let _ = vec2(0.0, 0.0);
+}
+
+fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
+    if header(ui, "Copilot") {
+        app.ui.ai_pane = false;
+        return;
+    }
+
+    ui.horizontal(|ui| {
+        for m in ["Draft", "Rewrite", "Summarize", "Proofread"] {
+            if ui.selectable_label(app.ui.ai_mode == m, tl!(m)).clicked() {
+                app.ui.ai_mode = m.into();
+            }
+        }
+    });
+    ui.separator();
+
+    let sel = app.session.selected_text();
+    let has_sel = !sel.trim().is_empty();
+
+    ui.horizontal(|ui| {
+        if has_sel {
+            let wc = sel.split_whitespace().count();
+            ui.label(egui::RichText::new(format!("Selected: {wc} words")).small().color(crate::theme::APP_COLOR));
+        } else {
+            ui.label(egui::RichText::new("Target: Whole Document").small().weak());
+        }
+    });
+    ui.add_space(4.0);
+
+    // Quick prompt chips
+    ui.horizontal_wrapped(|ui| {
+        let chips: &[&str] = match app.ui.ai_mode.as_str() {
+            "Rewrite" => &["Professional", "Concise", "Casual"],
+            "Summarize" => &["Key Takeaways", "Executive Summary", "Bullet Points"],
+            "Proofread" => &["Check Clarity", "Find Repeated Words"],
+            _ => &["Meeting Minutes", "Status Report", "Project Proposal", "Executive Memo"],
+        };
+        for chip in chips {
+            if ui.add(egui::Button::new(egui::RichText::new(*chip).small())).clicked() {
+                app.ui.ai_prompt = chip.to_string();
+                let mode_lower = app.ui.ai_mode.to_lowercase();
+                let tone = chip.to_lowercase();
+                let r = app.session.run("tools.copilot", &json!({"action": mode_lower, "prompt": chip, "tone": tone}));
+                if let Ok(res) = r
+                    && let Some(c) = res.get("content").and_then(Value::as_str)
+                {
+                    app.ui.ai_response = c.to_string();
+                }
+            }
+        }
+    });
+    ui.add_space(4.0);
+
+    let hint = match app.ui.ai_mode.as_str() {
+        "Rewrite" => tl!("Prompt or tone for rewriting selected text…"),
+        "Summarize" => tl!("Summarization instructions…"),
+        "Proofread" => tl!("Proofreading instructions or focus…"),
+        _ => tl!("Describe what you want to draft…"),
+    };
+
+    ui.add(egui::TextEdit::multiline(&mut app.ui.ai_prompt).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY));
+    ui.add_space(4.0);
+
+    ui.horizontal(|ui| {
+        let btn_label = match app.ui.ai_mode.as_str() {
+            "Rewrite" => "Rewrite Selection",
+            "Summarize" => "Summarize",
+            "Proofread" => "Proofread",
+            _ => "Generate Draft",
+        };
+        let run_btn = ui.add(
+            egui::Button::new(egui::RichText::new(tl!(btn_label)).font(semibold(12.5)).color(egui::Color32::WHITE))
+                .fill(crate::theme::APP_COLOR)
+                .min_size(vec2(140.0, 26.0)),
+        );
+        if run_btn.clicked() {
+            let mode_lower = app.ui.ai_mode.to_lowercase();
+            let tone = if mode_lower == "rewrite" {
+                if app.ui.ai_prompt.to_lowercase().contains("concise") {
+                    "concise"
+                } else if app.ui.ai_prompt.to_lowercase().contains("casual") {
+                    "casual"
+                } else {
+                    "professional"
+                }
+            } else {
+                "professional"
+            };
+            let r = app.session.run("tools.copilot", &json!({"action": mode_lower, "prompt": app.ui.ai_prompt, "tone": tone}));
+            if let Ok(res) = r
+                && let Some(c) = res.get("content").and_then(Value::as_str)
+            {
+                app.ui.ai_response = c.to_string();
+            }
+        }
+        if !app.ui.ai_response.is_empty() && ui.small_button(tl!("Clear")).clicked() {
+            app.ui.ai_response.clear();
+        }
+    });
+
+    if !app.ui.ai_response.is_empty() {
+        ui.add_space(6.0);
+        ui.separator();
+        ui.label(egui::RichText::new(tl!("Result")).font(semibold(13.0)));
+
+        let t = Tokens::get(ui.ctx());
+        egui::Frame::NONE.fill(t.menu).inner_margin(8).stroke(Stroke::new(1.0, t.border)).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                ui.label(egui::RichText::new(&app.ui.ai_response).font(regular(12.0)));
+            });
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button(tl!("Insert at Caret")).clicked() {
+                let _ = app.run("text.insert", json!({"text": app.ui.ai_response}));
+            }
+            if has_sel && ui.button(tl!("Replace Selection")).clicked() {
+                let _ = app.run("text.insert", json!({"text": app.ui.ai_response}));
+            }
+            if ui.button(tl!("Copy")).clicked() {
+                ui.ctx().copy_text(app.ui.ai_response.clone());
+                app.status("Copied to clipboard");
+            }
+        });
+    }
 }

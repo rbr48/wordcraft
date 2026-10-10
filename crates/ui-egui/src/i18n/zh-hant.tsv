@@ -778,3 +778,52 @@
 	{selected} of {words} words	{selected}/{words} 個字
 	Scroll ribbon left	向左捲動功能區
 	Scroll ribbon right	向右捲動功能區
+	Advanced Find	進階尋找
+	Block Authors	封鎖作者
+	Clipboard Pane	剪貼簿窗格
+	Hide Ink	隱藏筆跡
+	Ink	筆跡
+	Manage Styles	管理樣式
+	Paste Special	選擇性貼上
+	Screenshot	螢幕擷取畫面
+	Style Inspector	樣式檢查器
+	Synchronous Scrolling	同步捲動
+	View Side by Side	並排檢視
+	3D Models	3D 模型
+	Add Pen	新增畫筆
+	Add-ins	增益集
+	Align Text	對齊文字
+	Arrange All	並排顯示
+	Asian Typography	中文印刷樣式
+	Character Border	字元外框
+	Column Selection	資料欄選取
+	Create Link	建立連結
+	Customize Keyboard	自訂鍵盤
+	Customize Ribbon	自訂功能區
+	Customize	自訂
+	Draw Table	手繪表格
+	Drawing Canvas	繪圖畫布
+	Enclose Characters	圍繞字元
+	Get Add-ins	取得增益集
+	Ink Equation	手寫方程式
+	Ink Replay	筆跡重新播放
+	Ink to Math	筆跡轉數學式
+	Ink to Shape	筆跡轉圖形
+	Lasso Select	套索選取
+	Media	媒體
+	Online Pictures	線上圖片
+	Online Video	線上視訊
+	Pens	畫筆
+	Phonetic Guide	注音標示
+	Shape Effects	圖案效果
+	Switch Windows	切換視窗
+	Templates and Add-ins	範本與增益集
+	Templates	範本
+	Tools	工具
+	Accessibility Checker	協助工具檢查程式
+	Enter page number or section (e.g. 3, s2):	輸入頁碼或節編號 (例如 3、s2)：
+	No accessibility issues found. People with disabilities should have no difficulty reading this document.	未發現協助工具問題。身心障礙人士閱讀此文件應該沒有任何困難。
+	{count} issue(s) found:	發現 {count} 個問題：
+	AI	AI
+	Copilot	Copilot
+	Copilot / AI Assistant	Copilot / AI 助理

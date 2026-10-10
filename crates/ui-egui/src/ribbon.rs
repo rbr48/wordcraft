@@ -428,6 +428,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Editor", None, app, |ui, app| {
         big(ui, app, "editor", "Editor", "review.spelling", json!({}), false);
     });
+    group(ui, "AI", None, app, |ui, app| {
+        big(ui, app, "copilot", "Copilot", "ui.copilot", json!({}), app.ui.ai_pane);
+    });
 }
 
 fn insert(app: &mut WordApp, ui: &mut Ui) {
@@ -461,19 +464,36 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
                 ("Rounded Rectangle", "roundedRectangle"),
                 ("Oval", "ellipse"),
                 ("Triangle", "triangle"),
+                ("Right Triangle", "rightTriangle"),
                 ("Diamond", "diamond"),
+                ("Pentagon", "pentagon"),
+                ("Hexagon", "hexagon"),
+                ("Octagon", "octagon"),
                 ("Line", "line"),
                 ("Arrow", "arrow"),
                 ("Star", "star"),
                 ("Heart", "heart"),
+                ("Cross", "cross"),
+                ("Speech Bubble", "callout"),
             ] {
                 mi(ui, app, l, "insert.shape", json!({"kind": k}));
             }
         });
         stack(ui, |ui| {
             small(ui, app, "icons", Some("Icons"), "Icons", "insert.icon", json!({}), false);
-            small(ui, app, "smartArt", Some("SmartArt"), "SmartArt", "insert.smartArt", json!({}), false);
-            small(ui, app, "chart", Some("Chart"), "Chart", "insert.chart", json!({}), false);
+            menu_button(ui, app, "smartArt", Some("SmartArt"), "SmartArt", false, |ui, app| {
+                mi(ui, app, "Process (Flow)", "insert.smartArt", json!({"layout": "process"}));
+                mi(ui, app, "Cycle (Loop)", "insert.smartArt", json!({"layout": "cycle"}));
+                mi(ui, app, "Hierarchy (Tree)", "insert.smartArt", json!({"layout": "hierarchy"}));
+                mi(ui, app, "Matrix (2×2)", "insert.smartArt", json!({"layout": "matrix"}));
+                mi(ui, app, "List (Blocks)", "insert.smartArt", json!({"layout": "list"}));
+            });
+            menu_button(ui, app, "chart", Some("Chart"), "Chart", false, |ui, app| {
+                mi(ui, app, "Clustered Column", "insert.chart", json!({"type": "column"}));
+                mi(ui, app, "Bar Chart", "insert.chart", json!({"type": "bar"}));
+                mi(ui, app, "Line Chart", "insert.chart", json!({"type": "line"}));
+                mi(ui, app, "Pie Chart", "insert.chart", json!({"type": "pie"}));
+            });
         });
     });
     group(ui, "Links", None, app, |ui, app| {
@@ -516,7 +536,12 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             small(ui, app, "quickParts", Some("Quick Parts"), "Quick Parts", "insert.quickParts", json!({}), false);
             small(ui, app, "wordArt", Some("WordArt"), "WordArt", "insert.wordArt", json!({}), false);
-            small(ui, app, "dropCap", Some("Drop Cap"), "Drop Cap", "insert.dropCap", json!({}), false);
+            menu_button(ui, app, "dropCap", Some("Drop Cap"), "Drop Cap", false, |ui, app| {
+                mi(ui, app, "None", "insert.dropCap", json!({"lines": 0}));
+                mi(ui, app, "Dropped (3 lines)", "insert.dropCap", json!({"lines": 3}));
+                mi(ui, app, "Dropped (4 lines)", "insert.dropCap", json!({"lines": 4}));
+                mi(ui, app, "Dropped (2 lines)", "insert.dropCap", json!({"lines": 2}));
+            });
         });
         stack(ui, |ui| {
             small(ui, app, "signature", None, "Signature Line", "insert.signatureLine", json!({}), false);
@@ -525,7 +550,31 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Symbols", None, app, |ui, app| {
-        big(ui, app, "equation", "Equation", "insert.equation", json!({}), false);
+        menu_button(ui, app, "equation", Some("Equation"), "Equation", true, |ui, app| {
+            ui.label(egui::RichText::new(tl!("Built-in Equations")).font(semibold(12.0)));
+            mi(ui, app, "Area of Circle (A = πr²)", "insert.equation", json!({"linear": "A=\\pi r^2"}));
+            mi(ui, app, "Pythagorean Theorem (a² + b² = c²)", "insert.equation", json!({"linear": "a^2+b^2=c^2"}));
+            mi(ui, app, "Quadratic Formula", "insert.equation", json!({"linear": "x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}"}));
+            mi(ui, app, "Binomial Theorem", "insert.equation", json!({"linear": "(x+a)^n=\\sum_{k=0}^n \\binom{n}{k}x^k a^{n-k}"}));
+            mi(ui, app, "Euler's Identity (e^(iπ) + 1 = 0)", "insert.equation", json!({"linear": "e^{i\\pi}+1=0"}));
+            mi(
+                ui,
+                app,
+                "Fourier Series",
+                "insert.equation",
+                json!({"linear": "f(x)=a_0+\\sum_{n=1}^\\infty (a_n\\cos\\frac{n\\pi x}{L}+b_n\\sin\\frac{n\\pi x}{L})"}),
+            );
+            ui.separator();
+            ui.label(egui::RichText::new(tl!("Math Structures")).font(semibold(12.0)));
+            mi(ui, app, "Fraction (x/y)", "insert.equation", json!({"linear": "\\frac{x}{y}"}));
+            mi(ui, app, "Square Root (√x)", "insert.equation", json!({"linear": "\\sqrt{x}"}));
+            mi(ui, app, "Integral (∫ f(x) dx)", "insert.equation", json!({"linear": "\\int_{a}^{b} f(x) dx"}));
+            mi(ui, app, "Summation (∑ x_i)", "insert.equation", json!({"linear": "\\sum_{i=1}^{n} x_i"}));
+            mi(ui, app, "Limit (lim x→0)", "insert.equation", json!({"linear": "\\lim_{x\\to 0} f(x)"}));
+            mi(ui, app, "2×2 Matrix", "insert.equation", json!({"linear": "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}"}));
+            ui.separator();
+            mi(ui, app, "Insert Blank Equation", "insert.equation", json!({"linear": "x"}));
+        });
         menu_button(ui, app, "symbol", Some("Symbol"), "Symbol", true, |ui, app| {
             egui::Grid::new("syms").show(ui, |ui| {
                 for (i, c) in [
@@ -549,13 +598,14 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn draw(app: &mut WordApp, ui: &mut Ui) {
+    let t = app.canvas.draw_tool;
     group(ui, "Drawing Tools", None, app, |ui, app| {
-        big(ui, app, "select", "Select", "draw.select", json!({}), false);
-        big(ui, app, "lasso", "Lasso", "draw.lasso", json!({}), false);
-        big(ui, app, "eraser", "Eraser", "draw.eraser", json!({}), false);
-        big(ui, app, "pen", "Pen", "draw.pen", json!({}), false);
-        big(ui, app, "pencil", "Pencil", "draw.pencil", json!({}), false);
-        big(ui, app, "highlight", "Highlighter", "draw.highlighter", json!({}), false);
+        big(ui, app, "select", "Select", "draw.select", json!({}), t.is_none());
+        big(ui, app, "lasso", "Lasso", "draw.lasso", json!({}), t == Some(crate::canvas::DrawTool::Lasso));
+        big(ui, app, "eraser", "Eraser", "draw.eraser", json!({}), t == Some(crate::canvas::DrawTool::Eraser));
+        big(ui, app, "pen", "Pen", "draw.pen", json!({}), t == Some(crate::canvas::DrawTool::Pen));
+        big(ui, app, "pencil", "Pencil", "draw.pencil", json!({}), t == Some(crate::canvas::DrawTool::Pencil));
+        big(ui, app, "highlight", "Highlighter", "draw.highlighter", json!({}), t == Some(crate::canvas::DrawTool::Highlighter));
     });
     group(ui, "Convert", None, app, |ui, app| {
         big(ui, app, "inkToShape", "Ink to\nShape", "draw.inkToShape", json!({}), false);
@@ -862,7 +912,7 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "readAloud", "Read\nAloud", "review.readAloud", json!({}), false);
     });
     group(ui, "Accessibility", None, app, |ui, app| {
-        big(ui, app, "accessibility", "Check\nAccessibility", "file.accessibility", json!({}), false);
+        big(ui, app, "accessibility", "Check\nAccessibility", "ui.dialog", json!({"name": "accessibility"}), false);
     });
     group(ui, "Language", None, app, |ui, app| {
         big(ui, app, "translate", "Translate", "review.translate", json!({}), false);

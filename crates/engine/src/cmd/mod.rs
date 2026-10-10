@@ -3,6 +3,7 @@
 pub mod caret;
 pub mod citations;
 pub mod design;
+pub mod draw;
 pub mod edit;
 pub mod file;
 pub mod format;
@@ -39,6 +40,7 @@ pub fn registry() -> Registry {
     v.extend(review::specs());
     v.extend(file::specs());
     v.extend(design::specs());
+    v.extend(draw::specs());
     v.extend(references::specs());
     v.extend(mailings::specs());
     v.extend(citations::specs());

@@ -53,6 +53,18 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+Shift+C")
         .pure(),
         CommandSpec::new("edit.pasteFormat", "Paste Formatting", "Home › Clipboard", paste_format).key("Mod+Shift+V"),
+        CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special)
+            .key("Mod+Alt+V")
+            .params(r#"{"format"?: "unformatted"|"formatted"|"image", "text"?: string}"#),
+        CommandSpec::new("edit.clipboardPane", "Clipboard Pane", "Home › Clipboard", |s, _| {
+            s.view.clipboard_pane = !s.view.clipboard_pane;
+            Ok(json!({"visible": s.view.clipboard_pane}))
+        })
+        .pure(),
+        CommandSpec::new("edit.advancedFind", "Advanced Find", "Home › Editing › Find", advanced_find)
+            .key("Mod+Alt+H")
+            .params(r#"{"text"?: string, "format"?: {"bold"?: bool, "italic"?: bool, "style"?: string}, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
+            .pure(),
     ]
 }
 
@@ -108,6 +120,76 @@ fn paste_text(s: &mut Session, v: &Value) -> CmdResult {
     };
     super::type_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))?;
     sel_result(s)
+}
+
+fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
+    let fmt = p::str(v, "format").unwrap_or("unformatted");
+    match fmt {
+        "unformatted" | "text" => paste_text(s, v),
+        "formatted" => paste(s, v),
+        "image" | "picture" => {
+            if let Some(data) = p::str(v, "data") {
+                super::insert::picture(s, &json!({"data": data}))
+            } else {
+                paste(s, v)
+            }
+        }
+        _ => {
+            s.ui_requests.push(json!({"open": "pasteSpecial"}));
+            paste_text(s, v)
+        }
+    }
+}
+
+fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(raw) = p::str(v, "text") {
+        let expanded = raw.replace("^p", "\n").replace("^t", "\t").replace("^l", "\n").replace("^^", "^");
+        s.find.query = expanded;
+    }
+    if let Some(c) = p::bool(v, "matchCase") {
+        s.find.match_case = c;
+    }
+    if let Some(w) = p::bool(v, "wholeWord") {
+        s.find.whole_word = w;
+    }
+    if let Some(r) = p::bool(v, "regex") {
+        s.find.regex = r;
+    }
+    let matches = search(s, s.sel.focus.story)?;
+    let final_matches = if let Some(fmt_obj) = v.get("format").and_then(Value::as_object) {
+        let want_bold = fmt_obj.get("bold").and_then(Value::as_bool);
+        let want_italic = fmt_obj.get("italic").and_then(Value::as_bool);
+        let want_style = fmt_obj.get("style").and_then(Value::as_str);
+        matches
+            .into_iter()
+            .filter(|(a, _)| {
+                if let Some(para) = s.doc.para(a.story, &a.path) {
+                    if want_style.is_some_and(|ws| para.props.style.as_deref() != Some(ws)) {
+                        return false;
+                    }
+                    if let Some(wb) = want_bold {
+                        let is_bold = para.run_ranges().any(|(r, c)| r.contains(&a.off) && c.bold == Some(true));
+                        if is_bold != wb {
+                            return false;
+                        }
+                    }
+                    if let Some(wi) = want_italic {
+                        let is_it = para.run_ranges().any(|(r, c)| r.contains(&a.off) && c.italic == Some(true));
+                        if is_it != wi {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
+            .collect()
+    } else {
+        matches
+    };
+    if let Some((a, b)) = final_matches.first() {
+        s.sel = Selection { anchor: a.clone(), focus: b.clone() };
+    }
+    Ok(json!({"matches": final_matches.len(), "query": s.find.query}))
 }
 
 /// All matches of the find state in the current story. Text marked deleted by
@@ -285,6 +367,14 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
             s.sel = Selection::caret(Pos { story: StoryRef::Body, path: path.clone(), off: 0 });
         }
         return sel_result(s);
+    }
+    if let Some(sec) = p::u64(v, "section") {
+        let sec_idx = (sec.max(1) as usize - 1).min(s.doc.sections().len().saturating_sub(1));
+        if let Some((b_idx, _)) = s.doc.sections().get(sec_idx) {
+            s.sel = Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(*b_idx), off: 0 });
+            s.ui_requests.push(json!({"scrollTo": "caret"}));
+            return sel_result(s);
+        }
     }
     s.ui_requests.push(json!({"open": "goto"}));
     sel_result(s)

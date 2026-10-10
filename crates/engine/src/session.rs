@@ -54,6 +54,10 @@ pub struct ViewState {
     pub track_changes_pane: bool,
     /// Check spelling and grammar as you type.
     pub proofing: bool,
+    pub clipboard_pane: bool,
+    pub split: bool,
+    pub side_by_side: bool,
+    pub sync_scroll: bool,
 }
 
 impl Default for ViewState {
@@ -76,6 +80,10 @@ impl Default for ViewState {
             show_markup: true,
             track_changes_pane: false,
             proofing: true,
+            clipboard_pane: false,
+            split: false,
+            side_by_side: false,
+            sync_scroll: false,
         }
     }
 }
@@ -157,6 +165,10 @@ pub struct Session {
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
     pub ui_requests: Vec<Value>,
+    /// Custom keyboard shortcuts: combo -> command id.
+    pub custom_shortcuts: std::collections::HashMap<String, String>,
+    /// Custom keyboard shortcuts: command id -> combo.
+    pub cmd_shortcuts: std::collections::HashMap<String, String>,
 }
 
 /// Maximum undo depth.
@@ -200,6 +212,8 @@ impl Session {
             bib_style: "APA".into(),
             merge: Default::default(),
             ui_requests: Vec::new(),
+            custom_shortcuts: Default::default(),
+            cmd_shortcuts: Default::default(),
         }
     }
 
