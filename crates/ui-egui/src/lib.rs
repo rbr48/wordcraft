@@ -81,6 +81,10 @@ pub struct UiState {
     pub ai_response: String,
     #[serde(skip)]
     pub ai_mode: String,
+    #[serde(skip)]
+    pub phonetic_buffer: String,
+    #[serde(skip)]
+    pub phonetic_rendered_len: usize,
 }
 
 impl Default for UiState {
@@ -102,6 +106,8 @@ impl Default for UiState {
             ai_prompt: String::new(),
             ai_response: String::new(),
             ai_mode: "Draft".into(),
+            phonetic_buffer: String::new(),
+            phonetic_rendered_len: 0,
         }
     }
 }

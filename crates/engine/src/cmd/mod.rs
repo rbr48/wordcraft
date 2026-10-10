@@ -1,5 +1,6 @@
 //! Command implementations, one module per area. Each module exposes `specs()`.
 
+pub mod bangla;
 pub mod caret;
 pub mod citations;
 pub mod design;
@@ -46,6 +47,7 @@ pub fn registry() -> Registry {
     v.extend(citations::specs());
     v.extend(objects::specs());
     v.extend(tools::specs());
+    v.extend(bangla::specs());
     Registry::new(v)
 }
 

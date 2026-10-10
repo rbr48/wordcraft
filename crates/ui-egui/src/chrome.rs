@@ -182,6 +182,14 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     st(ui, tl!("Editing header/footer"));
                 }
                 st(ui, tl!("English (United States)"));
+                let bn_badge = app.session.bangla_mode.badge();
+                let bn_label = format!("[{bn_badge}]");
+                let is_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;
+                let text_color = if is_on { t.accent } else { t.text_dim };
+                let bn_resp = ui.add(egui::Label::new(egui::RichText::new(bn_label).font(semibold(11.5)).color(text_color)).sense(Sense::click()));
+                if bn_resp.on_hover_text(format!("Bangla Input: {} (Press F12 to switch)", app.session.bangla_mode.label())).clicked() {
+                    let _ = app.run("tools.banglaMode", json!({"toggle": true}));
+                }
                 if app.session.doc.settings.track_changes {
                     st(ui, tl!("Track Changes: On"));
                 }

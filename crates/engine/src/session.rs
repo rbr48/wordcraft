@@ -169,6 +169,8 @@ pub struct Session {
     pub custom_shortcuts: std::collections::HashMap<String, String>,
     /// Custom keyboard shortcuts: command id -> combo.
     pub cmd_shortcuts: std::collections::HashMap<String, String>,
+    /// Native Bangla typing mode.
+    pub bangla_mode: crate::cmd::bangla::BanglaMode,
 }
 
 /// Maximum undo depth.
@@ -214,6 +216,7 @@ impl Session {
             ui_requests: Vec::new(),
             custom_shortcuts: Default::default(),
             cmd_shortcuts: Default::default(),
+            bangla_mode: crate::cmd::bangla::BanglaMode::Off,
         }
     }
 

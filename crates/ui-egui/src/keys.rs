@@ -126,7 +126,50 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     continue;
                 }
                 if t.chars().all(|c| !c.is_control()) && !t.is_empty() {
-                    let _ = app.run("text.insert", json!({"text": t}));
+                    match app.session.bangla_mode {
+                        wordcraft_engine::cmd::bangla::BanglaMode::Off => {
+                            let _ = app.run("text.insert", json!({"text": t}));
+                        }
+                        wordcraft_engine::cmd::bangla::BanglaMode::Jatiya => {
+                            let mut bn = String::new();
+                            for c in t.chars() {
+                                if let Some(s) = wordcraft_engine::cmd::bangla::jatiya_key(c) {
+                                    bn.push_str(s);
+                                } else {
+                                    bn.push(c);
+                                }
+                            }
+                            let _ = app.run("text.insert", json!({"text": bn}));
+                        }
+                        wordcraft_engine::cmd::bangla::BanglaMode::Ansi => {
+                            let mut bn = String::new();
+                            for c in t.chars() {
+                                if let Some(s) = wordcraft_engine::cmd::bangla::jatiya_key(c) {
+                                    bn.push_str(s);
+                                } else {
+                                    bn.push(c);
+                                }
+                            }
+                            let ansi = wordcraft_engine::cmd::bangla::unicode_to_ansi(&bn);
+                            let _ = app.run("text.insert", json!({"text": ansi}));
+                        }
+                        wordcraft_engine::cmd::bangla::BanglaMode::Phonetic => {
+                            let is_delim = t.chars().all(|c| c.is_whitespace() || ",.!?;:()[]{}\"'/\\-+=*&^%$#@~`<>|".contains(c));
+                            if is_delim {
+                                app.ui.phonetic_buffer.clear();
+                                app.ui.phonetic_rendered_len = 0;
+                                let _ = app.run("text.insert", json!({"text": t}));
+                            } else {
+                                app.ui.phonetic_buffer.push_str(&t);
+                                let bn = wordcraft_engine::cmd::bangla::phonetic_transliterate(&app.ui.phonetic_buffer);
+                                for _ in 0..app.ui.phonetic_rendered_len {
+                                    let _ = app.run("text.backspace", json!({}));
+                                }
+                                let _ = app.run("text.insert", json!({"text": bn}));
+                                app.ui.phonetic_rendered_len = bn.chars().count();
+                            }
+                        }
+                    }
                 }
             }
             egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => app.canvas.ime_preedit = text,
@@ -150,6 +193,33 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 }
             }
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                if key == Key::F12 && !modifiers.shift && !modifiers.alt && !modifiers.ctrl && !modifiers.command {
+                    let _ = app.run("tools.banglaMode", json!({"toggle": true}));
+                    app.ui.phonetic_buffer.clear();
+                    app.ui.phonetic_rendered_len = 0;
+                    continue;
+                }
+                if key == Key::Backspace
+                    && app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic
+                    && !app.ui.phonetic_buffer.is_empty()
+                {
+                    app.ui.phonetic_buffer.pop();
+                    for _ in 0..app.ui.phonetic_rendered_len {
+                        let _ = app.run("text.backspace", json!({}));
+                    }
+                    if !app.ui.phonetic_buffer.is_empty() {
+                        let bn = wordcraft_engine::cmd::bangla::phonetic_transliterate(&app.ui.phonetic_buffer);
+                        let _ = app.run("text.insert", json!({"text": bn}));
+                        app.ui.phonetic_rendered_len = bn.chars().count();
+                    } else {
+                        app.ui.phonetic_rendered_len = 0;
+                    }
+                    continue;
+                }
+                if matches!(key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End | Key::Enter) {
+                    app.ui.phonetic_buffer.clear();
+                    app.ui.phonetic_rendered_len = 0;
+                }
                 if key == Key::Escape && app.session.painter.is_some() {
                     app.session.painter = None;
                     continue;

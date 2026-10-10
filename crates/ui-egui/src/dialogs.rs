@@ -113,6 +113,10 @@ pub enum Dialog {
         selected_cmd: String,
         new_key: String,
     },
+    BanglaConverter {
+        source_text: String,
+        result_text: String,
+    },
 }
 
 impl Dialog {
@@ -136,6 +140,7 @@ impl Dialog {
             Dialog::About { .. } => "about",
             Dialog::Accessibility { .. } => "accessibility",
             Dialog::CustomizeKeyboard { .. } => "customizeKeyboard",
+            Dialog::BanglaConverter { .. } => "banglaConverter",
         }
     }
 
@@ -223,6 +228,10 @@ impl Dialog {
                 query: String::new(),
                 selected_cmd: String::new(),
                 new_key: String::new(),
+            },
+            "banglaConverter" => Dialog::BanglaConverter {
+                source_text: if app.session.sel.is_collapsed() { String::new() } else { app.session.selected_text() },
+                result_text: String::new(),
             },
             _ => return None,
         })
@@ -315,6 +324,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::About { .. } => "About WordCraft",
         Dialog::Accessibility { .. } => "Accessibility Checker",
         Dialog::CustomizeKeyboard { .. } => "Customize Keyboard",
+        Dialog::BanglaConverter { .. } => "Bangla Converter",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -996,6 +1006,64 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if ui.button(tl!("Reset All")).clicked() {
                     let _ = app.run("tools.customizeKeyboard", json!({"reset": true}));
                     app.status("Reset all shortcuts to defaults");
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tl!("Close")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+            close || ui.input(|i| i.key_pressed(egui::Key::Escape))
+        }
+        Dialog::BanglaConverter { source_text, result_text } => {
+            ui.heading(tl!("Bangla Converter (Unicode ⇄ ANSI / SutonnyMJ)"));
+            ui.label(tl!("Convert text between modern Unicode and legacy Bijoy/SutonnyMJ ANSI without external software."));
+            ui.add_space(8.0);
+
+            ui.label(tl!("Input Text:"));
+            ui.add(egui::TextEdit::multiline(source_text).desired_rows(5).desired_width(f32::INFINITY));
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Unicode ➔ ANSI (SutonnyMJ)")).clicked() {
+                    *result_text = wordcraft_engine::cmd::bangla::unicode_to_ansi(source_text);
+                }
+                if ui.button(tl!("ANSI (SutonnyMJ) ➔ Unicode")).clicked() {
+                    *result_text = wordcraft_engine::cmd::bangla::ansi_to_unicode(source_text);
+                }
+                if ui.button(tl!("Phonetic ➔ Unicode")).clicked() {
+                    *result_text = wordcraft_engine::cmd::bangla::phonetic_transliterate(source_text);
+                }
+                if ui.button(tl!("Clear")).clicked() {
+                    source_text.clear();
+                    result_text.clear();
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.label(tl!("Converted Result:"));
+            ui.add(egui::TextEdit::multiline(result_text).desired_rows(5).desired_width(f32::INFINITY));
+
+            ui.add_space(6.0);
+            let mut close = false;
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Copy Result")).clicked() && !result_text.is_empty() {
+                    ui.ctx().copy_text(result_text.clone());
+                    app.status(tl!("Copied converted text to clipboard"));
+                }
+                if ui.button(tl!("Insert at Caret")).clicked() && !result_text.is_empty() {
+                    let _ = app.run("text.insert", json!({"text": result_text}));
+                    close = true;
+                }
+                ui.separator();
+                let has_sel = !app.session.sel.is_collapsed();
+                if ui.add_enabled(has_sel, egui::Button::new(tl!("Convert Selection to ANSI"))).clicked() {
+                    let _ = app.run("tools.banglaConvert", json!({"direction": "unicodeToAnsi", "target": "selection"}));
+                    close = true;
+                }
+                if ui.add_enabled(has_sel, egui::Button::new(tl!("Convert Selection to Unicode"))).clicked() {
+                    let _ = app.run("tools.banglaConvert", json!({"direction": "ansiToUnicode", "target": "selection"}));
+                    close = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(tl!("Close")).clicked() {

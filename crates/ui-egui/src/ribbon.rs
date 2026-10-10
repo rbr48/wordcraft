@@ -431,6 +431,27 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "AI", None, app, |ui, app| {
         big(ui, app, "copilot", "Copilot", "ui.copilot", json!({}), app.ui.ai_pane);
     });
+    group(ui, "Bangla", None, app, |ui, app| {
+        let is_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;
+        menu_button(ui, app, "bangla", Some(app.session.bangla_mode.label()), "Bangla Input Mode (F12)", is_on, |ui, app| {
+            if ui.selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Off, "English (Off)").clicked() {
+                let _ = app.run("tools.banglaMode", json!({"mode": "off"}));
+            }
+            if ui.selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic, "বাং ফনেটিক (Unicode)").clicked()
+            {
+                let _ = app.run("tools.banglaMode", json!({"mode": "phonetic"}));
+            }
+            if ui.selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Jatiya, "বাং জাতীয় (Unicode)").clicked()
+            {
+                let _ = app.run("tools.banglaMode", json!({"mode": "jatiya"}));
+            }
+            if ui.selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Ansi, "বাং ANSI (SutonnyMJ)").clicked()
+            {
+                let _ = app.run("tools.banglaMode", json!({"mode": "ansi"}));
+            }
+        });
+        small(ui, app, "banglaConverter", Some("Converter"), "Bangla Converter", "tools.banglaConverter", json!({}), false);
+    });
 }
 
 fn insert(app: &mut WordApp, ui: &mut Ui) {
