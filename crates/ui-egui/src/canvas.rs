@@ -1105,7 +1105,12 @@ enum Balloon {
     /// A tracked formatting change: its author and "Formatted: …".
     Format(String, String),
     /// A tracked insertion or deletion revision with Accept/Reject buttons.
-    Change { start: Pos, end: Pos, kind: &'static str, rid: Option<u32> },
+    Change {
+        start: Pos,
+        end: Pos,
+        kind: &'static str,
+        rid: Option<u32>,
+    },
 }
 
 fn author_name(a: &str) -> String {

@@ -554,58 +554,7 @@ impl Session {
     /// The destructuring lists every field, so a new field does not build until someone decides
     /// whether a snapshot must cover it.
     pub fn edit_snapshot(&self) -> EditSnapshot {
-        let Session {
-            doc,
-            sel,
-            view: _,
-            pending: _,
-            path: _,
-            dirty,
-            clipboard: _,
-            clipboard_text: _,
-            clip_history: _,
-            find: _,
-            goal_x: _,
-            page_hint: _,
-            registry: _,
-            author: _,
-            painter: _,
-            status: _,
-            history,
-            undo_evicted,
-            redo,
-            typing_open,
-            join_next,
-            rev: _,
-            cache: _,
-            layout: _,
-            originals: _,
-            last_command: _,
-            recording: _,
-            macros: _,
-            autocorrect_on: _,
-            autocorrect_user: _,
-            versions: _,
-            building_blocks: _,
-            autosave: _,
-            bib_style: _,
-            merge: _,
-            ui_requests: _,
-            document_id: _,
-            read_aloud: _,
-            prefs: _,
-            // Equation editing mode, like `view`: not part of the document or its history.
-            math: _,
-            math_latex: _,
-            math_normal_text: _,
-            // The save password, like the file path: not an edit to the document.
-            password: _,
-            also_selected: _,
-            // Column selection, like `sel`'s shape: valid only while `sel` matches it.
-            column: _,
-            column_mode: _,
-            ..
-        } = self;
+        let Session { doc, sel, dirty, history, undo_evicted, redo, typing_open, join_next, .. } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
             doc: doc.clone(),

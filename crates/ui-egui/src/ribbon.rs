@@ -141,7 +141,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
 
                 if !overflow_tabs.is_empty() {
-                    ui.menu_button(egui::RichText::new("⋯ ▾").font(semibold(12.5)), |ui| {
+                    ui.menu_button(egui::RichText::new("... ▾").font(semibold(12.5)), |ui| {
                         for tab in overflow_tabs {
                             let shown = tl!(tab);
                             let active = app.ui.tab == tab && !app.ui.backstage;

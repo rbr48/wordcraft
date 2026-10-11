@@ -727,11 +727,21 @@ pub fn ansi_to_unicode(text: &str) -> String {
         .replace("...", "\u{201E}")
         .replace('\u{2026}', "\u{201E}")
         // Precomposed ri-kar pairs: consonant + „ / … / ...
-        .replace("K\u{2026}", "\u{0995}\u{09C3}").replace("K...", "\u{0995}\u{09C3}").replace("K\u{201E}", "\u{0995}\u{09C3}")
-        .replace("M\u{2026}", "\u{0997}\u{09C3}").replace("M...", "\u{0997}\u{09C3}").replace("M\u{201E}", "\u{0997}\u{09C3}")
-        .replace("d\u{2026}", "\u{09A6}\u{09C3}").replace("d...", "\u{09A6}\u{09C3}").replace("d\u{201E}", "\u{09A6}\u{09C3}")
-        .replace("e\u{2026}", "\u{09AC}\u{09C3}").replace("e...", "\u{09AC}\u{09C3}").replace("e\u{201E}", "\u{09AC}\u{09C3}")
-        .replace("k\u{2026}", "\u{09B6}\u{09C3}").replace("m\u{2026}", "\u{09B8}\u{09C3}").replace("n\u{2026}", "\u{09B9}\u{09C3}")
+        .replace("K\u{2026}", "\u{0995}\u{09C3}")
+        .replace("K...", "\u{0995}\u{09C3}")
+        .replace("K\u{201E}", "\u{0995}\u{09C3}")
+        .replace("M\u{2026}", "\u{0997}\u{09C3}")
+        .replace("M...", "\u{0997}\u{09C3}")
+        .replace("M\u{201E}", "\u{0997}\u{09C3}")
+        .replace("d\u{2026}", "\u{09A6}\u{09C3}")
+        .replace("d...", "\u{09A6}\u{09C3}")
+        .replace("d\u{201E}", "\u{09A6}\u{09C3}")
+        .replace("e\u{2026}", "\u{09AC}\u{09C3}")
+        .replace("e...", "\u{09AC}\u{09C3}")
+        .replace("e\u{201E}", "\u{09AC}\u{09C3}")
+        .replace("k\u{2026}", "\u{09B6}\u{09C3}")
+        .replace("m\u{2026}", "\u{09B8}\u{09C3}")
+        .replace("n\u{2026}", "\u{09B9}\u{09C3}")
         // Dari / pipe
         .replace('|', "\u{0964}")
         // Normalise alternate e-kar glyph \u{2021} -> \u{2020}  (must happen before conjunct lookup)
@@ -744,20 +754,25 @@ pub fn ansi_to_unicode(text: &str) -> String {
         // Collapse doubled reph (copy-paste artefact)
         .replace("\u{00A9}\u{00A9}", "\u{00A9}")
         // Precomposed \u{09AD}\u{09C2} variants
-        .replace("f\u{201A}", "\u{09AD}\u{09C2}").replace("f~", "\u{09AD}\u{09C2}").replace("f\u{201E}", "\u{09AD}\u{09C2}")
+        .replace("f\u{201A}", "\u{09AD}\u{09C2}")
+        .replace("f~", "\u{09AD}\u{09C2}")
+        .replace("f\u{201E}", "\u{09AD}\u{09C2}")
         // \u{099E}\u{09BE} shorthand glyphs
-        .replace("T\u{00C2}", "\u{099E}\u{09BE}").replace("Tv", "\u{099E}\u{09BE}")
+        .replace("T\u{00C2}", "\u{099E}\u{09BE}")
+        .replace("Tv", "\u{099E}\u{09BE}")
         // \u{0996}\u{09CD}\u{09B0}\u{09BF} + bisarga / visarga
         .replace("wL\u{00AA}\u{2122}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}")
         .replace("wL\u{00AA}t", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}")
         .replace("wL\u{00AA}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}")
         // Precomposed \u{09B0}\u{09C1} variants (must come BEFORE the conjunct table maps \u{00A9} and \u{2030})
-        .replace("i\u{00E6}", "\u{09B0}\u{09C1}").replace("i\u{201C}", "\u{09B0}\u{09C1}")
+        .replace("i\u{00E6}", "\u{09B0}\u{09C1}")
+        .replace("i\u{201C}", "\u{09B0}\u{09C1}")
         // Precomposed \u{09B9}\u{09C1} / \u{0997}\u{09C1} / \u{09B6}\u{09C1}
-        .replace('\u{00FB}', "\u{09B9}\u{09C1}").replace('\u{00B8}', "\u{0997}\u{09C1}").replace('\u{00EF}', "\u{09B6}\u{09C1}")
+        .replace('\u{00FB}', "\u{09B9}\u{09C1}")
+        .replace('\u{00B8}', "\u{0997}\u{09C1}")
+        .replace('\u{00EF}', "\u{09B6}\u{09C1}")
         // Collapse doubled \u{09CC} glyph
         .replace("\u{0160}\u{0160}", "\u{0160}");
-
 
     // 2. Replace Conjunct Glyphs and Phalas (longest matches first)
     let conjuncts: &[(&str, &str)] = &[
@@ -1107,18 +1122,8 @@ pub fn ansi_to_unicode(text: &str) -> String {
 
     // 7. Normalize Chandrabindu (ঁ) after vowel signs (e.g. চঁাদ -> চাঁদ)
     let mut final_out = reph_out;
-    for (bad, good) in [
-        ("ঁা", "াঁ"),
-        ("ঁি", "িঁ"),
-        ("ঁী", "ীঁ"),
-        ("ঁু", "ুঁ"),
-        ("ঁূ", "ূঁ"),
-        ("ঁৃ", "ৃঁ"),
-        ("ঁে", "েঁ"),
-        ("ঁৈ", "ৈঁ"),
-        ("ঁো", "োঁ"),
-        ("ঁৌ", "ৌঁ"),
-    ] {
+    for (bad, good) in [("ঁা", "াঁ"), ("ঁি", "িঁ"), ("ঁী", "ীঁ"), ("ঁু", "ুঁ"), ("ঁূ", "ূঁ"), ("ঁৃ", "ৃঁ"), ("ঁে", "েঁ"), ("ঁৈ", "ৈঁ"), ("ঁো", "োঁ"), ("ঁৌ", "ৌঁ")]
+    {
         if final_out.contains(bad) {
             final_out = final_out.replace(bad, good);
         }

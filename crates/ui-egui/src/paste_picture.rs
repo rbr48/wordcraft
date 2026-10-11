@@ -65,7 +65,9 @@ pub fn names_picture_files(text: &str) -> bool {
     lines.peek().is_some()
         && lines.take(MAX_FILES + 1).enumerate().all(|(i, l)| {
             let path = l.strip_prefix("file://").unwrap_or(l);
-            i < MAX_FILES && (l.starts_with("file://") || Path::new(path).is_absolute()) && is_picture_file(Path::new(path))
+            i < MAX_FILES
+                && (l.starts_with("file://") || Path::new(path).is_absolute() || path.starts_with('/') || path.starts_with('\\'))
+                && is_picture_file(Path::new(path))
         })
 }
 

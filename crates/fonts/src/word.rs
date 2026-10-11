@@ -198,7 +198,6 @@ fn is_bengali_family(family: &str) -> bool {
         || f_str.ends_with("mj")
 }
 
-
 fn style_name(bold: bool, italic: bool) -> &'static str {
     match (bold, italic) {
         (false, false) => "Regular",

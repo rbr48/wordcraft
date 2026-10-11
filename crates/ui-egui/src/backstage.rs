@@ -339,7 +339,7 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         ui.label(tl!("Print your document directly to your system's printer or export to PDF."));
         ui.add_space(8.0);
         let print_btn = ui.add(
-            egui::Button::new(egui::RichText::new(tl!("🖨 Print to Default Printer")).font(medium(14.0)).color(egui::Color32::WHITE))
+            egui::Button::new(egui::RichText::new(tl!("Print to Default Printer")).font(medium(14.0)).color(egui::Color32::WHITE))
                 .fill(crate::theme::APP_COLOR)
                 .min_size(vec2(320.0, 38.0)),
         );

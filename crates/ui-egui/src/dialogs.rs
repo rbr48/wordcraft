@@ -2124,7 +2124,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             close || ui.input(|i| i.key_pressed(egui::Key::Escape))
         }
         Dialog::BanglaConverter { source_text, result_text } => {
-            ui.heading(tl!("Bangla Converter (Unicode ⇄ ANSI / SutonnyMJ)"));
+            ui.heading(tl!("Bangla Converter (Unicode <-> ANSI / SutonnyMJ)"));
             ui.label(tl!("Convert text between modern Unicode and legacy Bijoy/SutonnyMJ ANSI without external software."));
             ui.add_space(8.0);
 
@@ -2133,13 +2133,13 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button(tl!("Unicode ➔ ANSI (SutonnyMJ)")).clicked() {
+                if ui.button(tl!("Unicode -> ANSI (SutonnyMJ)")).clicked() {
                     *result_text = wordcraft_engine::cmd::bangla::unicode_to_ansi(source_text);
                 }
-                if ui.button(tl!("ANSI (SutonnyMJ) ➔ Unicode")).clicked() {
+                if ui.button(tl!("ANSI (SutonnyMJ) -> Unicode")).clicked() {
                     *result_text = wordcraft_engine::cmd::bangla::ansi_to_unicode(source_text);
                 }
-                if ui.button(tl!("Phonetic ➔ Unicode")).clicked() {
+                if ui.button(tl!("Phonetic -> Unicode")).clicked() {
                     *result_text = wordcraft_engine::cmd::bangla::phonetic_transliterate(source_text);
                 }
                 if ui.button(tl!("Clear")).clicked() {

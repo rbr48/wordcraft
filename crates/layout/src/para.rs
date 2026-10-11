@@ -1613,10 +1613,7 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, lo: f32, hi: f32) -> Re
     let mut spans = vec![(lo, hi)];
     for e in &here {
         let (el, er) = e.bounds_at(top, top + h);
-        spans = spans
-            .into_iter()
-            .flat_map(|(a, b)| if er <= a || el >= b { vec![(a, b)] } else { vec![(a, el.min(b)), (er.max(a), b)] })
-            .collect();
+        spans = spans.into_iter().flat_map(|(a, b)| if er <= a || el >= b { vec![(a, b)] } else { vec![(a, el.min(b)), (er.max(a), b)] }).collect();
     }
     spans.retain(|(a, b)| b - a >= MIN_SPAN);
     if spans.is_empty() {
