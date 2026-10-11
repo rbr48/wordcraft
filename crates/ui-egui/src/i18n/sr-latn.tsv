@@ -729,6 +729,7 @@
 	Select	Izaberi
 	Select All	Izaberi sve
 	Select Cell	Izaberi ćeliju
+	Select Cell Range	Izaberi opseg ćelija
 	Select Line	Izaberi red
 	Select Objects	Izaberi objekte
 	Select Paragraph	Izaberi pasus

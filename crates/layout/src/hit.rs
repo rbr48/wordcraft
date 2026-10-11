@@ -338,17 +338,21 @@ impl DocLayout {
             })
             .collect();
         let target = if dir < 0 {
-            cands
-                .iter()
-                .filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0)
-                .max_by(|a, b| a.top.total_cmp(&b.top))
-                .or_else(|| cands.iter().max_by(|a, b| a.top.total_cmp(&b.top)))
+            cands.iter().filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0).max_by(|a, b| a.top.total_cmp(&b.top)).or_else(|| {
+                cands.iter().min_by(|a, b| {
+                    let da = ((a.left + a.right) * 0.5 - gx).abs();
+                    let db = ((b.left + b.right) * 0.5 - gx).abs();
+                    da.total_cmp(&db)
+                })
+            })
         } else {
-            cands
-                .iter()
-                .filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0)
-                .min_by(|a, b| a.top.total_cmp(&b.top))
-                .or_else(|| cands.iter().min_by(|a, b| a.top.total_cmp(&b.top)))
+            cands.iter().filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0).min_by(|a, b| a.top.total_cmp(&b.top)).or_else(|| {
+                cands.iter().min_by(|a, b| {
+                    let da = ((a.left + a.right) * 0.5 - gx).abs();
+                    let db = ((b.left + b.right) * 0.5 - gx).abs();
+                    da.total_cmp(&db)
+                })
+            })
         };
         if let Some(l) = target {
             let off = l.para.off_at_x(l.li, gx - l.x);

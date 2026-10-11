@@ -115,6 +115,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })),
         CommandSpec::new("table.columnWidth", "Table Column Width", "Table Layout › Cell Size", |s, v| {
             let w = p::req_f32(v, "width")?.clamp(6.0, 1584.0);
+            let adjust_next = p::bool(v, "adjustNext").unwrap_or(false);
             let story = s.sel.focus.story;
             let (tp, r, c) = if let Some(p_str) = p::str(v, "path") {
                 let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
@@ -126,11 +127,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 cell(s)?
             };
             let t = s.doc.table_mut(story, &tp)?;
-            set_column_width(t, r, c, w);
+            set_column_width(t, r, c, w, adjust_next);
             touch_cells(s, &tp)?;
             sel_result(s)
         })
-        .params(r#"{"width": pt, "path"?: "0.1", "row"?: n, "col"?: n}"#),
+        .params(r#"{"width": pt, "adjustNext"?: bool, "path"?: "0.1", "row"?: n, "col"?: n}"#),
         CommandSpec::new("table.rowHeight", "Table Row Height", "Table Layout › Cell Size", |s, v| {
             let h = p::req_f32(v, "height")?.clamp(1.0, 1584.0);
             let rule = match p::str(v, "rule") {
@@ -178,10 +179,23 @@ pub fn specs() -> Vec<CommandSpec> {
                 sync_cell_widths(t);
             }
             if let Some(new_h) = target_h {
+                let current_h: f32 = t.rows.iter().filter_map(|r| r.props.height).sum::<f32>().max(1.0);
                 let num_rows = t.rows.len().max(1) as f32;
-                let row_h = (new_h / num_rows).max(4.0);
-                for r in &mut t.rows {
-                    r.props.height = Some(row_h);
+                if current_h > 1.0 {
+                    let ratio = (new_h / current_h).clamp(0.1, 10.0);
+                    let avg = (new_h / num_rows).max(4.0);
+                    for r in &mut t.rows {
+                        if let Some(h) = r.props.height {
+                            r.props.height = Some((h * ratio).max(4.0));
+                        } else {
+                            r.props.height = Some(avg);
+                        }
+                    }
+                } else {
+                    let row_h = (new_h / num_rows).max(4.0);
+                    for r in &mut t.rows {
+                        r.props.height = Some(row_h);
+                    }
                 }
             }
             touch_cells(s, &tp)?;
@@ -201,7 +215,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"column"?: n, "descending"?: bool, "header"?: bool}"#)),
         t(CommandSpec::new("table.toText", "Convert to Text", "Table Layout › Data", to_text).params(r#"{"separator"?: "tab|comma|paragraph"}"#)),
         t(CommandSpec::new("table.formula", "Formula", "Table Layout › Data", formula).params(r#"{"formula"?: "=SUM(ABOVE)"}"#)),
-        t(CommandSpec::new("table.selectTable", "Select Table", "Table Layout › Table › Select", |s, v| {
+        CommandSpec::new("table.selectTable", "Select Table", "Table Layout › Table › Select", |s, v| {
             let tp = if let Some(p_str) = p::str(v, "path") {
                 let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
                 Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?)
@@ -211,8 +225,8 @@ pub fn specs() -> Vec<CommandSpec> {
             select_cells(s, &tp, None)
         })
         .params(r#"{"path"?: "0.1"}"#)
-        .pure()),
-        t(CommandSpec::new("table.selectRow", "Select Row", "Table Layout › Table › Select", |s, v| {
+        .pure(),
+        CommandSpec::new("table.selectRow", "Select Row", "Table Layout › Table › Select", |s, v| {
             let (tp, r) = if let Some(p_str) = p::str(v, "path") {
                 let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
                 let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
@@ -225,8 +239,8 @@ pub fn specs() -> Vec<CommandSpec> {
             select_cells(s, &tp, Some((r, None)))
         })
         .params(r#"{"path"?: "0.1", "row"?: n}"#)
-        .pure()),
-        t(CommandSpec::new("table.selectColumn", "Select Column", "Table Layout › Table › Select", |s, v| {
+        .pure(),
+        CommandSpec::new("table.selectColumn", "Select Column", "Table Layout › Table › Select", |s, v| {
             let (tp, c) = if let Some(p_str) = p::str(v, "path") {
                 let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
                 let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
@@ -239,12 +253,29 @@ pub fn specs() -> Vec<CommandSpec> {
             select_column_cells(s, &tp, c)
         })
         .params(r#"{"path"?: "0.1", "col"?: n}"#)
-        .pure()),
+        .pure(),
         t(CommandSpec::new("table.selectCell", "Select Cell", "Table Layout › Table › Select", |s, _| {
             let (tp, r, c) = cell(s)?;
             select_cells(s, &tp, Some((r, Some(c))))
         })
         .pure()),
+        CommandSpec::new("table.selectRange", "Select Cell Range", "Table Layout › Table › Select", |s, v| {
+            let (tp, r0, c0) = if let Some(p_str) = p::str(v, "path") {
+                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
+                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let r = p::u64(v, "r0").unwrap_or(0) as usize;
+                let c = p::u64(v, "c0").unwrap_or(0) as usize;
+                (path, r, c)
+            } else {
+                let (path, r, c) = cell(s)?;
+                (path, r, c)
+            };
+            let r1 = p::u64(v, "r1").unwrap_or(r0 as u64) as usize;
+            let c1 = p::u64(v, "c1").unwrap_or(c0 as u64) as usize;
+            select_cell_range(s, &tp, r0, c0, r1, c1)
+        })
+        .params(r#"{"path"?: "0.1", "r0"?: n, "c0"?: n, "r1"?: n, "c1"?: n}"#)
+        .pure(),
         t(CommandSpec::new("table.properties", "Properties", "Table Layout › Table", properties).params(
             r#"{"align"?: "left|center|right", "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom"} (row, column and cell settings apply to the caret's; without settings it returns the current ones)"#,
         )),
@@ -303,12 +334,20 @@ pub(crate) fn sync_cell_widths(t: &mut Table) {
 
 /// Set the width of the grid column cell `c` of row `r` starts in. The table's preferred width
 /// goes, so the layout doesn't scale the column back.
-fn set_column_width(t: &mut Table, r: usize, c: usize, w: f32) {
+fn set_column_width(t: &mut Table, r: usize, c: usize, w: f32, adjust_next: bool) {
     let g = t.grid_col(r, c);
     if let Some(x) = t.grid.get_mut(g) {
+        let old_w = *x;
+        let delta = w - old_w;
         *x = w;
-        t.props.width = None;
-        t.props.width_pct = None;
+        if adjust_next && g + 1 < t.grid.len() {
+            if let Some(next_x) = t.grid.get_mut(g + 1) {
+                *next_x = (*next_x - delta).max(6.0);
+            }
+        } else {
+            t.props.width = None;
+            t.props.width_pct = None;
+        }
         sync_cell_widths(t);
     }
 }
@@ -374,7 +413,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             t.props.indent = Some(i);
         }
         if let Some(cw) = column_width {
-            set_column_width(t, r, c, cw);
+            set_column_width(t, r, c, cw, false);
         }
         if let Some(w) = width {
             t.props.width = w;
@@ -424,6 +463,17 @@ fn with_table(s: &mut Session, f: impl Fn(&mut Table)) -> CmdResult {
 
 /// Selected cells: (row, cell) pairs covered by the selection (at least the caret's cell).
 fn selected_cells(s: &Session) -> Vec<(usize, usize)> {
+    if let Some(col_block) = &s.column {
+        let mut v = Vec::new();
+        for (a, _) in &col_block.segments {
+            if let Some((_, r, c)) = a.path.cell() {
+                v.push((r, c));
+            }
+        }
+        if !v.is_empty() {
+            return v;
+        }
+    }
     let (a, b) = s.sel.ordered();
     let (Some((ta, ra, ca)), Some((tb, rb, cb))) = (a.path.cell(), b.path.cell()) else { return Vec::new() };
     if ta != tb {
@@ -728,61 +778,66 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"result": text}))
 }
 
-fn select_cells(s: &mut Session, tp: &Path, which: Option<(usize, Option<usize>)>) -> CmdResult {
-    let story = s.sel.focus.story;
-    let Some(t) = s.doc.table(story, tp) else { return sel_result(s) };
-    let (r0, r1, c0, c1) = match which {
-        None => (0, t.rows.len().saturating_sub(1), 0, usize::MAX),
-        Some((r, None)) => (r, r, 0, usize::MAX),
-        Some((r, Some(c))) => (r, r, c, c),
-    };
-    let last_c = t.rows.get(r1).map(|x| x.cells.len().saturating_sub(1)).unwrap_or(0).min(c1);
-    let mut a = tp.0.clone();
-    a.extend([r0 as u32, c0 as u32, 0]);
-    let mut b = tp.0.clone();
-    b.extend([r1 as u32, last_c as u32]);
-    let end_path = s.doc.para_paths(story).into_iter().rfind(|q| q.0.starts_with(&b)).unwrap_or_else(|| {
-        let mut x = b.clone();
-        x.push(0);
-        Path(x)
-    });
-    let off = s.doc.para(story, &end_path).map(|x| x.len()).unwrap_or(0);
-    s.sel = Selection { anchor: Pos { story, path: Path(a), off: 0 }, focus: Pos { story, path: end_path, off } };
-    sel_result(s)
-}
-
-fn select_column_cells(s: &mut Session, tp: &Path, col: usize) -> CmdResult {
+pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: usize, c1: usize) -> CmdResult {
     let story = s.sel.focus.story;
     let Some(t) = s.doc.table(story, tp) else { return sel_result(s) };
     if t.rows.is_empty() {
         return sel_result(s);
     }
+    let (min_r, max_r) = (r0.min(r1), r0.max(r1).min(t.rows.len().saturating_sub(1)));
+    let (min_c, max_c) = (c0.min(c1), c0.max(c1));
+    let is_single_cell = min_r == max_r && min_c == max_c;
+
     let mut segments = Vec::new();
-    for (r_idx, row) in t.rows.iter().enumerate() {
-        let actual_c = col.min(row.cells.len().saturating_sub(1));
-        let mut a = tp.0.clone();
-        a.extend([r_idx as u32, actual_c as u32, 0]);
-        let mut b = tp.0.clone();
-        b.extend([r_idx as u32, actual_c as u32]);
-        let start_path = Path(a);
-        let end_path = s.doc.para_paths(story).into_iter().rfind(|q| q.0.starts_with(&b)).unwrap_or_else(|| {
-            let mut x = b.clone();
-            x.push(0);
-            Path(x)
-        });
-        let off = s.doc.para(story, &end_path).map(|x| x.len()).unwrap_or(0);
-        let pos_a = Pos { story, path: start_path, off: 0 };
-        let pos_b = Pos { story, path: end_path, off };
-        segments.push((pos_a, pos_b));
+    for r in min_r..=max_r {
+        let Some(row) = t.rows.get(r) else { continue };
+        if row.cells.is_empty() {
+            continue;
+        }
+        let actual_c0 = min_c.min(row.cells.len().saturating_sub(1));
+        let actual_c1 = max_c.min(row.cells.len().saturating_sub(1));
+        for c in actual_c0..=actual_c1 {
+            let mut a = tp.0.clone();
+            a.extend([r as u32, c as u32, 0]);
+            let mut b = tp.0.clone();
+            b.extend([r as u32, c as u32]);
+            let start_path = Path(a);
+            let end_path = s.doc.para_paths(story).into_iter().rfind(|q| q.0.starts_with(&b)).unwrap_or_else(|| {
+                let mut x = b.clone();
+                x.push(0);
+                Path(x)
+            });
+            let off = s.doc.para(story, &end_path).map(|x| x.len()).unwrap_or(0);
+            let pos_a = Pos { story, path: start_path, off: 0 };
+            let pos_b = Pos { story, path: end_path, off };
+            segments.push((pos_a, pos_b));
+        }
     }
+
     if let (Some((first_a, _)), Some((_, last_b))) = (segments.first(), segments.last()) {
-        s.sel = Selection { anchor: first_a.clone(), focus: last_b.clone() };
+        s.sel = Selection { anchor: first_a.clone(), focus: if is_single_cell { last_b.clone() } else { first_a.clone() } };
         let l = s.layout();
         let xa = l.caret_on(first_a, s.page_hint).map(|k| k.x).unwrap_or(0.0);
         let xb = l.caret_on(last_b, s.page_hint).map(|k| k.x + 50.0).unwrap_or(100.0);
         s.column = Some(crate::session::ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments });
     }
     sel_result(s)
+}
+
+fn select_cells(s: &mut Session, tp: &Path, which: Option<(usize, Option<usize>)>) -> CmdResult {
+    let story = s.sel.focus.story;
+    let Some(t) = s.doc.table(story, tp) else { return sel_result(s) };
+    match which {
+        None => select_cell_range(s, tp, 0, 0, t.rows.len().saturating_sub(1), usize::MAX),
+        Some((r, None)) => select_cell_range(s, tp, r, 0, r, usize::MAX),
+        Some((r, Some(c))) => select_cell_range(s, tp, r, c, r, c),
+    }
+}
+
+fn select_column_cells(s: &mut Session, tp: &Path, col: usize) -> CmdResult {
+    let story = s.sel.focus.story;
+    let Some(t) = s.doc.table(story, tp) else { return sel_result(s) };
+    select_cell_range(s, tp, 0, col, t.rows.len().saturating_sub(1), col)
 }
 
 fn from_text(s: &mut Session, v: &Value) -> CmdResult {

@@ -615,6 +615,7 @@
 	Select	Vali
 	Select All	Vali kõik
 	Select Cell	Vali lahter
+	Select Cell Range	Vali lahtrite vahemik
 	Select Line	Vali rida
 	Select Objects	Vali objektid
 	Select Paragraph	Vali lõik

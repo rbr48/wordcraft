@@ -704,6 +704,7 @@
 	Select	Виділити
 	Select All	Виділити все
 	Select Cell	Виділити клітинку
+	Select Cell Range	Виділити діапазон клітинок
 	Select Line	Виділити рядок
 	Select Objects	Виділити об'єкти
 	Select Paragraph	Виділити абзац

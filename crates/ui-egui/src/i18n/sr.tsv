@@ -733,6 +733,7 @@
 	Select	Изабери
 	Select All	Изабери све
 	Select Cell	Изабери ћелију
+	Select Cell Range	Изабери опсег ћелија
 	Select Line	Изабери ред
 	Select Objects	Изабери објекте
 	Select Paragraph	Изабери пасус

@@ -1387,7 +1387,30 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         if let Some(pos) = layout.hit(page, x, y, story)
             && pos != app.session.sel.focus
         {
-            app.session.sel.focus = pos;
+            let anchor_cell = app.session.sel.anchor.path.cell();
+            let focus_cell = pos.path.cell();
+            if let (Some((tp_a, r_a, c_a)), Some((tp_b, r_b, c_b))) = (anchor_cell, focus_cell)
+                && tp_a == tp_b
+            {
+                if (r_a, c_a) == (r_b, c_b) {
+                    app.session.column = None;
+                    app.session.sel.focus = pos;
+                } else {
+                    let _ = app.run(
+                        "table.selectRange",
+                        json!({
+                            "path": tp_a.to_string(),
+                            "r0": r_a,
+                            "c0": c_a,
+                            "r1": r_b,
+                            "c1": c_b,
+                        }),
+                    );
+                }
+            } else {
+                app.session.column = None;
+                app.session.sel.focus = pos;
+            }
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
@@ -1843,11 +1866,28 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
         });
         ui.menu_button(tl!("Delete"), |ui| {
-            item(ui, app, "Delete Rows", "table.deleteRow", json!({}));
+            item(ui, app, "Delete Cells…", "table.deleteCells", json!({}));
             item(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
+            item(ui, app, "Delete Rows", "table.deleteRow", json!({}));
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));
         });
         item(ui, app, "Merge Cells", "table.merge", json!({}));
+        item(ui, app, "Split Cells…", "table.split", json!({"columns": 2}));
+        ui.menu_button(tl!("Cell Alignment"), |ui| {
+            item(ui, app, "Top Left", "table.cellAlign", json!({"value": "topLeft"}));
+            item(ui, app, "Top Center", "table.cellAlign", json!({"value": "topCenter"}));
+            item(ui, app, "Top Right", "table.cellAlign", json!({"value": "topRight"}));
+            item(ui, app, "Center Left", "table.cellAlign", json!({"value": "centerLeft"}));
+            item(ui, app, "Center", "table.cellAlign", json!({"value": "center"}));
+            item(ui, app, "Center Right", "table.cellAlign", json!({"value": "centerRight"}));
+            item(ui, app, "Bottom Left", "table.cellAlign", json!({"value": "bottomLeft"}));
+            item(ui, app, "Bottom Center", "table.cellAlign", json!({"value": "bottomCenter"}));
+            item(ui, app, "Bottom Right", "table.cellAlign", json!({"value": "bottomRight"}));
+        });
+        item(ui, app, "Distribute Rows Evenly", "table.distributeRows", json!({}));
+        item(ui, app, "Distribute Columns Evenly", "table.distributeColumns", json!({}));
+        item(ui, app, "Borders and Shading…", "ui.dialog", json!({"name": "borders"}));
+        item(ui, app, "Table Properties…", "ui.dialog", json!({"name": "tableProperties"}));
     }
 }
 

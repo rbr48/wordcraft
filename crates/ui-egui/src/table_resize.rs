@@ -28,9 +28,9 @@ const CORNER_THRESHOLD: f32 = 8.0;
 /// What part of a table is being grabbed / hovered.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TableGrab {
-    Column { path: Path, row: usize, col: usize, start_w: f32, start_x: f32, border_x: f32, y0: f32, y1: f32 },
+    Column { path: Path, row: usize, col: usize, start_w: f32, start_x: f32, border_x: f32, y0: f32, y1: f32, is_last_col: bool },
     Row { path: Path, row: usize, start_h: f32, start_y: f32, border_y: f32, x0: f32, x1: f32 },
-    Corner { path: Path, start_w: f32, start_h: f32, start_pos: Pos2, corner_pos: Pos2 },
+    Corner { path: Path, start_w: f32, start_h: f32, start_pos: Pos2, corner_pos: Pos2, min_screen: Pos2 },
     SelectColumn { path: Path, col: usize, col_x0: f32, col_x1: f32, top_y: f32 },
     SelectRow { path: Path, row: usize, left_x: f32, row_y0: f32, row_y1: f32 },
     SelectTable { path: Path, handle_pos: Pos2 },
@@ -53,6 +53,7 @@ impl TableGrab {
 pub struct TableDrag {
     pub grab: TableGrab,
     pub page: usize,
+    pub current_pos: Pos2,
 }
 
 /// Bounding info for a table on a given page.
@@ -104,6 +105,7 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
 
         // 2. Check bottom-right table resize handle (◻).
         for tb in &tables {
+            let top_left = pos2(pr.min.x + tb.min_x * page_scale, pr.min.y + tb.min_y * page_scale);
             let corner_screen = pos2(pr.min.x + tb.max_x * page_scale, pr.min.y + tb.max_y * page_scale);
             if at.distance(corner_screen) <= CORNER_THRESHOLD {
                 return Some((
@@ -113,6 +115,7 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
                         start_h: (tb.max_y - tb.min_y).max(10.0),
                         start_pos: at,
                         corner_pos: corner_screen,
+                        min_screen: top_left,
                     },
                     page_idx,
                 ));
@@ -157,6 +160,16 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
                 if *cell_story != story {
                     continue;
                 }
+                let tb_match = tables.iter().find(|t| t.path == *table);
+                let (tb_min_x, tb_max_x, tb_min_y, tb_max_y) = match tb_match {
+                    Some(t) => (t.min_x, t.max_x, t.min_y, t.max_y),
+                    None => (rect.x, rect.right(), rect.y, rect.bottom()),
+                };
+                let table_y0 = pr.min.y + tb_min_y * page_scale;
+                let table_y1 = pr.min.y + tb_max_y * page_scale;
+                let table_x0 = pr.min.x + tb_min_x * page_scale;
+                let table_x1 = pr.min.x + tb_max_x * page_scale;
+
                 let cx0 = pr.min.x + rect.x * page_scale;
                 let cx1 = pr.min.x + rect.right() * page_scale;
                 let cy0 = pr.min.y + rect.y * page_scale;
@@ -165,6 +178,7 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
                 // Column right border.
                 let dist_x = (at.x - cx1).abs();
                 if dist_x <= BORDER_THRESHOLD && at.y >= cy0 - 2.0 && at.y <= cy1 + 2.0 && best.as_ref().is_none_or(|(_, d)| dist_x < *d) {
+                    let is_last = (cx1 - table_x1).abs() <= 2.0;
                     best = Some((
                         TableGrab::Column {
                             path: table.clone(),
@@ -173,8 +187,9 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
                             start_w: rect.w,
                             start_x: at.x,
                             border_x: cx1,
-                            y0: cy0,
-                            y1: cy1,
+                            y0: table_y0,
+                            y1: table_y1,
+                            is_last_col: is_last,
                         },
                         dist_x,
                     ));
@@ -184,7 +199,7 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
                 let dist_y = (at.y - cy1).abs();
                 if dist_y <= BORDER_THRESHOLD && at.x >= cx0 - 2.0 && at.x <= cx1 + 2.0 && best.as_ref().is_none_or(|(_, d)| dist_y < *d) {
                     best = Some((
-                        TableGrab::Row { path: table.clone(), row: *row, start_h: rect.h, start_y: at.y, border_y: cy1, x0: cx0, x1: cx1 },
+                        TableGrab::Row { path: table.clone(), row: *row, start_h: rect.h, start_y: at.y, border_y: cy1, x0: table_x0, x1: table_x1 },
                         dist_y,
                     ));
                 }
@@ -201,11 +216,13 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
 
 /// Pointer interaction for table resizing and header selection. Returns true if handled.
 pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect], layout: &DocLayout, scale: f32, at: Pos2) -> bool {
-    if let Some(d) = app.canvas.table_drag.as_ref() {
+    if let Some(d) = app.canvas.table_drag.as_mut() {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             app.canvas.table_drag = None;
             return true;
         }
+
+        d.current_pos = at;
 
         if ui.input(|i| i.pointer.primary_down()) {
             let Some(page) = layout.pages.get(d.page) else {
@@ -215,26 +232,27 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             let pr = pages.get(d.page).copied().unwrap_or(Rect::NOTHING);
             let page_scale = crate::canvas::page_screen_scale(pr, page, scale).max(0.01);
 
-            match &d.grab {
-                TableGrab::Column { path, row, col, start_w, start_x, .. } => {
+            let run_cmd = match &d.grab {
+                TableGrab::Column { path, row, col, start_w, start_x, is_last_col, .. } => {
                     let dx = (at.x - start_x) / page_scale;
                     let new_w = (*start_w + dx).clamp(10.0, 1500.0);
-                    app.session.join_next_undo();
-                    let _ = app.run(
+                    let shift = ui.input(|i| i.modifiers.shift);
+                    let adjust_next = !shift && !*is_last_col;
+                    Some((
                         "table.columnWidth",
                         json!({
                             "width": new_w,
+                            "adjustNext": adjust_next,
                             "path": path.to_string(),
                             "row": row,
                             "col": col,
                         }),
-                    );
+                    ))
                 }
                 TableGrab::Row { path, row, start_h, start_y, .. } => {
                     let dy = (at.y - start_y) / page_scale;
                     let new_h = (*start_h + dy).clamp(8.0, 1500.0);
-                    app.session.join_next_undo();
-                    let _ = app.run(
+                    Some((
                         "table.rowHeight",
                         json!({
                             "height": new_h,
@@ -242,24 +260,27 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
                             "path": path.to_string(),
                             "row": row,
                         }),
-                    );
+                    ))
                 }
                 TableGrab::Corner { path, start_w, start_h, start_pos, .. } => {
                     let dx = (at.x - start_pos.x) / page_scale;
                     let dy = (at.y - start_pos.y) / page_scale;
                     let new_w = (*start_w + dx).clamp(20.0, 3000.0);
                     let new_h = (*start_h + dy).clamp(10.0, 5000.0);
-                    app.session.join_next_undo();
-                    let _ = app.run(
+                    Some((
                         "table.resizeTable",
                         json!({
                             "width": new_w,
                             "height": new_h,
                             "path": path.to_string(),
                         }),
-                    );
+                    ))
                 }
-                _ => {}
+                _ => None,
+            };
+            if let Some((cmd, params)) = run_cmd {
+                app.session.join_next_undo();
+                let _ = app.run(cmd, params);
             }
             return true;
         } else {
@@ -289,7 +310,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
                 return true;
             }
             resize_grab => {
-                app.canvas.table_drag = Some(TableDrag { grab: resize_grab, page });
+                app.canvas.table_drag = Some(TableDrag { grab: resize_grab, page, current_pos: at });
                 return true;
             }
         }
@@ -336,11 +357,18 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
 
         for tb in &tables {
             let is_active = in_table_path.as_ref() == Some(&tb.path);
+            let is_hovered = hover.is_some_and(|hp| {
+                let table_screen_rect = Rect::from_min_max(
+                    pos2(pr.min.x + tb.min_x * page_scale - 18.0, pr.min.y + tb.min_y * page_scale - 18.0),
+                    pos2(pr.min.x + tb.max_x * page_scale + 12.0, pr.min.y + tb.max_y * page_scale + 12.0),
+                );
+                table_screen_rect.contains(hp)
+            });
             let top_left = pos2(pr.min.x + tb.min_x * page_scale, pr.min.y + tb.min_y * page_scale);
             let corner_screen = pos2(pr.min.x + tb.max_x * page_scale, pr.min.y + tb.max_y * page_scale);
 
             // Draw MS Word-style top-left select table handle (✥) when active or hovered.
-            if is_active || app.canvas.table_drag.is_some() {
+            if is_active || is_hovered || app.canvas.table_drag.is_some() {
                 let select_handle_pos = top_left - vec2(10.0, 10.0);
                 let sr = Rect::from_center_size(select_handle_pos, vec2(12.0, 12.0));
                 painter.rect_filled(sr, 1.0, Color32::WHITE);
@@ -352,7 +380,7 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
             }
 
             // Draw bottom-right resize square handle (◻).
-            if is_active || app.canvas.table_drag.is_some() {
+            if is_active || is_hovered || app.canvas.table_drag.is_some() {
                 let size = 6.0;
                 let hr = Rect::from_center_size(corner_screen, vec2(size, size));
                 painter.rect_filled(hr, 1.0, Color32::WHITE);
@@ -386,19 +414,23 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
         }
     }
 
-    // 3. Paint ghost guide line during active drag.
+    // 3. Paint ghost guide line or box during active drag.
     if let Some(d) = &app.canvas.table_drag {
         let stroke = Stroke::new(1.5, t.accent.gamma_multiply(0.85));
+        let p = d.current_pos;
         match &d.grab {
-            TableGrab::Column { border_x, y0, y1, .. } => {
-                painter.line_segment([pos2(*border_x, *y0), pos2(*border_x, *y1)], stroke);
+            TableGrab::Column { y0, y1, .. } => {
+                // Live guide line follows current mouse x across the full height of the table.
+                painter.line_segment([pos2(p.x, *y0), pos2(p.x, *y1)], stroke);
             }
-            TableGrab::Row { border_y, x0, x1, .. } => {
-                painter.line_segment([pos2(*x0, *border_y), pos2(*x1, *border_y)], stroke);
+            TableGrab::Row { x0, x1, .. } => {
+                // Live guide line follows current mouse y across the full width of the table.
+                painter.line_segment([pos2(*x0, p.y), pos2(*x1, p.y)], stroke);
             }
-            TableGrab::Corner { corner_pos, .. } => {
-                let hr = Rect::from_center_size(*corner_pos, vec2(8.0, 8.0));
-                painter.rect_filled(hr, 1.0, t.accent);
+            TableGrab::Corner { min_screen, .. } => {
+                // Live ghost outline bounding box of the resizing table.
+                let ghost_rect = Rect::from_min_max(*min_screen, pos2(p.x.max(min_screen.x + 20.0), p.y.max(min_screen.y + 10.0)));
+                painter.rect_stroke(ghost_rect, 0.0, stroke, egui::StrokeKind::Middle);
             }
             _ => {}
         }
