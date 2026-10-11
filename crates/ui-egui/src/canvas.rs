@@ -73,6 +73,8 @@ pub struct CanvasState {
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
     pub(crate) table_stroke: Option<crate::table_pen::PenStroke>,
+    /// A table column border, row border, or corner resize drag in progress.
+    pub(crate) table_drag: Option<crate::table_resize::TableDrag>,
 }
 
 impl CanvasState {
@@ -125,6 +127,7 @@ impl Default for CanvasState {
             balloon_rects: Vec::new(),
             table_tool: None,
             table_stroke: None,
+            table_drag: None,
         }
     }
 }
@@ -741,6 +744,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
         crate::ink::paint(app, &painter, &rects, &layout, geo.scale);
         crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        crate::table_resize::paint(app, &painter, &t, &layout, &rects, geo.scale);
         (resp, rects)
     });
     app.canvas.scroll_offset = out.state.offset;
@@ -800,6 +804,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // `context_menu_opened` also covers the click that dismisses the menu.
     app.canvas.context_menu_open = resp.context_menu_opened();
     if let Some(c) = crate::ink::cursor(app).filter(|_| resp.hovered() || app.canvas.ink.is_some()) {
+        ui.ctx().set_cursor_icon(c);
+    } else if let Some(c) = crate::table_resize::cursor(app, &layout, &rects, geo.scale, ui.input(|i| i.pointer.latest_pos()))
+        .filter(|_| resp.hovered() || app.canvas.table_drag.is_some())
+    {
         ui.ctx().set_cursor_icon(c);
     } else if resp.hovered() || app.canvas.obj_drag.is_some() {
         let over_object = ui.input(|i| i.pointer.latest_pos()).and_then(|p| crate::objects::cursor(app, &layout, &rects, geo.scale, p));
@@ -1256,6 +1264,13 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     let object_pointer = pointer.or_else(|| app.canvas.obj_drag.as_ref().and_then(|_| ui.input(|i| i.pointer.latest_pos())));
     if let Some(at) = object_pointer
         && crate::objects::pointer(app, ui, resp, rects, layout, scale, at)
+    {
+        return;
+    }
+    // A table resize drag follows the pointer anywhere until it's released.
+    let table_pointer = pointer.or_else(|| app.canvas.table_drag.as_ref().and_then(|_| ui.input(|i| i.pointer.latest_pos())));
+    if let Some(at) = table_pointer
+        && crate::table_resize::pointer(app, ui, resp, rects, layout, scale, at)
     {
         return;
     }

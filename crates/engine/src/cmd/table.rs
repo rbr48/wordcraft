@@ -113,28 +113,81 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
             })
         })),
-        t(CommandSpec::new("table.columnWidth", "Table Column Width", "Table Layout › Cell Size", |s, v| {
+        CommandSpec::new("table.columnWidth", "Table Column Width", "Table Layout › Cell Size", |s, v| {
             let w = p::req_f32(v, "width")?.clamp(6.0, 1584.0);
-            let (_, r, c) = cell(s)?;
-            with_table(s, |t| set_column_width(t, r, c, w))
+            let story = s.sel.focus.story;
+            let (tp, r, c) = if let Some(p_str) = p::str(v, "path") {
+                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
+                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let row_idx = p::u64(v, "row").unwrap_or(0) as usize;
+                let col_idx = p::u64(v, "col").unwrap_or(0) as usize;
+                (path, row_idx, col_idx)
+            } else {
+                cell(s)?
+            };
+            let t = s.doc.table_mut(story, &tp)?;
+            set_column_width(t, r, c, w);
+            touch_cells(s, &tp)?;
+            sel_result(s)
         })
-        .params(r#"{"width": pt} (the caret cell's column; the table's preferred width is cleared so the column gets exactly this)"#)),
-        t(CommandSpec::new("table.rowHeight", "Table Row Height", "Table Layout › Cell Size", |s, v| {
+        .params(r#"{"width": pt, "path"?: "0.1", "row"?: n, "col"?: n}"#),
+        CommandSpec::new("table.rowHeight", "Table Row Height", "Table Layout › Cell Size", |s, v| {
             let h = p::req_f32(v, "height")?.clamp(1.0, 1584.0);
             let rule = match p::str(v, "rule") {
                 None | Some("atLeast") => HeightRule::AtLeast,
                 Some("exact") => HeightRule::Exact,
                 Some(x) => return Err(CmdError::Params(format!("unknown height rule `{x}`"))),
             };
-            let (_, r, _) = cell(s)?;
-            with_table(s, |t| {
-                if let Some(row) = t.rows.get_mut(r) {
-                    row.props.height = Some(h);
-                    row.props.height_rule = rule;
-                }
-            })
+            let story = s.sel.focus.story;
+            let (tp, r, _) = if let Some(p_str) = p::str(v, "path") {
+                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
+                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let row_idx = p::u64(v, "row").unwrap_or(0) as usize;
+                (path, row_idx, 0)
+            } else {
+                cell(s)?
+            };
+            let t = s.doc.table_mut(story, &tp)?;
+            if let Some(row) = t.rows.get_mut(r) {
+                row.props.height = Some(h);
+                row.props.height_rule = rule;
+            }
+            touch_cells(s, &tp)?;
+            sel_result(s)
         })
-        .params(r#"{"height": pt, "rule"?: "atLeast|exact"}"#)),
+        .params(r#"{"height": pt, "rule"?: "atLeast|exact", "path"?: "0.1", "row"?: n}"#),
+        CommandSpec::new("table.resizeTable", "Resize Whole Table", "Table Layout › Table", |s, v| {
+            let story = s.sel.focus.story;
+            let tp = if let Some(p_str) = p::str(v, "path") {
+                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
+                Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?)
+            } else {
+                cell(s)?.0
+            };
+            let target_w = p::f32(v, "width").map(|w| w.clamp(20.0, 3000.0));
+            let target_h = p::f32(v, "height").map(|h| h.clamp(10.0, 5000.0));
+            let t = s.doc.table_mut(story, &tp)?;
+            if let Some(new_w) = target_w {
+                let current_w: f32 = t.grid.iter().sum::<f32>().max(1.0);
+                let ratio = (new_w / current_w).clamp(0.1, 10.0);
+                for g in &mut t.grid {
+                    *g = (*g * ratio).max(6.0);
+                }
+                t.props.width = Some(new_w);
+                t.props.width_pct = None;
+                sync_cell_widths(t);
+            }
+            if let Some(new_h) = target_h {
+                let num_rows = t.rows.len().max(1) as f32;
+                let row_h = (new_h / num_rows).max(4.0);
+                for r in &mut t.rows {
+                    r.props.height = Some(row_h);
+                }
+            }
+            touch_cells(s, &tp)?;
+            sel_result(s)
+        })
+        .params(r#"{"path"?: "0.1", "width"?: pt, "height"?: pt}"#),
         t(CommandSpec::new("table.repeatHeader", "Repeat Header Rows", "Table Layout › Data", |s, v| {
             let (_, r, _) = cell(s)?;
             let on = p::bool(v, "value");

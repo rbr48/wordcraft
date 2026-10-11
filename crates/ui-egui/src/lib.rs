@@ -39,6 +39,7 @@ pub mod read_aloud;
 pub mod ribbon;
 pub mod scroll;
 pub mod table_pen;
+pub mod table_resize;
 pub mod theme;
 pub mod widgets;
 pub mod window_geometry;

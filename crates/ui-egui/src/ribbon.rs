@@ -77,18 +77,27 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let avail_w = ui.available_width();
+            let is_compact = avail_w < 1220.0;
             let is_narrow = avail_w < 980.0;
             let is_tight = avail_w < 820.0;
 
-            // Reserve space for right-hand buttons
-            let right_w = if is_tight {
-                130.0
-            } else if is_narrow {
-                180.0
+            let is_bangla_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;
+            let share_btn_w = if is_narrow { 32.0 } else { 74.0 };
+            let mode_btn_w = if is_compact { 34.0 } else { 88.0 };
+            let comment_btn_w = if is_compact { 28.0 } else { 85.0 };
+            let copilot_btn_w = if is_narrow { 30.0 } else { 74.0 };
+            let conv_btn_w = if is_narrow { 26.0 } else { 76.0 };
+            let b_btn_w = if is_narrow {
+                42.0
+            } else if is_bangla_on {
+                110.0
             } else {
-                320.0
+                76.0
             };
-            let max_tab_x = (avail_w - right_w).max(180.0);
+
+            // Reserve dynamic space for all 6 right-hand utility controls + spacing + separator
+            let right_w = share_btn_w + 6.0 + mode_btn_w + 4.0 + comment_btn_w + 3.0 + copilot_btn_w + 3.0 + conv_btn_w + 3.0 + b_btn_w + 20.0;
+            let max_tab_x = (avail_w - right_w).max(120.0);
 
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(if is_narrow { 1.0 } else { 2.0 }, 0.0);
@@ -177,24 +186,36 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                     ui.add_space(6.0);
                     let track = app.session.doc.settings.track_changes;
-                    let mode = crate::widgets::icon_text_button(
-                        ui,
-                        "pencil",
-                        &format!("{} ▾", if track { tl!("Reviewing") } else { tl!("Editing") }),
-                        regular(12.0),
-                    );
+                    let mode_lbl =
+                        if is_compact { "▾".to_string() } else { format!("{} ▾", if track { tl!("Reviewing") } else { tl!("Editing") }) };
+                    let mode = crate::widgets::icon_text_button(ui, "pencil", &mode_lbl, regular(12.0)).on_hover_text(if track {
+                        tl!("Reviewing — edits become suggestions")
+                    } else {
+                        tl!("Editing — edit the document directly")
+                    });
                     egui::Popup::menu(&mode).show(|ui| {
-                        if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
+                        if ui.selectable_label(!track, tl!("Editing — edit the document directly")).clicked() {
                             let _ = app.run("review.trackChanges", json!({"value": false}));
                             ui.close();
                         }
-                        if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
+                        if ui.selectable_label(track, tl!("Reviewing — edits become suggestions")).clicked() {
                             let _ = app.run("review.trackChanges", json!({"value": true}));
                             ui.close();
                         }
                     });
                     ui.add_space(4.0);
-                    if crate::widgets::icon_text_button(ui, "comment", tl!("Comments"), regular(12.0)).clicked() {
+                    let comments_lbl = tl!("Comments");
+                    let comment_resp = if is_compact {
+                        let (cr, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(cr, 4.0, t.hover);
+                        }
+                        icons::paint(ui.painter(), Rect::from_center_size(cr.center(), vec2(14.0, 14.0)), "comment", t.icon, t.text);
+                        resp
+                    } else {
+                        crate::widgets::icon_text_button(ui, "comment", comments_lbl, regular(12.0))
+                    };
+                    if comment_resp.on_hover_text(tl!("Comments")).clicked() {
                         let _ = app.run("view.commentsPane", json!({}));
                     }
                     ui.add_space(3.0);
@@ -240,7 +261,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 
                     // Bangla Input Mode dropdown
                     let is_bangla_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;
-                    let b_label = if is_bangla_on {
+                    let b_label = if is_narrow {
+                        if is_bangla_on { "বাং ▾" } else { "EN ▾" }
+                    } else if is_bangla_on {
                         match app.session.bangla_mode {
                             wordcraft_engine::cmd::bangla::BanglaMode::Phonetic => "Bangla (Phonetic) ▾",
                             wordcraft_engine::cmd::bangla::BanglaMode::Jatiya => "Bangla (Jatiya) ▾",
@@ -301,6 +324,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             }
                         },
                     );
+                    ui.add_space(5.0);
+                    let sep_rect = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover()).0;
+                    ui.painter().vline(sep_rect.center().x, sep_rect.y_range(), Stroke::new(1.0, t.border));
+                    ui.add_space(5.0);
                 });
             });
         });
