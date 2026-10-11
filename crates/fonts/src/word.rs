@@ -36,12 +36,28 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     // headings and screens. Open fonts with full Persian coverage first.
     const NASKH: &[&str] = &["Noto Naskh Arabic", "XB Zar", "XB Niloofar", "Amiri", "Vazirmatn", "Noto Sans Arabic", "DejaVu Sans", "Source Serif 4"];
     const ARABIC_SANS: &[&str] = &["Vazirmatn", "Sahel", "Shabnam", "Samim", "Noto Sans Arabic", "Noto Naskh Arabic", "DejaVu Sans", "Source Sans 3"];
+    // Bengali document fonts: Kalpurush, SolaimanLipi, Vrinda, Noto Sans/Serif Bengali, Shonar Bangla, Nirmala UI.
+    const BENGALI: &[&str] = &[
+        "Kalpurush",
+        "SolaimanLipi",
+        "Siyam Rupali",
+        "Vrinda",
+        "Noto Sans Bengali",
+        "Noto Serif Bengali",
+        "Shonar Bangla",
+        "Nirmala UI",
+        "Akaash",
+        "Nikosh",
+    ];
     let f = family.to_ascii_lowercase();
     if is_persian_naskh(&f) {
         return NASKH;
     }
     if is_persian_sans(&f) {
         return ARABIC_SANS;
+    }
+    if is_bengali_family(&f) {
+        return BENGALI;
     }
     match f.as_str() {
         "arial" | "helvetica" | "arial nova" => ARIAL,
@@ -147,6 +163,39 @@ fn is_persian_sans(f: &str) -> bool {
     ];
     NAMES.contains(&f) || f.starts_with("iransans") || f.starts_with("iranyekan")
 }
+
+/// Bengali document and legacy font names (SutonnyMJ, Kalpurush, SolaimanLipi, etc.).
+fn is_bengali_family(f: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "kalpurush",
+        "kalpurush ansi",
+        "solaimanlipi",
+        "siyam rupali",
+        "siyam rupali ansi",
+        "vrinda",
+        "noto sans bengali",
+        "noto serif bengali",
+        "shonar bangla",
+        "nirmala ui",
+        "akaash",
+        "nikosh",
+        "nikoshban",
+        "sutonnymj",
+        "sutonny",
+        "sutonny bangla omj",
+        "classic bangla",
+        "bijoy",
+        "boshonto",
+        "durgamj",
+    ];
+    NAMES.contains(&f)
+        || f.contains("sutonny")
+        || f.contains("bijoy")
+        || f.contains("bangla")
+        || f.contains("bengali")
+        || f.ends_with("mj")
+}
+
 
 fn style_name(bold: bool, italic: bool) -> &'static str {
     match (bold, italic) {
@@ -280,5 +329,21 @@ mod tests {
         // JetBrains Mono ships only Regular here.
         let r = resolve("JetBrains Mono", true, true);
         assert!(r.synth_bold && r.synth_italic);
+    }
+
+    #[test]
+    fn bengali_font_substitutes() {
+        assert!(is_bengali_family("sutonnymj"));
+        assert!(is_bengali_family("SutonnyMJ"));
+        assert!(is_bengali_family("Sutonny Bangla OMJ"));
+        assert!(is_bengali_family("Bijoy"));
+        assert!(is_bengali_family("Classic Bangla"));
+        assert!(is_bengali_family("Kalpurush"));
+        assert!(is_bengali_family("SolaimanLipi"));
+        assert!(is_bengali_family("Nikosh"));
+        assert!(is_bengali_family("Vrinda"));
+
+        let subs = substitutes("SutonnyMJ");
+        assert_eq!(subs[0], "Kalpurush");
     }
 }
