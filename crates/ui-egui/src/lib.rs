@@ -99,7 +99,7 @@ impl Default for UiState {
             recent: Vec::new(),
             dark: false,
             nav_tab: "headings".into(),
-            show_discord: true,
+            show_discord: false,
             author: String::new(),
             window: None,
             language: i18n::AUTO.into(),
