@@ -36,6 +36,30 @@ pub struct InkStroke {
     pub points: Vec<Pos2>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandleKind {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    RightCenter,
+    BottomRight,
+    BottomCenter,
+    BottomLeft,
+    LeftCenter,
+    Rotate,
+    Move,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveObjectDrag {
+    pub handle: HandleKind,
+    pub initial_pointer: Pos2,
+    pub initial_w: f32,
+    pub initial_h: f32,
+    pub initial_rect: Rect,
+    pub pos: Pos,
+}
+
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
     pub scroll_to_caret: bool,
@@ -63,6 +87,7 @@ pub struct CanvasState {
     pub current_stroke: Option<InkStroke>,
     pub replay_started_at: Option<f64>,
     pub replay_speed: f32,
+    pub active_object_drag: Option<ActiveObjectDrag>,
 }
 
 impl Default for CanvasState {
@@ -92,8 +117,31 @@ impl Default for CanvasState {
             current_stroke: None,
             replay_started_at: None,
             replay_speed: 1.0,
+            active_object_drag: None,
         }
     }
+}
+
+/// Draw a wavy underline (e.g. for spelling/grammar errors) between x0 and x1 at height y.
+pub fn draw_wavy_underline(painter: &egui::Painter, x0: f32, x1: f32, y: f32, stroke: Stroke) {
+    if x1 <= x0 {
+        return;
+    }
+    let step = 3.0;
+    let amp = 1.2;
+    let mut x = x0;
+    let mut up = true;
+    let mut pts = Vec::with_capacity(((x1 - x0) / step * 2.0) as usize + 2);
+    pts.push(pos2(x, y));
+    while x < x1 {
+        let next_x = (x + step).min(x1);
+        let next_y = if up { y - amp } else { y + amp };
+        pts.push(pos2(next_x, next_y));
+        x = next_x;
+        up = !up;
+    }
+    pts.push(pos2(x1, y));
+    painter.add(egui::Shape::line(pts, stroke));
 }
 
 /// Chaikin's corner-cutting algorithm for organically smooth hand-drawn ink curves.
@@ -401,6 +449,37 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
         }
+        // Proofing wavy underlines (Spelling: Red, Grammar: Blue).
+        if app.session.view.proofing {
+            let mut checked_paras = std::collections::HashSet::new();
+            for (pi, pr) in rects.iter().enumerate() {
+                if !pr.intersects(ui.clip_rect().expand(100.0)) {
+                    continue;
+                }
+                let Some(page) = layout.pages.get(pi) else { continue };
+                for it in &page.items {
+                    if let Placed::Lines { story, path, .. } = it {
+                        if !checked_paras.insert((*story, path.clone())) {
+                            continue;
+                        }
+                        for (a, b, issue) in wordcraft_engine::cmd::review::para_issues(&app.session, *story, path) {
+                            for (ipi, r) in layout.selection_rects(&app.session.doc, &a, &b, pi) {
+                                if let Some(target_pr) = rects.get(ipi) {
+                                    let x0 = target_pr.min.x + r.x * geo.scale;
+                                    let x1 = target_pr.min.x + (r.x + r.w) * geo.scale;
+                                    let y = target_pr.min.y + (r.y + r.h) * geo.scale - 1.0;
+                                    let color = match issue.kind {
+                                        wordcraft_engine::proof::IssueKind::Spelling => Color32::from_rgb(0xD8, 0x3B, 0x01),
+                                        wordcraft_engine::proof::IssueKind::Grammar => Color32::from_rgb(0x00, 0x78, 0xD4),
+                                    };
+                                    draw_wavy_underline(&painter, x0, x1, y, Stroke::new(1.2, color));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Caret.
         let focused = resp.has_focus() || app.canvas.focused;
         if let Some(c) = layout.caret_on(&app.session.sel.focus, app.session.page_hint)
@@ -467,6 +546,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             Placed::Image { rect, story, path, off, .. } if *story == pos.story && path == &pos.path && *off == pos.off => {
                                 Some(*rect)
                             }
+                            Placed::Shape { rect, .. } => Some(*rect),
                             _ => None,
                         };
                         if let Some(r) = rect {
@@ -477,17 +557,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             painter.rect_stroke(obj_rect, 0.0, Stroke::new(1.5, t.accent), egui::StrokeKind::Middle);
                             let hs = vec2(7.0, 7.0);
                             let pts = [
-                                obj_rect.left_top(),
-                                pos2(obj_rect.center().x, obj_rect.top()),
-                                obj_rect.right_top(),
-                                pos2(obj_rect.right(), obj_rect.center().y),
-                                obj_rect.right_bottom(),
-                                pos2(obj_rect.center().x, obj_rect.bottom()),
-                                obj_rect.left_bottom(),
-                                pos2(obj_rect.left(), obj_rect.center().y),
+                                (HandleKind::TopLeft, obj_rect.left_top(), egui::CursorIcon::ResizeNorthWest),
+                                (HandleKind::TopCenter, pos2(obj_rect.center().x, obj_rect.top()), egui::CursorIcon::ResizeNorth),
+                                (HandleKind::TopRight, obj_rect.right_top(), egui::CursorIcon::ResizeNorthEast),
+                                (HandleKind::RightCenter, pos2(obj_rect.right(), obj_rect.center().y), egui::CursorIcon::ResizeEast),
+                                (HandleKind::BottomRight, obj_rect.right_bottom(), egui::CursorIcon::ResizeSouthEast),
+                                (HandleKind::BottomCenter, pos2(obj_rect.center().x, obj_rect.bottom()), egui::CursorIcon::ResizeSouth),
+                                (HandleKind::BottomLeft, obj_rect.left_bottom(), egui::CursorIcon::ResizeSouthWest),
+                                (HandleKind::LeftCenter, pos2(obj_rect.left(), obj_rect.center().y), egui::CursorIcon::ResizeWest),
                             ];
-                            for pt in pts {
-                                let hr = Rect::from_center_size(pt, hs);
+                            for (_, pt, _) in &pts {
+                                let hr = Rect::from_center_size(*pt, hs);
                                 painter.rect_filled(hr, 1.0, Color32::WHITE);
                                 painter.rect_stroke(hr, 1.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
                             }
@@ -495,10 +575,86 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             painter.line_segment([pos2(obj_rect.center().x, obj_rect.top()), stem_top], Stroke::new(1.0, t.accent));
                             painter.circle_filled(stem_top, 4.0, Color32::WHITE);
                             painter.circle_stroke(stem_top, 4.0, Stroke::new(1.5, t.accent));
+
+                            if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                                let rotate_circle = Rect::from_center_size(stem_top, vec2(10.0, 10.0));
+                                if rotate_circle.contains(pointer_pos) {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                    if ui.input(|i| i.pointer.primary_pressed()) {
+                                        app.canvas.active_object_drag = Some(ActiveObjectDrag {
+                                            handle: HandleKind::Rotate,
+                                            initial_pointer: pointer_pos,
+                                            initial_w: r.w,
+                                            initial_h: r.h,
+                                            initial_rect: obj_rect,
+                                            pos: pos.clone(),
+                                        });
+                                    }
+                                } else {
+                                    for (hk, pt, cursor) in &pts {
+                                        let hr = Rect::from_center_size(*pt, hs + vec2(4.0, 4.0));
+                                        if hr.contains(pointer_pos) {
+                                            ui.ctx().set_cursor_icon(*cursor);
+                                            if ui.input(|i| i.pointer.primary_pressed()) {
+                                                app.canvas.active_object_drag = Some(ActiveObjectDrag {
+                                                    handle: *hk,
+                                                    initial_pointer: pointer_pos,
+                                                    initial_w: r.w,
+                                                    initial_h: r.h,
+                                                    initial_rect: obj_rect,
+                                                    pos: pos.clone(),
+                                                });
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
+
+        // Active object drag ghost preview
+        if let Some(drag) = &app.canvas.active_object_drag
+            && let Some(curr) = ui.input(|i| i.pointer.latest_pos())
+        {
+            let dx = (curr.x - drag.initial_pointer.x) / geo.scale;
+            let dy = (curr.y - drag.initial_pointer.y) / geo.scale;
+            let mut new_w = drag.initial_w;
+            let mut new_h = drag.initial_h;
+            match drag.handle {
+                HandleKind::RightCenter => new_w += dx,
+                HandleKind::LeftCenter => new_w -= dx,
+                HandleKind::BottomCenter => new_h += dy,
+                HandleKind::TopCenter => new_h -= dy,
+                HandleKind::BottomRight => {
+                    new_w += dx;
+                    new_h += dy;
+                }
+                HandleKind::BottomLeft => {
+                    new_w -= dx;
+                    new_h += dy;
+                }
+                HandleKind::TopRight => {
+                    new_w += dx;
+                    new_h -= dy;
+                }
+                HandleKind::TopLeft => {
+                    new_w -= dx;
+                    new_h -= dy;
+                }
+                _ => {}
+            }
+            new_w = new_w.max(12.0);
+            new_h = new_h.max(12.0);
+            if ui.input(|i| i.modifiers.shift) && drag.initial_w > 0.0 {
+                let aspect = drag.initial_w / drag.initial_h;
+                new_h = new_w / aspect;
+            }
+            let preview_rect = Rect::from_min_size(drag.initial_rect.min, vec2(new_w * geo.scale, new_h * geo.scale));
+            painter.rect_stroke(preview_rect, 1.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Outside);
         }
         // Visual AI cursor / agent indicator.
         if let Some(c) = layout.caret_on(&app.session.sel.focus, app.session.page_hint)
@@ -514,6 +670,50 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (resp, rects)
     });
     let (resp, rects) = out.inner;
+
+    // Finish active object drag on primary mouse release
+    if ui.input(|i| i.pointer.primary_released())
+        && let Some(drag) = app.canvas.active_object_drag.take()
+    {
+        if drag.handle == HandleKind::Rotate {
+            let _ = app.run("arrange.rotate", json!({"direction": "right"}));
+        } else if let Some(curr) = ui.input(|i| i.pointer.latest_pos()) {
+            let dx = (curr.x - drag.initial_pointer.x) / geo.scale;
+            let dy = (curr.y - drag.initial_pointer.y) / geo.scale;
+            let mut new_w = drag.initial_w;
+            let mut new_h = drag.initial_h;
+            match drag.handle {
+                HandleKind::RightCenter => new_w += dx,
+                HandleKind::LeftCenter => new_w -= dx,
+                HandleKind::BottomCenter => new_h += dy,
+                HandleKind::TopCenter => new_h -= dy,
+                HandleKind::BottomRight => {
+                    new_w += dx;
+                    new_h += dy;
+                }
+                HandleKind::BottomLeft => {
+                    new_w -= dx;
+                    new_h += dy;
+                }
+                HandleKind::TopRight => {
+                    new_w += dx;
+                    new_h += dy;
+                }
+                HandleKind::TopLeft => {
+                    new_w -= dx;
+                    new_h -= dy;
+                }
+                _ => {}
+            }
+            new_w = new_w.max(12.0);
+            new_h = new_h.max(12.0);
+            if ui.input(|i| i.modifiers.shift) && drag.initial_w > 0.0 {
+                let aspect = drag.initial_w / drag.initial_h;
+                new_h = new_w / aspect;
+            }
+            let _ = app.run("picture.size", json!({"width": new_w, "height": new_h, "lockAspect": false}));
+        }
+    }
     // Focus: the canvas takes keyboard focus on click and keeps Tab/arrows.
     if resp.clicked() || resp.drag_started() || app.canvas.want_focus {
         resp.request_focus();
@@ -670,6 +870,9 @@ fn erase_stroke_at(strokes: &mut Vec<InkStroke>, page: usize, pt: Pos2, radius: 
 }
 
 fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
+    if app.canvas.active_object_drag.is_some() {
+        return;
+    }
     let Some(p) = resp.interact_pointer_pos().or_else(|| resp.hover_pos()) else { return };
     let Some((page, x, y)) = page_at(rects, scale, p) else { return };
     let mods = ui.input(|i| i.modifiers);

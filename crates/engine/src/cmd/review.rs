@@ -375,7 +375,7 @@ fn word_count(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 /// Issues (spelling + grammar) in one paragraph as positions.
-fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<(Pos, Pos, wordcraft_proof::Issue)> {
+pub fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<(Pos, Pos, wordcraft_proof::Issue)> {
     let Some(p) = s.doc.para(story, path) else { return Vec::new() };
     let text = wordcraft_layout::para::proof_text(p);
     let mut v: Vec<wordcraft_proof::Issue> = wordcraft_proof::check_spelling(&text);

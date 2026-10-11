@@ -21,7 +21,7 @@ USAGE:
                                               run commands headlessly, then save
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
-  wordcraft-cli corpus <dir>                  test & benchmark DOCX files in directory
+  wordcraft-cli corpus <dir> [--roundtrip]    test & benchmark DOCX files in directory
   wordcraft-cli mcp [--connect HOST:PORT]     MCP server on stdio (headless, or bridged to the app)
   wordcraft-cli --version
 ";
@@ -76,6 +76,7 @@ const RUN_OPTIONS: &[OptionSpec] = &[
 ];
 const COMMANDS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const PARITY_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markdown", takes_value: false }];
+const CORPUS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--roundtrip", takes_value: false }];
 const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }];
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -270,7 +271,8 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "corpus" => {
-            validate_options("corpus", &rest, NO_OPTIONS)?;
+            validate_options("corpus", &rest, CORPUS_OPTIONS)?;
+            let roundtrip = rest.iter().any(|a| a == "--roundtrip");
             let dir_path = pos(0)?;
             let dir = std::path::Path::new(&dir_path);
             if !dir.is_dir() {
@@ -290,7 +292,12 @@ fn run(args: &[String]) -> Result<(), String> {
                 println!("No .docx files found in {}", dir.display());
                 return Ok(());
             }
-            println!("Benchmarking {} DOCX files in {}...", entries.len(), dir.display());
+            println!(
+                "Benchmarking {} DOCX files in {}{}...",
+                entries.len(),
+                dir.display(),
+                if roundtrip { " (with roundtrip validation)" } else { "" }
+            );
             println!("{:<36} {:<8} {:<8} {:<10} {:<10}", "File", "Status", "Pages", "Words", "Layout");
             println!("{}", "-".repeat(76));
             let mut passed = 0;
@@ -308,6 +315,34 @@ fn run(args: &[String]) -> Result<(), String> {
                                 let words = info.get("words").and_then(Value::as_u64).unwrap_or(0);
                                 let lms = info.get("layoutMs").and_then(Value::as_f64).unwrap_or_else(|| t0.elapsed().as_secs_f64() * 1000.0);
                                 total_layout_ms += lms;
+
+                                if roundtrip {
+                                    let tmp = std::env::temp_dir().join(format!("wordcraft_corpus_test_{fname}"));
+                                    if let Err(e) = wordcraft_engine::io::save_path(&tmp, &s.doc) {
+                                        failed += 1;
+                                        println!("{:<36} {:<8} roundtrip save error: {}", fname, "FAIL", e);
+                                        continue;
+                                    }
+                                    let re_doc = match wordcraft_engine::io::open_path(&tmp) {
+                                        Ok(d) => d,
+                                        Err(e) => {
+                                            let _ = std::fs::remove_file(&tmp);
+                                            failed += 1;
+                                            println!("{:<36} {:<8} roundtrip re-open error: {}", fname, "FAIL", e);
+                                            continue;
+                                        }
+                                    };
+                                    let _ = std::fs::remove_file(&tmp);
+                                    let mut re_s = Session::new(re_doc);
+                                    let re_info = re_s.run("file.info", &json!({})).unwrap_or_default();
+                                    let re_words = re_info.get("words").and_then(Value::as_u64).unwrap_or(0);
+                                    if re_words != words {
+                                        failed += 1;
+                                        println!("{:<36} {:<8} roundtrip word mismatch ({} vs {})", fname, "FAIL", words, re_words);
+                                        continue;
+                                    }
+                                }
+
                                 passed += 1;
                                 println!("{:<36} {:<8} {:<8} {:<10} {:.1} ms", fname, "PASS", pages, words, lms);
                             }
@@ -412,6 +447,7 @@ mod tests {
         assert!(validate_options("commands", &args(&["--json"]), COMMANDS_OPTIONS).is_ok());
         assert!(validate_options("parity", &args(&["--markdown"]), PARITY_OPTIONS).is_ok());
         assert!(validate_options("mcp", &args(&["--connect", "127.0.0.1:9000"]), MCP_OPTIONS).is_ok());
+        assert!(validate_options("corpus", &args(&["dir", "--roundtrip"]), CORPUS_OPTIONS).is_ok());
         assert!(validate_options("render", &args(&["in.docx", "out.png", "--page"]), RENDER_OPTIONS).is_ok());
     }
 
