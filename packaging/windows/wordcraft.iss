@@ -16,12 +16,12 @@
 ; ── Definitions ──────────────────────────────────────────────────────────────
 
 #define MyAppName      "WordCraft"
-#define MyAppVersion   "0.1.0"
+#define MyAppVersion   "0.4.1"
 #define MyAppPublisher "M S Rana / Izhaan Intellect"
 #define MyAppURL       "https://github.com/rbr48/wordcraft"
 #define MyAppExe       "wordcraft.exe"
 #define MyCliExe       "wordcraft-cli.exe"
-#define SrcDir         "..\..\dist\wordcraft\wordcraft-0.1.0-windows-x64-portable"
+#define SrcDir         "..\..\dist\wordcraft\wordcraft-0.4.1-windows-x64-portable"
 #define IconDir        "..\..\assets\app-icon"
 
 ; ProgID names (must be unique, never re-use Microsoft's ProgIDs)

@@ -117,6 +117,13 @@ pub enum Dialog {
         source_text: String,
         result_text: String,
     },
+    CheckUpdates {
+        checking: bool,
+        latest_version: String,
+        release_notes: String,
+        download_url: String,
+        status_msg: String,
+    },
 }
 
 impl Dialog {
@@ -141,6 +148,7 @@ impl Dialog {
             Dialog::Accessibility { .. } => "accessibility",
             Dialog::CustomizeKeyboard { .. } => "customizeKeyboard",
             Dialog::BanglaConverter { .. } => "banglaConverter",
+            Dialog::CheckUpdates { .. } => "checkUpdates",
         }
     }
 
@@ -232,6 +240,13 @@ impl Dialog {
             "banglaConverter" => Dialog::BanglaConverter {
                 source_text: if app.session.sel.is_collapsed() { String::new() } else { app.session.selected_text() },
                 result_text: String::new(),
+            },
+            "checkUpdates" => Dialog::CheckUpdates {
+                checking: false,
+                latest_version: env!("CARGO_PKG_VERSION").to_string(),
+                release_notes: tl!("You are currently running WordCraft v0.4.1 (Latest Stable Release).").to_string(),
+                download_url: "https://github.com/rbr48/wordcraft/releases/latest".into(),
+                status_msg: tl!("Checking for updates from GitHub...").to_string(),
             },
             _ => return None,
         })
@@ -325,6 +340,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Accessibility { .. } => "Accessibility Checker",
         Dialog::CustomizeKeyboard { .. } => "Customize Keyboard",
         Dialog::BanglaConverter { .. } => "Bangla Converter",
+        Dialog::CheckUpdates { .. } => "Check for Updates",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -853,6 +869,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ));
                     ui.add_space(6.0);
                     ui.hyperlink_to(tl!("Source code: github.com/rbr48/wordcraft"), "https://github.com/rbr48/wordcraft");
+                    ui.add_space(8.0);
+                    if ui.button(tl!("Check for Updates...")).clicked() {
+                        let _ = app.run("ui.dialog", json!({"name": "checkUpdates"}));
+                    }
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(tl!("MIT OR Apache-2.0. Copyright (c) 2026 M S Rana and WordCraft contributors.")).small().weak());
                 }
@@ -1058,6 +1078,51 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if ui.add_enabled(has_sel, egui::Button::new(tl!("Convert Selection to Unicode"))).clicked() {
                     let _ = app.run("tools.banglaConvert", json!({"direction": "ansiToUnicode", "target": "selection"}));
                     close = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tl!("Close")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+            close || ui.input(|i| i.key_pressed(egui::Key::Escape))
+        }
+        Dialog::CheckUpdates { checking: _, latest_version, release_notes, download_url, status_msg } => {
+            ui.set_width(460.0);
+            ui.label(egui::RichText::new(tl!("WordCraft Update Center")).font(semibold(18.0)));
+            ui.add_space(4.0);
+
+            let current_v = env!("CARGO_PKG_VERSION");
+            ui.horizontal(|ui| {
+                ui.label(tl!("Current Version:"));
+                ui.label(egui::RichText::new(format!("v{current_v}")).font(semibold(13.0)));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Latest Version:"));
+                ui.label(egui::RichText::new(format!("v{latest_version}")).color(egui::Color32::from_rgb(0x10, 0x7C, 0x41)).font(semibold(13.0)));
+            });
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            ui.label(egui::RichText::new(status_msg.as_str()).italics());
+            ui.add_space(6.0);
+
+            ui.group(|ui| {
+                ui.label(egui::RichText::new(tl!("Release Information:")).font(semibold(12.0)));
+                ui.label(release_notes.as_str());
+            });
+
+            ui.add_space(10.0);
+            let mut close = false;
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Visit Releases / Download")).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(download_url.as_str()));
+                }
+                if ui.button(tl!("Download Windows Setup")).clicked() {
+                    let setup_url = "https://github.com/rbr48/wordcraft/releases/latest/download/wordcraft-0.4.1-windows-x64-setup.exe";
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(setup_url));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(tl!("Close")).clicked() {

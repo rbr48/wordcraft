@@ -10,3 +10,8 @@ plan/
 /craft-fonts/
 *.zip
 *.msi
+*.apk
+packaging/**/build/
+packaging/**/Output/
+packaging/**/build
+packaging/**/Output
