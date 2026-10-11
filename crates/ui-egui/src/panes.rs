@@ -663,11 +663,12 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
         });
     });
 
-    // Model selection dropdown
+    // Model selection dropdown & manual input
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Model:").font(regular(11.5)));
         let models: &[&str] = match app.ui.ai_provider.as_str() {
             "OpenRouter" => &[
+                "nvidia/nemotron-3-ultra-550b-a55b:free",
                 "deepseek/deepseek-chat",
                 "deepseek/deepseek-r1",
                 "google/gemini-2.0-flash-exp:free",
@@ -682,13 +683,19 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
             _ => &["default-model", "custom-model"],
         };
         egui::ComboBox::from_id_salt("ai_model_select")
-            .selected_text(if app.ui.ai_model.is_empty() { "Select Model" } else { &app.ui.ai_model })
-            .width(180.0)
+            .selected_text(if app.ui.ai_model.is_empty() { "Select Preset" } else { &app.ui.ai_model })
+            .width(170.0)
             .show_ui(ui, |ui| {
                 for m in models {
                     ui.selectable_value(&mut app.ui.ai_model, m.to_string(), *m);
                 }
             });
+    });
+
+    // Editable text field to manually type or modify any custom model ID
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Custom Model:").font(regular(10.5)).weak());
+        ui.add(egui::TextEdit::singleline(&mut app.ui.ai_model).hint_text(tl!("Type any provider model ID…")).desired_width(f32::INFINITY));
     });
 
     // AI Settings Modal / Collapsible
@@ -705,7 +712,7 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
                         app.ui.ai_provider = p.into();
                         // Set sensible default model when switching provider
                         match p {
-                            "OpenRouter" => app.ui.ai_model = "deepseek/deepseek-chat".into(),
+                            "OpenRouter" => app.ui.ai_model = "nvidia/nemotron-3-ultra-550b-a55b:free".into(),
                             "DeepSeek" => app.ui.ai_model = "deepseek-chat".into(),
                             "Gemini" => app.ui.ai_model = "gemini-2.0-flash".into(),
                             "Claude" => app.ui.ai_model = "claude-3-5-sonnet-20241022".into(),
@@ -722,6 +729,16 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
                 ui.add(edit);
             });
 
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label("Model ID:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.ui.ai_model)
+                        .desired_width(180.0)
+                        .hint_text("Enter model ID directly (e.g. nvidia/nemotron-3-ultra-550b-a55b:free)"),
+                );
+            });
+
             if app.ui.ai_provider == "Custom" {
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
@@ -736,7 +753,7 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
 
             ui.add_space(3.0);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Keys are saved locally in your user profile.").font(regular(10.5)).weak());
+                ui.label(egui::RichText::new("Keys and custom models are saved locally in your user profile.").font(regular(10.5)).weak());
                 if ui.button(egui::RichText::new("Done").font(regular(11.0))).clicked() {
                     app.ui.ai_settings_open = false;
                 }
