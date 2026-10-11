@@ -1,0 +1,32 @@
+[package]
+name = "wordcraft-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "WordCraft on Android (eframe + android-activity native library)"
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[lib]
+name = "wordcraft_android"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+wordcraft-doc = { workspace = true }
+wordcraft-engine = { workspace = true }
+wordcraft-ui-egui = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true, default-features = false, features = ["default_fonts", "wgpu", "android-native-activity"] }
+log = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+android-activity = { version = "0.6", features = ["native-activity"] }

@@ -29,6 +29,7 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Document, String> {
             None => return Err(format!("{name}: unsupported format `.{other}`")),
         },
     };
+    normalize_bijoy_fonts(&mut doc);
     doc.ensure_nonempty();
     Ok(doc)
 }
@@ -89,5 +90,96 @@ pub fn decode_text(b: &[u8]) -> String {
     match std::str::from_utf8(b) {
         Ok(s) => s.to_string(),
         Err(_) => b.iter().map(|c| *c as char).collect(),
+    }
+}
+
+/// Known legacy Bijoy / ANSI Bengali font names that store glyph-encoded ASCII.
+fn is_bijoy_font(font_name: &str) -> bool {
+    let lower = font_name.to_ascii_lowercase();
+    lower.contains("sutonnymj")
+        || lower.contains("sutonny")
+        || lower.contains("siyam rupali ansi")
+        || lower.contains("bijoy")
+        || lower == "classic bangla"
+}
+
+fn normalize_blocks_bijoy(blocks: &mut Vec<std::sync::Arc<wordcraft_doc::Block>>) {
+    for b in blocks {
+        let block = std::sync::Arc::make_mut(b);
+        match block {
+            wordcraft_doc::Block::Para(p) => {
+                let mut para_has_bijoy = false;
+                for r in &mut p.runs {
+                    if let Some(f) = &r.props.font
+                        && is_bijoy_font(f)
+                    {
+                        r.props.font = Some("Kalpurush".into());
+                        para_has_bijoy = true;
+                    }
+                }
+                if (para_has_bijoy || p.runs.is_empty()) && !p.text.is_empty() {
+                    let converted = crate::cmd::bangla::ansi_to_unicode(&p.text);
+                    p.text = converted.clone();
+                    p.runs = vec![wordcraft_doc::Run {
+                        len: converted.len(),
+                        props: wordcraft_doc::CharProps { font: Some("Kalpurush".into()), ..Default::default() },
+                    }];
+                }
+            }
+            wordcraft_doc::Block::Table(t) => {
+                for row in &mut t.rows {
+                    for cell in &mut row.cells {
+                        normalize_blocks_bijoy(&mut cell.blocks);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Automatically detects legacy Bijoy/ANSI fonts in the document, transparently
+/// converts raw ASCII glyph keystrokes to standard Bengali Unicode, and assigns
+/// a clean OpenType Unicode font ("Kalpurush").
+pub fn normalize_bijoy_fonts(doc: &mut Document) {
+    let mut has_bijoy = false;
+
+    // Check style sheet default font
+    if let Some(f) = &doc.styles.default_chr.font
+        && is_bijoy_font(f)
+    {
+        has_bijoy = true;
+    }
+
+    // Check paragraphs
+    if !has_bijoy {
+        for b in &doc.body {
+            if let wordcraft_doc::Block::Para(p) = &**b {
+                for r in &p.runs {
+                    if let Some(f) = &r.props.font
+                        && is_bijoy_font(f)
+                    {
+                        has_bijoy = true;
+                        break;
+                    }
+                }
+            }
+            if has_bijoy {
+                break;
+            }
+        }
+    }
+
+    if !has_bijoy {
+        return;
+    }
+
+    // Decode all blocks recursively
+    normalize_blocks_bijoy(&mut doc.body);
+
+    // Update style sheet default font if it was Bijoy
+    if let Some(f) = &doc.styles.default_chr.font
+        && is_bijoy_font(f)
+    {
+        doc.styles.default_chr.font = Some("Kalpurush".into());
     }
 }
