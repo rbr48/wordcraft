@@ -105,9 +105,7 @@ Source: "{#SrcDir}\{#MyCliExe}";      DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\README.md";         DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\LICENSE-APACHE";    DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\LICENSE-MIT";       DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SrcDir}\OFL-biz-ud-mincho.txt";  DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SrcDir}\OFL-biz-ud-pgothic.txt"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SrcDir}\OFL-shippori-mincho.txt";DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SrcDir}\OFL-*.txt";         DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 ; ── Icons (Start menu + Desktop + Quick-launch) ───────────────────────────────
 
