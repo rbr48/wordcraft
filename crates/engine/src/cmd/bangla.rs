@@ -230,50 +230,39 @@ fn phonetic_word(word: &str) -> String {
 
         if is_vowel(c) {
             let is_upper = c.is_ascii_uppercase();
-            let (ind, dep, is_inherent) = match c_lower {
-                'a' => {
-                    if is_upper {
-                        ('আ', 'া', false)
-                    } else if last_was_consonant {
-                        // Inherent vowel after consonant, doesn't add kar
-                        ('অ', ' ', true)
-                    } else {
-                        ('অ', 'া', false)
-                    }
-                }
+            let (ind, dep) = match c_lower {
+                'a' => ('আ', 'া'),
                 'i' => {
                     if is_upper {
-                        ('ঈ', 'ী', false)
+                        ('ঈ', 'ী')
                     } else {
-                        ('ই', 'ি', false)
+                        ('ই', 'ি')
                     }
                 }
                 'u' => {
                     if is_upper {
-                        ('ঊ', 'ূ', false)
+                        ('ঊ', 'ূ')
                     } else {
-                        ('উ', 'ু', false)
+                        ('উ', 'ু')
                     }
                 }
-                'e' => ('এ', 'ে', false),
+                'e' => ('এ', 'ে'),
                 'o' => {
                     if is_upper {
-                        ('ও', 'ো', false)
-                    } else if last_was_consonant {
-                        ('ও', ' ', true)
+                        ('ও', 'ো')
                     } else {
-                        ('ও', 'ো', false)
+                        ('অ', 'ো')
                     }
                 }
-                _ => ('অ', ' ', true),
+                _ => ('অ', ' '),
             };
 
-            if !is_inherent {
-                if last_was_consonant {
+            if last_was_consonant {
+                if dep != ' ' {
                     res.push(dep);
-                } else {
-                    res.push(ind);
                 }
+            } else {
+                res.push(ind);
             }
             last_was_consonant = false;
             i += 1;
@@ -1015,5 +1004,73 @@ mod tests {
         assert_eq!(a, "Avgvi †mvbvi evsjv");
         let back = ansi_to_unicode(&a);
         assert_eq!(back, u);
+    }
+
+    #[test]
+    fn phonetic_numbers_currency_and_dari() {
+        assert_eq!(phonetic_transliterate("12345"), "১২৩৪৫");
+        assert_eq!(phonetic_transliterate("$500"), "৳৫০০");
+        assert_eq!(phonetic_transliterate("ami bhalo|"), "আমি ভালো।");
+    }
+
+    #[test]
+    fn bangla_mode_toggle_and_set() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        assert_eq!(s.bangla_mode, BanglaMode::Off);
+
+        let r1 = s.run("tools.banglaMode", &json!({"mode": "phonetic"})).unwrap();
+        assert_eq!(r1["mode"], "phonetic");
+        assert_eq!(s.bangla_mode, BanglaMode::Phonetic);
+
+        let r2 = s.run("tools.banglaMode", &json!({"toggle": true})).unwrap();
+        assert_eq!(r2["mode"], "jatiya");
+        assert_eq!(s.bangla_mode, BanglaMode::Jatiya);
+
+        let r3 = s.run("tools.banglaMode", &json!({"toggle": true})).unwrap();
+        assert_eq!(r3["mode"], "ansi");
+        assert_eq!(s.bangla_mode, BanglaMode::Ansi);
+
+        let r4 = s.run("tools.banglaMode", &json!({"toggle": true})).unwrap();
+        assert_eq!(r4["mode"], "off");
+        assert_eq!(s.bangla_mode, BanglaMode::Off);
+    }
+
+    #[test]
+    fn bangla_transliterate_command() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let res = s.run("tools.banglaTransliterate", &json!({"text": "ami bangla", "mode": "phonetic"})).unwrap();
+        assert_eq!(res["result"], "আমি বাংলা");
+
+        let res_ansi = s.run("tools.banglaTransliterate", &json!({"text": "আমার সোনার বাংলা", "mode": "unicodeToAnsi"})).unwrap();
+        assert_eq!(res_ansi["result"], "Avgvi †mvbvi evsjv");
+
+        let res_uni = s.run("tools.banglaTransliterate", &json!({"text": "Avgvi †mvbvi evsjv", "mode": "ansiToUnicode"})).unwrap();
+        assert_eq!(res_uni["result"], "আমার সোনার বাংলা");
+    }
+
+    #[test]
+    fn bangla_convert_document_and_selection() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("আমার সোনার বাংলা"));
+
+        // Convert document to ANSI
+        let r1 = s.run("tools.banglaConvert", &json!({"direction": "unicodeToAnsi", "target": "document"})).unwrap();
+        assert_eq!(r1["converted"], true);
+        assert_eq!(s.doc.body[0].as_para().unwrap().text, "Avgvi †mvbvi evsjv");
+        assert_eq!(s.doc.body[0].as_para().unwrap().runs[0].props.font.as_deref(), Some("SutonnyMJ"));
+
+        // Convert document back to Unicode
+        let r2 = s.run("tools.banglaConvert", &json!({"direction": "ansiToUnicode", "target": "document"})).unwrap();
+        assert_eq!(r2["converted"], true);
+        assert_eq!(s.doc.body[0].as_para().unwrap().text, "আমার সোনার বাংলা");
+        assert_eq!(s.doc.body[0].as_para().unwrap().runs[0].props.font.as_deref(), Some("Kalpurush"));
+    }
+
+    #[test]
+    fn bangla_converter_dialog_opens() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let r = s.run("tools.banglaConverter", &json!({})).unwrap();
+        assert_eq!(r["opened"], true);
+        assert_eq!(s.ui_requests.len(), 1);
+        assert_eq!(s.ui_requests[0]["open"], "banglaConverter");
     }
 }
