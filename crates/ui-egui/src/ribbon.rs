@@ -114,6 +114,30 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if ui.button(egui::RichText::new(format!("💬 {}", tl!("Comments"))).font(regular(12.0))).clicked() {
                         let _ = app.run("view.commentsPane", json!({}));
                     }
+                    ui.add_space(4.0);
+                    let copilot_lbl = tl!("Copilot");
+                    let is_open = app.ui.ai_pane;
+                    let (cr, cresp) = ui.allocate_exact_size(vec2(74.0, 24.0), Sense::click());
+                    if cresp.hovered() || is_open {
+                        ui.painter().rect_filled(cr, 4.0, if is_open { t.selection } else { t.hover });
+                    }
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(pos2(cr.min.x + 13.0, cr.center().y), vec2(14.0, 14.0)),
+                        "copilot",
+                        t.accent,
+                        t.text,
+                    );
+                    ui.painter().text(
+                        pos2(cr.min.x + 24.0, cr.center().y),
+                        Align2::LEFT_CENTER,
+                        copilot_lbl,
+                        if is_open { semibold(12.0) } else { regular(12.0) },
+                        if is_open { t.accent_text } else { t.text },
+                    );
+                    if cresp.on_hover_text(tl!("Copilot / AI Assistant")).clicked() {
+                        let _ = app.run("ui.copilot", json!({}));
+                    }
                 });
             });
         });
