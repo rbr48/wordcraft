@@ -338,6 +338,7 @@ Table Design|Borders|Borders|table.borders
 Table Design|Borders|Border Painter|table.borderPainter
 Table Layout|Table|Select Table|table.selectTable
 Table Layout|Table|Select Row|table.selectRow
+Table Layout|Table|Select Column|table.selectColumn
 Table Layout|Table|Select Cell|table.selectCell
 Table Layout|Table|View Gridlines|table.viewGridlines
 Table Layout|Table|Properties|table.properties

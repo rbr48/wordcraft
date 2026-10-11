@@ -201,15 +201,44 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"column"?: n, "descending"?: bool, "header"?: bool}"#)),
         t(CommandSpec::new("table.toText", "Convert to Text", "Table Layout › Data", to_text).params(r#"{"separator"?: "tab|comma|paragraph"}"#)),
         t(CommandSpec::new("table.formula", "Formula", "Table Layout › Data", formula).params(r#"{"formula"?: "=SUM(ABOVE)"}"#)),
-        t(CommandSpec::new("table.selectTable", "Select Table", "Table Layout › Table › Select", |s, _| {
-            let (tp, _, _) = cell(s)?;
+        t(CommandSpec::new("table.selectTable", "Select Table", "Table Layout › Table › Select", |s, v| {
+            let tp = if let Some(p_str) = p::str(v, "path") {
+                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
+                Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?)
+            } else {
+                cell(s)?.0
+            };
             select_cells(s, &tp, None)
         })
+        .params(r#"{"path"?: "0.1"}"#)
         .pure()),
-        t(CommandSpec::new("table.selectRow", "Select Row", "Table Layout › Table › Select", |s, _| {
-            let (tp, r, _) = cell(s)?;
+        t(CommandSpec::new("table.selectRow", "Select Row", "Table Layout › Table › Select", |s, v| {
+            let (tp, r) = if let Some(p_str) = p::str(v, "path") {
+                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
+                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let row_idx = p::u64(v, "row").unwrap_or(0) as usize;
+                (path, row_idx)
+            } else {
+                let (path, row_idx, _) = cell(s)?;
+                (path, row_idx)
+            };
             select_cells(s, &tp, Some((r, None)))
         })
+        .params(r#"{"path"?: "0.1", "row"?: n}"#)
+        .pure()),
+        t(CommandSpec::new("table.selectColumn", "Select Column", "Table Layout › Table › Select", |s, v| {
+            let (tp, c) = if let Some(p_str) = p::str(v, "path") {
+                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
+                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let col_idx = p::u64(v, "col").unwrap_or(0) as usize;
+                (path, col_idx)
+            } else {
+                let (path, _, col_idx) = cell(s)?;
+                (path, col_idx)
+            };
+            select_column_cells(s, &tp, c)
+        })
+        .params(r#"{"path"?: "0.1", "col"?: n}"#)
         .pure()),
         t(CommandSpec::new("table.selectCell", "Select Cell", "Table Layout › Table › Select", |s, _| {
             let (tp, r, c) = cell(s)?;
@@ -719,6 +748,40 @@ fn select_cells(s: &mut Session, tp: &Path, which: Option<(usize, Option<usize>)
     });
     let off = s.doc.para(story, &end_path).map(|x| x.len()).unwrap_or(0);
     s.sel = Selection { anchor: Pos { story, path: Path(a), off: 0 }, focus: Pos { story, path: end_path, off } };
+    sel_result(s)
+}
+
+fn select_column_cells(s: &mut Session, tp: &Path, col: usize) -> CmdResult {
+    let story = s.sel.focus.story;
+    let Some(t) = s.doc.table(story, tp) else { return sel_result(s) };
+    if t.rows.is_empty() {
+        return sel_result(s);
+    }
+    let mut segments = Vec::new();
+    for (r_idx, row) in t.rows.iter().enumerate() {
+        let actual_c = col.min(row.cells.len().saturating_sub(1));
+        let mut a = tp.0.clone();
+        a.extend([r_idx as u32, actual_c as u32, 0]);
+        let mut b = tp.0.clone();
+        b.extend([r_idx as u32, actual_c as u32]);
+        let start_path = Path(a);
+        let end_path = s.doc.para_paths(story).into_iter().rfind(|q| q.0.starts_with(&b)).unwrap_or_else(|| {
+            let mut x = b.clone();
+            x.push(0);
+            Path(x)
+        });
+        let off = s.doc.para(story, &end_path).map(|x| x.len()).unwrap_or(0);
+        let pos_a = Pos { story, path: start_path, off: 0 };
+        let pos_b = Pos { story, path: end_path, off };
+        segments.push((pos_a, pos_b));
+    }
+    if let (Some((first_a, _)), Some((_, last_b))) = (segments.first(), segments.last()) {
+        s.sel = Selection { anchor: first_a.clone(), focus: last_b.clone() };
+        let l = s.layout();
+        let xa = l.caret_on(first_a, s.page_hint).map(|k| k.x).unwrap_or(0.0);
+        let xb = l.caret_on(last_b, s.page_hint).map(|k| k.x + 50.0).unwrap_or(100.0);
+        s.column = Some(crate::session::ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments });
+    }
     sel_result(s)
 }
 

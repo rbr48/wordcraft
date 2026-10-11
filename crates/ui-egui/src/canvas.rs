@@ -744,7 +744,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
         crate::ink::paint(app, &painter, &rects, &layout, geo.scale);
         crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
-        crate::table_resize::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        let hover_p = ui.ctx().input(|i| i.pointer.hover_pos());
+        crate::table_resize::paint(app, &painter, &t, &layout, &rects, geo.scale, hover_p);
         (resp, rects)
     });
     app.canvas.scroll_offset = out.state.offset;
