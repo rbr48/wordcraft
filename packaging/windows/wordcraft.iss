@@ -89,12 +89,6 @@ Name: "desktopicon"; \
   GroupDescription: "{cm:AdditionalIcons}"; \
   Flags: unchecked
 
-; Quick-launch shortcut (legacy, Win7 compatibility kept for safety)
-Name: "quicklaunch"; \
-  Description: "{cm:CreateQuickLaunchIcon}"; \
-  GroupDescription: "{cm:AdditionalIcons}"; \
-  Flags: unchecked; OnlyBelowVersion: 6.1
-
 ; File-association tasks — all opt-in by default so we don't hijack without consent
 Name: "assoc_docx"; Description: "Set as default app for .docx (Word documents)";   GroupDescription: "Open with WordCraft:"; Flags: unchecked
 Name: "assoc_doc";  Description: "Set as default app for .doc (Word 97–2003)";       GroupDescription: "Open with WordCraft:"; Flags: unchecked
@@ -124,10 +118,7 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
 ; Desktop (task-gated)
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
 
-; Quick-launch (task-gated)
-Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#MyAppName}"; \
-  Filename: "{app}\{#MyAppExe}"; Tasks: quicklaunch
-
+[Registry]
 ; ── Registry ─────────────────────────────────────────────────────────────────
 ;
 ; Strategy
@@ -272,7 +263,7 @@ Filename: "{cmd}"; Parameters: "/c ie4uinit.exe -show"; Flags: runhidden; Status
 
 [UninstallRun]
 ; Refresh shell after uninstall too
-Filename: "{cmd}"; Parameters: "/c ie4uinit.exe -show"; Flags: runhidden
+Filename: "{cmd}"; Parameters: "/c ie4uinit.exe -show"; Flags: runhidden; RunOnceId: "RefreshShellAssoc"
 
 ; ── Code section ─────────────────────────────────────────────────────────────
 

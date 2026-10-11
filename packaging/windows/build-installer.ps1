@@ -17,7 +17,7 @@
 #>
 
 param(
-    [string]$IsccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+    [string]$IsccPath = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
 )
 
 Set-StrictMode -Version Latest
