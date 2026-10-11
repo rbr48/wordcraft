@@ -24,7 +24,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$Version  = "0.4.1"
+$Version  = "0.5.1"
 $PortDir  = Join-Path $RepoRoot "dist\wordcraft\wordcraft-$Version-windows-x64-portable"
 
 Write-Host ""
@@ -64,6 +64,10 @@ if (Test-Path (Join-Path $RepoRoot "README.md")) {
 }
 if (Test-Path (Join-Path $RepoRoot "LICENSE-MIT")) {
     Copy-Item -Force (Join-Path $RepoRoot "LICENSE*") $PortDir\
+}
+$PrevDist = Join-Path $RepoRoot "dist\wordcraft\wordcraft-0.1.0-windows-x64-portable"
+if (Test-Path $PrevDist) {
+    Copy-Item -Force (Join-Path $PrevDist "*.txt") $PortDir\
 }
 Write-Host "  Copied wordcraft.exe and wordcraft-cli.exe to:"
 Write-Host "  $PortDir"
