@@ -38,4 +38,5 @@ description: Comprehensive project memory, architecture guide, and operational r
   - Interactive canvas transform handles (8 resize handles + rotate stalk handle with Shift aspect lock and live ghost preview).
   - Real-time wavy squiggly underlines on canvas (Crimson Red for spelling, Sapphire Blue for grammar).
   - DOCX corpus roundtrip benchmarking via `wordcraft-cli corpus --roundtrip`.
+  - Geometric contour tight text wrapping for non-rectangular floating shapes (Ellipses, Diamonds, Triangles).
   - Portable Windows x64 release package at `dist/wordcraft/wordcraft-0.1.0-windows-x64-portable.zip`.
