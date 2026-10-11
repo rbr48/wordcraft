@@ -158,10 +158,17 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             if is_delim {
                                 app.ui.phonetic_buffer.clear();
                                 app.ui.phonetic_rendered_len = 0;
+                                app.ui.phonetic_candidates.clear();
                                 let _ = app.run("text.insert", json!({"text": t}));
                             } else {
                                 app.ui.phonetic_buffer.push_str(&t);
-                                let bn = wordcraft_engine::cmd::bangla::phonetic_transliterate(&app.ui.phonetic_buffer);
+                                app.ui.phonetic_candidates = wordcraft_engine::cmd::bangla::phonetic_candidates(&app.ui.phonetic_buffer);
+                                let bn = app
+                                    .ui
+                                    .phonetic_candidates
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| wordcraft_engine::cmd::bangla::phonetic_transliterate(&app.ui.phonetic_buffer));
                                 for _ in 0..app.ui.phonetic_rendered_len {
                                     let _ = app.run("text.backspace", json!({}));
                                 }
@@ -197,7 +204,36 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     let _ = app.run("tools.banglaMode", json!({"toggle": true}));
                     app.ui.phonetic_buffer.clear();
                     app.ui.phonetic_rendered_len = 0;
+                    app.ui.phonetic_candidates.clear();
                     continue;
+                }
+                // Numeric key candidate selection (1..5) in Bangla Phonetic mode
+                if app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic
+                    && !app.ui.phonetic_buffer.is_empty()
+                    && !modifiers.ctrl
+                    && !modifiers.command
+                    && !modifiers.alt
+                {
+                    let cand_idx = match key {
+                        Key::Num1 => Some(0),
+                        Key::Num2 => Some(1),
+                        Key::Num3 => Some(2),
+                        Key::Num4 => Some(3),
+                        Key::Num5 => Some(4),
+                        _ => None,
+                    };
+                    if let Some(idx) = cand_idx
+                        && let Some(cand) = app.ui.phonetic_candidates.get(idx).cloned()
+                    {
+                        for _ in 0..app.ui.phonetic_rendered_len {
+                            let _ = app.run("text.backspace", json!({}));
+                        }
+                        let _ = app.run("text.insert", json!({"text": cand}));
+                        app.ui.phonetic_buffer.clear();
+                        app.ui.phonetic_rendered_len = 0;
+                        app.ui.phonetic_candidates.clear();
+                        continue;
+                    }
                 }
                 if key == Key::Backspace
                     && app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic
@@ -208,17 +244,31 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                         let _ = app.run("text.backspace", json!({}));
                     }
                     if !app.ui.phonetic_buffer.is_empty() {
-                        let bn = wordcraft_engine::cmd::bangla::phonetic_transliterate(&app.ui.phonetic_buffer);
+                        app.ui.phonetic_candidates = wordcraft_engine::cmd::bangla::phonetic_candidates(&app.ui.phonetic_buffer);
+                        let bn = app
+                            .ui
+                            .phonetic_candidates
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| wordcraft_engine::cmd::bangla::phonetic_transliterate(&app.ui.phonetic_buffer));
                         let _ = app.run("text.insert", json!({"text": bn}));
                         app.ui.phonetic_rendered_len = bn.chars().count();
                     } else {
                         app.ui.phonetic_rendered_len = 0;
+                        app.ui.phonetic_candidates.clear();
                     }
                     continue;
                 }
                 if matches!(key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End | Key::Enter) {
                     app.ui.phonetic_buffer.clear();
                     app.ui.phonetic_rendered_len = 0;
+                    app.ui.phonetic_candidates.clear();
+                }
+                if key == Key::Escape && !app.ui.phonetic_buffer.is_empty() {
+                    app.ui.phonetic_buffer.clear();
+                    app.ui.phonetic_rendered_len = 0;
+                    app.ui.phonetic_candidates.clear();
+                    continue;
                 }
                 if key == Key::Escape && app.session.painter.is_some() {
                     app.session.painter = None;

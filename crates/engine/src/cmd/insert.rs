@@ -126,8 +126,204 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Formats a linear or LaTeX mathematical string into Unicode mathematical typography.
+pub fn format_math_to_unicode(src: &str) -> String {
+    let mut s = src.to_string();
+
+    let greeks = [
+        (r"\alpha", "α"),
+        (r"\beta", "β"),
+        (r"\gamma", "γ"),
+        (r"\delta", "δ"),
+        (r"\epsilon", "ε"),
+        (r"\zeta", "ζ"),
+        (r"\eta", "η"),
+        (r"\theta", "θ"),
+        (r"\iota", "ι"),
+        (r"\kappa", "κ"),
+        (r"\lambda", "λ"),
+        (r"\mu", "μ"),
+        (r"\nu", "ν"),
+        (r"\xi", "ξ"),
+        (r"\pi", "π"),
+        (r"\rho", "ρ"),
+        (r"\sigma", "σ"),
+        (r"\tau", "τ"),
+        (r"\phi", "φ"),
+        (r"\chi", "χ"),
+        (r"\psi", "ψ"),
+        (r"\omega", "ω"),
+        (r"\Gamma", "Γ"),
+        (r"\Delta", "Δ"),
+        (r"\Theta", "Θ"),
+        (r"\Lambda", "Λ"),
+        (r"\Xi", "Ξ"),
+        (r"\Pi", "Π"),
+        (r"\Sigma", "Σ"),
+        (r"\Phi", "Φ"),
+        (r"\Psi", "Ψ"),
+        (r"\Omega", "Ω"),
+    ];
+    for (k, v) in greeks {
+        s = s.replace(k, v);
+    }
+
+    let ops = [
+        (r"\pm", "±"),
+        (r"\mp", "∓"),
+        (r"\times", "×"),
+        (r"\div", "÷"),
+        (r"\cdot", "·"),
+        (r"\leq", "≤"),
+        (r"\le", "≤"),
+        (r"\geq", "≥"),
+        (r"\ge", "≥"),
+        (r"\neq", "≠"),
+        (r"\ne", "≠"),
+        (r"\approx", "≈"),
+        (r"\equiv", "≡"),
+        (r"\infty", "∞"),
+        (r"\partial", "∂"),
+        (r"\nabla", "∇"),
+        (r"\int", "∫"),
+        (r"\sum", "∑"),
+        (r"\prod", "∏"),
+        (r"\in", "∈"),
+        (r"\notin", "∉"),
+        (r"\subset", "⊂"),
+        (r"\subseteq", "⊆"),
+        (r"\cup", "∪"),
+        (r"\cap", "∩"),
+        (r"\to", "→"),
+        (r"\leftarrow", "←"),
+        (r"\Rightarrow", "⇒"),
+        (r"\Leftarrow", "⇐"),
+        (r"\leftrightarrow", "↔"),
+        (r"\forall", "∀"),
+        (r"\exists", "∃"),
+        (r"\degree", "°"),
+    ];
+    for (k, v) in ops {
+        s = s.replace(k, v);
+    }
+
+    let sups = [
+        ("^0", "⁰"),
+        ("^1", "¹"),
+        ("^2", "²"),
+        ("^3", "³"),
+        ("^4", "⁴"),
+        ("^5", "⁵"),
+        ("^6", "⁶"),
+        ("^7", "⁷"),
+        ("^8", "⁸"),
+        ("^9", "⁹"),
+        ("^+", "⁺"),
+        ("^-", "⁻"),
+        ("^n", "ⁿ"),
+        ("^x", "ˣ"),
+        ("^y", "ʸ"),
+        ("^{0}", "⁰"),
+        ("^{1}", "¹"),
+        ("^{2}", "²"),
+        ("^{3}", "³"),
+        ("^{4}", "⁴"),
+        ("^{5}", "⁵"),
+        ("^{6}", "⁶"),
+        ("^{7}", "⁷"),
+        ("^{8}", "⁸"),
+        ("^{9}", "⁹"),
+        ("^{+}", "⁺"),
+        ("^{-}", "⁻"),
+        ("^{n}", "ⁿ"),
+        ("^{x}", "ˣ"),
+    ];
+    for (k, v) in sups {
+        s = s.replace(k, v);
+    }
+
+    let subs = [
+        ("_0", "₀"),
+        ("_1", "₁"),
+        ("_2", "₂"),
+        ("_3", "₃"),
+        ("_4", "₄"),
+        ("_5", "₅"),
+        ("_6", "₆"),
+        ("_7", "₇"),
+        ("_8", "₈"),
+        ("_9", "₉"),
+        ("_+", "₊"),
+        ("_-", "₋"),
+        ("_i", "ᵢ"),
+        ("_j", "ⱼ"),
+        ("_k", "ₖ"),
+        ("_n", "ₙ"),
+        ("_m", "ₘ"),
+        ("_x", "ₓ"),
+        ("_y", "ᵧ"),
+        ("_{0}", "₀"),
+        ("_{1}", "₁"),
+        ("_{2}", "₂"),
+        ("_{3}", "₃"),
+        ("_{4}", "₄"),
+        ("_{5}", "₅"),
+        ("_{6}", "₆"),
+        ("_{7}", "₇"),
+        ("_{8}", "₈"),
+        ("_{9}", "₉"),
+        ("_{i}", "ᵢ"),
+        ("_{j}", "ⱼ"),
+        ("_{k}", "ₖ"),
+        ("_{n}", "ₙ"),
+    ];
+    for (k, v) in subs {
+        s = s.replace(k, v);
+    }
+
+    while let Some(frac_idx) = s.find(r"\frac") {
+        if let Some(open1) = s[frac_idx..].find('{') {
+            let o1 = frac_idx + open1;
+            if let Some(close1) = s[o1..].find('}') {
+                let c1 = o1 + close1;
+                let num = &s[o1 + 1..c1];
+                if let Some(open2) = s[c1..].find('{') {
+                    let o2 = c1 + open2;
+                    if let Some(close2) = s[o2..].find('}') {
+                        let c2 = o2 + close2;
+                        let den = &s[o2 + 1..c2];
+                        let repl = format!("({num})/({den})");
+                        s.replace_range(frac_idx..=c2, &repl);
+                        continue;
+                    }
+                }
+            }
+        }
+        break;
+    }
+
+    while let Some(sqrt_idx) = s.find(r"\sqrt") {
+        let after_sqrt = &s[sqrt_idx + 5..];
+        let trimmed = after_sqrt.trim_start();
+        if trimmed.starts_with('{') {
+            let open_offset = (sqrt_idx + 5) + (after_sqrt.len() - trimmed.len());
+            if let Some(close_offset) = s[open_offset..].find('}') {
+                let c = open_offset + close_offset;
+                let inner = &s[open_offset + 1..c];
+                let repl = format!("√({inner})");
+                s.replace_range(sqrt_idx..=c, &repl);
+                continue;
+            }
+        }
+        s.replace_range(sqrt_idx..sqrt_idx + 5, "√");
+    }
+
+    s
+}
+
 pub fn equation(s: &mut Session, v: &Value) -> CmdResult {
-    let lin = p::str(v, "linear").or_else(|| p::str(v, "latex")).unwrap_or("a^2+b^2=c^2").to_string();
+    let raw = p::str(v, "linear").or_else(|| p::str(v, "latex")).unwrap_or("a^2+b^2=c^2");
+    let lin = format_math_to_unicode(raw);
     let props = s.typing_props();
     let at = delete_selection(s)?;
     let end = s.doc.insert_object(&at, InlineObject::Equation { linear: lin, display: false }, &props)?;
@@ -815,27 +1011,82 @@ fn icon(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 fn chart(s: &mut Session, v: &Value) -> CmdResult {
-    let chart_type = p::str(v, "type").unwrap_or("bar");
-    let title = p::str(v, "title").unwrap_or("Chart");
-    let w = p::f32(v, "width").unwrap_or(288.0).clamp(36.0, 1000.0);
-    let h = p::f32(v, "height").unwrap_or(180.0).clamp(36.0, 1000.0);
-    let text = format!("[{} Chart: {}]", chart_type.to_uppercase(), title);
-    let id = s.doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(&text, CharProps::default()))]);
+    let chart_type = p::str(v, "type").unwrap_or("bar").to_lowercase();
+    let title = p::str(v, "title").unwrap_or("Sales Summary");
+    let w = p::f32(v, "width").unwrap_or(288.0).clamp(72.0, 1000.0);
+    let h = p::f32(v, "height").unwrap_or(180.0).clamp(72.0, 1000.0);
+
+    let default_cats = ["Q1", "Q2", "Q3", "Q4"];
+    let default_vals = [24.0, 48.0, 36.0, 60.0];
+
+    let cats: Vec<String> = v
+        .get("categories")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .filter(|v: &Vec<String>| !v.is_empty())
+        .unwrap_or_else(|| default_cats.iter().map(|s| s.to_string()).collect());
+
+    let vals: Vec<f64> = v
+        .get("values")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_f64).collect())
+        .filter(|v: &Vec<f64>| !v.is_empty())
+        .unwrap_or_else(|| default_vals.to_vec());
+
+    let max_val = vals.iter().copied().fold(1.0f64, f64::max);
+    let total: f64 = vals.iter().sum::<f64>().max(1.0);
+
+    let mut blocks = Vec::new();
+
+    // Chart title
+    let title_para = Paragraph::with_text(title, CharProps { bold: Some(true), size: Some(13.0), ..Default::default() });
+    blocks.push(para_block(title_para));
+
+    match chart_type.as_str() {
+        "pie" => {
+            let symbols = ["●", "■", "▲", "◆", "★", "▼"];
+            for (i, (cat, val)) in cats.iter().zip(vals.iter()).enumerate() {
+                let pct = (val / total * 100.0).round() as u64;
+                let sym = symbols.get(i % symbols.len()).copied().unwrap_or("●");
+                let line = format!("{} {} : {:.0} ({}%)", sym, cat, val, pct);
+                blocks.push(para_block(Paragraph::with_text(&line, CharProps { size: Some(10.5), ..Default::default() })));
+            }
+        }
+        "line" => {
+            for (cat, val) in cats.iter().zip(vals.iter()) {
+                let ratio = (val / max_val).clamp(0.0, 1.0);
+                let bars_len = (ratio * 16.0).round() as usize;
+                let line = format!("{:<6} ╶{}● {:.0}", cat, "─".repeat(bars_len), val);
+                blocks.push(para_block(Paragraph::with_text(&line, CharProps { size: Some(10.5), ..Default::default() })));
+            }
+        }
+        _ => {
+            // "bar" / "column"
+            for (cat, val) in cats.iter().zip(vals.iter()) {
+                let ratio = (val / max_val).clamp(0.0, 1.0);
+                let bars_len = (ratio * 16.0).round() as usize;
+                let line = format!("{:<6} {} {:.0}", cat, "█".repeat(bars_len.max(1)), val);
+                blocks.push(para_block(Paragraph::with_text(&line, CharProps { size: Some(10.5), ..Default::default() })));
+            }
+        }
+    }
+
+    let id = s.doc.add_part(PartKind::TextBox, blocks);
     let props = s.typing_props();
     let at = delete_selection(s)?;
     let obj = InlineObject::Shape {
         kind: ShapeKind::TextBox,
         w,
         h,
-        fill: Some(Rgb(0xFA, 0xFA, 0xFA)),
-        stroke: Some(Rgb(0x80, 0x80, 0x80)),
-        stroke_width: 1.0,
+        fill: Some(Rgb(0xFB, 0xFB, 0xFD)),
+        stroke: Some(Rgb(0x4A, 0x6E, 0xA9)),
+        stroke_width: 1.5,
         float: Float::default(),
         story: Some(id),
     };
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
-    Ok(json!({"chart": chart_type, "title": title, "width": w, "height": h}))
+    Ok(json!({"chart": chart_type, "title": title, "width": w, "height": h, "categories": cats, "values": vals}))
 }
 
 fn screenshot(s: &mut Session, v: &Value) -> CmdResult {
@@ -1178,5 +1429,33 @@ mod tests {
         s.run("insert.dropCap", &json!({"lines": 0})).unwrap();
         let p = s.doc.para(StoryRef::Body, &path).unwrap();
         assert_eq!(p.props.drop_cap, None);
+    }
+
+    #[test]
+    fn equation_math_formatting() {
+        assert_eq!(format_math_to_unicode(r"\alpha+\beta=\gamma"), "α+β=γ");
+        assert_eq!(format_math_to_unicode(r"x^2+y_0=z"), "x²+y₀=z");
+        assert_eq!(format_math_to_unicode(r"\sqrt{x}\leq\infty"), "√(x)≤∞");
+        assert_eq!(format_math_to_unicode(r"\frac{a}{b}"), "(a)/(b)");
+    }
+
+    #[test]
+    fn chart_generation_with_data() {
+        use wordcraft_doc::Document;
+        let mut s = Session::new(Document::new());
+        let res = s
+            .run(
+                "insert.chart",
+                &json!({
+                    "type": "bar",
+                    "title": "Quarterly Growth",
+                    "categories": ["Q1", "Q2", "Q3", "Q4"],
+                    "values": [25.0, 50.0, 75.0, 100.0]
+                }),
+            )
+            .unwrap();
+        assert_eq!(res["chart"], "bar");
+        assert_eq!(res["title"], "Quarterly Growth");
+        assert_eq!(res["categories"].as_array().unwrap().len(), 4);
     }
 }

@@ -11,6 +11,8 @@ wordcraft-cli — WordCraft from the command line
 
 USAGE:
   wordcraft-cli convert <in> <out>            convert between formats (docx, pdf, odt, rtf, html, md, tex, txt, json, png)
+  wordcraft-cli batch <in_dir> [out_dir] [--to ext] [--from ext]
+                                              batch convert directory (docx, pdf, epub, odt, rtf, html, md, txt, png)
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
@@ -61,6 +63,7 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
 }
 
 const NO_OPTIONS: &[OptionSpec] = &[];
+const BATCH_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--to", takes_value: true }, OptionSpec { name: "--from", takes_value: true }];
 const RENDER_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--page", takes_value: true }, OptionSpec { name: "--scale", takes_value: true }];
 const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--file", takes_value: true },
@@ -80,6 +83,82 @@ fn run(args: &[String]) -> Result<(), String> {
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
     let pos = |i: usize| rest.iter().filter(|a| !a.starts_with("--")).nth(i).cloned().ok_or_else(|| format!("missing argument\n\n{USAGE}"));
     match cmd {
+        "batch" => {
+            validate_options("batch", &rest, BATCH_OPTIONS)?;
+            let in_dir = pos(0)?;
+            let out_dir = pos(1).unwrap_or_else(|_| in_dir.clone());
+            let target_ext = arg_value(&rest, "--to").unwrap_or_else(|| "pdf".to_string()).to_ascii_lowercase();
+            let from_ext = arg_value(&rest, "--from").map(|e| e.to_ascii_lowercase());
+            let dir = std::path::Path::new(&in_dir);
+            let out_path = std::path::Path::new(&out_dir);
+            if !dir.is_dir() {
+                return Err(format!("not a directory: {in_dir}"));
+            }
+            std::fs::create_dir_all(out_path).map_err(|e| format!("cannot create output directory: {e}"))?;
+
+            let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+                .map_err(|e| e.to_string())?
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| {
+                    if !p.is_file() {
+                        return false;
+                    }
+                    if let Some(ref ext) = from_ext {
+                        p.extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case(ext))
+                    } else {
+                        matches!(
+                            p.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase).as_deref(),
+                            Some("docx" | "odt" | "rtf" | "html" | "htm" | "md" | "txt")
+                        )
+                    }
+                })
+                .collect();
+            entries.sort();
+            if entries.is_empty() {
+                println!("No matching input files found in {}", dir.display());
+                return Ok(());
+            }
+            println!("Batch converting {} files from {} to .{} in {}...", entries.len(), dir.display(), target_ext, out_path.display());
+            let mut succeeded = 0;
+            let mut failed = 0;
+            let t0 = std::time::Instant::now();
+            for p in &entries {
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("document");
+                let out_file = out_path.join(format!("{stem}.{target_ext}"));
+                let fname = p.file_name().and_then(|f| f.to_str()).unwrap_or("file");
+                match wordcraft_engine::io::open_path(p) {
+                    Ok(doc) => {
+                        let mut s = Session::new(doc);
+                        let save_res = if target_ext == "png" {
+                            s.run("file.exportPng", &json!({"path": out_file.to_string_lossy(), "page": 1}))
+                        } else {
+                            s.run("file.save", &json!({"path": out_file.to_string_lossy()}))
+                        };
+                        match save_res {
+                            Ok(_) => {
+                                succeeded += 1;
+                                println!("  ✓ {} -> {}", fname, out_file.file_name().and_then(|f| f.to_str()).unwrap_or(""));
+                            }
+                            Err(e) => {
+                                failed += 1;
+                                eprintln!("  ✗ {} -> conversion failed: {}", fname, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        eprintln!("  ✗ {} -> open failed: {}", fname, e);
+                    }
+                }
+            }
+            let el = t0.elapsed().as_millis();
+            println!("Batch complete: {} succeeded, {} failed in {} ms", succeeded, failed, el);
+            if failed > 0 {
+                return Err(format!("{failed} files failed conversion"));
+            }
+            Ok(())
+        }
         "convert" => {
             validate_options("convert", &rest, NO_OPTIONS)?;
             let (i, o) = (pos(0)?, pos(1)?);

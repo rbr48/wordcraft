@@ -862,11 +862,165 @@ pub fn ansi_to_unicode(text: &str) -> String {
 }
 
 // ============================================================================
-// 4. Command Handlers
+// 4. Vocabulary & Phonetic Candidate Suggestions
 // ============================================================================
 
-/// `tools.banglaMode` — sets or toggles the active Bangla typing mode.
+/// High-frequency Bengali words for phonetic candidate suggestion and autocomplete.
+pub const BANGLA_VOCAB: &[(&str, &str)] = &[
+    ("ami", "আমি"),
+    ("amra", "আমরা"),
+    ("amader", "আমাদের"),
+    ("amar", "আমার"),
+    ("tumi", "তুমি"),
+    ("tomra", "তোমরা"),
+    ("tomader", "তোমাদের"),
+    ("tomar", "তোমার"),
+    ("apni", "আপনি"),
+    ("apnader", "আপনাদের"),
+    ("apnar", "আপনার"),
+    ("bangla", "বাংলা"),
+    ("bangladesh", "বাংলাদেশ"),
+    ("dhaka", "ঢাকা"),
+    ("bhalo", "ভালো"),
+    ("bhalobasha", "ভালোবাসা"),
+    ("kemon", "কেমন"),
+    ("achen", "আছেন"),
+    ("acho", "আছো"),
+    ("achi", "আছি"),
+    ("onek", "অনেক"),
+    ("shob", "সব"),
+    ("shobai", "সবাই"),
+    ("shokol", "সকল"),
+    ("karon", "কারণ"),
+    ("kormo", "কর্ম"),
+    ("kaj", "কাজ"),
+    ("kore", "করে"),
+    ("korbo", "করব"),
+    ("korchen", "করছেন"),
+    ("kotha", "কথা"),
+    ("kintu", "কিন্তু"),
+    ("ebong", "এবং"),
+    ("othoba", "অথবা"),
+    ("shomoy", "সময়"),
+    ("shundor", "সুন্দর"),
+    ("notun", "নতুন"),
+    ("puraton", "পুরাতন"),
+    ("choto", "ছোট"),
+    ("boro", "বড়"),
+    ("manush", "মানুষ"),
+    ("desh", "দেশ"),
+    ("desher", "দেশের"),
+    ("din", "দিন"),
+    ("rat", "রাত"),
+    ("shokal", "সকাল"),
+    ("dupur", "দুপুর"),
+    ("bikol", "বিকাল"),
+    ("shondha", "সন্ধ্যা"),
+    ("pani", "পানি"),
+    ("jol", "জল"),
+    ("khabar", "খাবার"),
+    ("boi", "বই"),
+    ("kolom", "কলম"),
+    ("ghor", "ঘর"),
+    ("bari", "বাড়ি"),
+    ("rasta", "রাস্তা"),
+    ("shohor", "শহর"),
+    ("gram", "গ্রাম"),
+    ("nodi", "নদী"),
+    ("akash", "আকাশ"),
+    ("batash", "বাতাস"),
+    ("bristi", "বৃষ্টি"),
+    ("shurjo", "সূর্য"),
+    ("chad", "চাঁদ"),
+    ("tara", "তারা"),
+    ("bondhu", "বন্ধু"),
+    ("poribar", "পরিবার"),
+    ("baba", "বাবা"),
+    ("ma", "মা"),
+    ("bhai", "ভাই"),
+    ("bon", "বোন"),
+    ("chele", "ছেলে"),
+    ("meye", "মেয়ে"),
+    ("shikkha", "শিক্ষা"),
+    ("biddaloy", "বিদ্যালয়"),
+    ("bishwobiddaloy", "বিশ্ববিদ্যালয়"),
+    ("shongbidhan", "সংবিধান"),
+    ("adhikar", "অধিকার"),
+    ("shadhinota", "স্বাধীনতা"),
+    ("mukti", "মুক্তি"),
+    ("muktijuddho", "মুক্তিযুদ্ধ"),
+    ("shohid", "শহীদ"),
+    ("bhasha", "ভাষা"),
+    ("matribhasha", "মাতৃভাষা"),
+    ("prothom", "প্রথম"),
+    ("ditio", "দ্বিতীয়"),
+    ("tritio", "তৃতীয়"),
+    ("shesh", "শেষ"),
+    ("shuru", "শুরু"),
+    ("dhonnobad", "ধন্যবাদ"),
+    ("shagotom", "স্বাগতম"),
+    ("shuvo", "শুভ"),
+    ("obhinondon", "অভিনন্দন"),
+    ("proyojon", "প্রয়োজন"),
+    ("shubidha", "সুবিধা"),
+    ("somossa", "সমস্যা"),
+    ("shomadhan", "সমাধান"),
+    ("uttor", "উত্তর"),
+    ("proshno", "প্রশ্ন"),
+    ("khobor", "খবর"),
+    ("lekha", "লেখা"),
+    ("porha", "পড়া"),
+    ("bola", "বলা"),
+    ("shona", "শোনা"),
+    ("dekha", "দেখা"),
+    ("jana", "জানা"),
+    ("bujha", "বুঝা"),
+    ("gyan", "জ্ঞান"),
+];
+
+/// Returns candidate Bengali transliterations/words for a phonetic syllable prefix.
+pub fn phonetic_candidates(prefix: &str) -> Vec<String> {
+    let p = prefix.trim();
+    if p.is_empty() {
+        return Vec::new();
+    }
+    let lower = p.to_ascii_lowercase();
+    let mut candidates = Vec::with_capacity(6);
+
+    // 1. Direct transliteration from the engine
+    let primary = phonetic_transliterate(p);
+    if !primary.is_empty() {
+        candidates.push(primary);
+    }
+
+    // 2. Exact match in vocabulary
+    for &(k, v) in BANGLA_VOCAB {
+        if k == lower && !candidates.iter().any(|c| c == v) {
+            candidates.push(v.to_string());
+        }
+    }
+
+    // 3. Prefix match in vocabulary
+    for &(k, v) in BANGLA_VOCAB {
+        if k.starts_with(&lower) && k != lower && !candidates.iter().any(|c| c == v) {
+            candidates.push(v.to_string());
+            if candidates.len() >= 5 {
+                break;
+            }
+        }
+    }
+
+    candidates.truncate(5);
+    candidates
+}
+
+// ============================================================================
+// 5. Command Handlers
+// ============================================================================
+
+/// `tools.banglaMode` — sets or toggles the active Bangla typing mode with automatic font switching.
 fn cmd_bangla_mode(s: &mut Session, v: &Value) -> CmdResult {
+    let prev = s.bangla_mode;
     if p::bool(v, "toggle").unwrap_or(false) {
         s.bangla_mode = s.bangla_mode.next();
     } else if let Some(mode_str) = p::str(v, "mode") {
@@ -877,11 +1031,34 @@ fn cmd_bangla_mode(s: &mut Session, v: &Value) -> CmdResult {
             _ => BanglaMode::Off,
         };
     }
+
+    // Automatic font switcher for frictionless typing
+    if s.bangla_mode != prev {
+        match s.bangla_mode {
+            BanglaMode::Phonetic | BanglaMode::Jatiya => {
+                let _ = s.run("format.font", &json!({"name": "Kalpurush"}));
+            }
+            BanglaMode::Ansi => {
+                let _ = s.run("format.font", &json!({"name": "SutonnyMJ"}));
+            }
+            BanglaMode::Off => {
+                let _ = s.run("format.font", &json!({"name": "Calibri"}));
+            }
+        }
+    }
+
     Ok(json!({
         "mode": s.bangla_mode.name(),
         "label": s.bangla_mode.label(),
         "badge": s.bangla_mode.badge(),
     }))
+}
+
+/// `tools.banglaCandidates` — returns top candidate suggestions for a phonetic prefix.
+fn cmd_bangla_candidates(_s: &mut Session, v: &Value) -> CmdResult {
+    let prefix = p::req_str(v, "prefix")?;
+    let candidates = phonetic_candidates(prefix);
+    Ok(json!({"prefix": prefix, "candidates": candidates}))
 }
 
 /// `tools.banglaTransliterate` — converts text using the specified engine.
@@ -962,6 +1139,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("tools.banglaConvert", "Convert Bangla (Unicode ⇄ ANSI)", "Tools › Bangla", cmd_bangla_convert)
             .params(r#"{"direction"?: "unicodeToAnsi|ansiToUnicode", "target"?: "selection|document", "font"?: string}"#),
+        CommandSpec::new("tools.banglaCandidates", "Bangla Phonetic Candidates", "Tools › Bangla", cmd_bangla_candidates)
+            .params(r#"{"prefix": string} -> {"candidates": [string]}"#)
+            .pure(),
         CommandSpec::new("tools.banglaConverter", "Bangla Converter", "Tools › Bangla", |s, _| {
             s.ui_requests.push(json!({"open": "banglaConverter"}));
             Ok(json!({"opened": true}))
@@ -973,6 +1153,19 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phonetic_candidates_and_vocabulary() {
+        let c1 = phonetic_candidates("am");
+        assert!(!c1.is_empty());
+        assert!(c1.contains(&"আমি".to_string()) || c1.contains(&"আমরা".to_string()));
+
+        let c2 = phonetic_candidates("bhalo");
+        assert_eq!(c2[0], "ভালো");
+
+        let c3 = phonetic_candidates("bangla");
+        assert_eq!(c3[0], "বাংলা");
+    }
 
     #[test]
     fn phonetic_basic_words() {
@@ -1021,18 +1214,30 @@ mod tests {
         let r1 = s.run("tools.banglaMode", &json!({"mode": "phonetic"})).unwrap();
         assert_eq!(r1["mode"], "phonetic");
         assert_eq!(s.bangla_mode, BanglaMode::Phonetic);
+        assert_eq!(s.typing_props().font.as_deref(), Some("Kalpurush"));
 
         let r2 = s.run("tools.banglaMode", &json!({"toggle": true})).unwrap();
         assert_eq!(r2["mode"], "jatiya");
         assert_eq!(s.bangla_mode, BanglaMode::Jatiya);
+        assert_eq!(s.typing_props().font.as_deref(), Some("Kalpurush"));
 
         let r3 = s.run("tools.banglaMode", &json!({"toggle": true})).unwrap();
         assert_eq!(r3["mode"], "ansi");
         assert_eq!(s.bangla_mode, BanglaMode::Ansi);
+        assert_eq!(s.typing_props().font.as_deref(), Some("SutonnyMJ"));
 
         let r4 = s.run("tools.banglaMode", &json!({"toggle": true})).unwrap();
         assert_eq!(r4["mode"], "off");
         assert_eq!(s.bangla_mode, BanglaMode::Off);
+        assert_eq!(s.typing_props().font.as_deref(), Some("Calibri"));
+    }
+
+    #[test]
+    fn bangla_candidates_command() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let res = s.run("tools.banglaCandidates", &json!({"prefix": "bhalo"})).unwrap();
+        assert!(!res["candidates"].as_array().unwrap().is_empty());
+        assert_eq!(res["candidates"][0], "ভালো");
     }
 
     #[test]

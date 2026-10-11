@@ -92,6 +92,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.compare", "Compare", "Review › Compare", compare).params(r#"{"path"?: string, "text"?: string (revised version)}"#),
         CommandSpec::new("review.combine", "Combine", "Review › Compare", compare).params(r#"{"path"?: string}"#),
         CommandSpec::new("file.accessibility", "Check Accessibility", "Review › Accessibility", accessibility).pure(),
+        CommandSpec::new("tools.auditDocument", "Audit Document Quality", "Review › Accessibility", audit_document)
+            .params(r#"{"fix"?: "tableHeaders|defaultAltText|all"} -> {"issues": [...], "readability": {...}}"#)
+            .pure(),
         CommandSpec::new("file.inspect", "Inspect Document", "File › Info", inspect_doc)
             .params(r#"{"remove"?: ["comments", "revisions", "properties", "hidden", "headers"]}"#),
         CommandSpec::new("review.restrict", "Restrict Editing", "Review › Protect", |s, v| {
@@ -1094,44 +1097,193 @@ fn word_diff(a: &Paragraph, b: &Paragraph, ins: u32, del: u32) -> Paragraph {
     p
 }
 
-fn accessibility(s: &mut Session, _: &Value) -> CmdResult {
+fn count_syllables(word: &str) -> usize {
+    let w = word.to_lowercase();
+    let mut count: usize = 0;
+    let mut prev_vowel = false;
+    for c in w.chars() {
+        let is_v = matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'y');
+        if is_v && !prev_vowel {
+            count += 1;
+        }
+        prev_vowel = is_v;
+    }
+    if w.ends_with('e') && !w.ends_with("le") && count > 1 {
+        count = count.saturating_sub(1);
+    }
+    count.max(1)
+}
+
+fn audit_document(s: &mut Session, v: &Value) -> CmdResult {
     let mut issues = Vec::new();
     let mut last_level: Option<u8> = None;
+    let fix_mode = p::str(v, "fix").unwrap_or("");
+
+    // 1. Accessibility & structure scan
+    let mut empty_headings = 0;
+    let mut unlabelled_images = 0;
+    let mut tables_without_header = 0;
+
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        let plain = p.plain_text();
+        let is_heading = s.doc.styles.resolve_para(&p.props).outline_level.is_some();
+
+        if is_heading && plain.trim().is_empty() {
+            empty_headings += 1;
+            issues.push(json!({
+                "kind": "warning",
+                "issue": "Empty heading paragraph with no text",
+                "where": path.0,
+                "fix": "Delete empty heading or enter text"
+            }));
+        }
+
         for o in &p.objects {
             if let InlineObject::Image { alt, .. } = o
                 && alt.trim().is_empty()
             {
-                issues.push(json!({"kind": "error", "issue": "Missing alternative text", "where": path.0, "fix": "Select the picture and run picture.altText"}));
+                unlabelled_images += 1;
+                issues.push(json!({
+                    "kind": "error",
+                    "issue": "Missing alternative text on picture",
+                    "where": path.0,
+                    "fix": "Run picture.altText or auditDocument {fix: \"defaultAltText\"}"
+                }));
             }
         }
         if let Some(l) = s.doc.styles.resolve_para(&p.props).outline_level {
             if let Some(prev) = last_level
                 && l > prev + 1
             {
-                issues.push(json!({"kind": "warning", "issue": format!("Heading level skipped (Heading {} after Heading {})", l + 1, prev + 1), "where": path.0}));
+                issues.push(json!({
+                    "kind": "warning",
+                    "issue": format!("Heading level skipped (Heading {} after Heading {})", l + 1, prev + 1),
+                    "where": path.0
+                }));
             }
             last_level = Some(l);
         }
         if p.runs.iter().any(|r| r.props.link.is_some()) {
-            let txt = p.plain_text().to_lowercase();
+            let txt = plain.to_lowercase();
             if txt.contains("click here") {
-                issues.push(json!({"kind": "tip", "issue": "Link text \"click here\" isn't descriptive", "where": path.0}));
+                issues.push(json!({
+                    "kind": "tip",
+                    "issue": "Link text \"click here\" isn't descriptive",
+                    "where": path.0
+                }));
             }
         }
     }
+
     for (i, b) in s.doc.body.iter().enumerate() {
         if let Block::Table(t) = &**b
             && !t.rows.first().is_some_and(|r| r.props.header)
         {
-            issues.push(json!({"kind": "warning", "issue": "Table has no header row", "where": [i], "fix": "table.repeatHeader on the first row"}));
+            tables_without_header += 1;
+            issues.push(json!({
+                "kind": "warning",
+                "issue": "Table has no header row",
+                "where": [i],
+                "fix": "Run table.repeatHeader or auditDocument {fix: \"tableHeaders\"}"
+            }));
         }
     }
+
     if s.doc.core.title.is_empty() {
-        issues.push(json!({"kind": "tip", "issue": "Document has no title", "fix": "file.properties {title}"}));
+        issues.push(json!({
+            "kind": "tip",
+            "issue": "Document has no title property",
+            "fix": "Set title in File Properties"
+        }));
     }
-    Ok(json!({"issues": issues, "ok": issues.is_empty()}))
+
+    // 2. Readability metrics
+    let body_text = s.doc.plain_text(StoryRef::Body);
+    let words: Vec<&str> = body_text.split_whitespace().collect();
+    let word_count = words.len();
+    let sentence_count = body_text.split(['.', '!', '?', '\n']).filter(|s| s.split_whitespace().count() >= 2).count().max(1);
+    let char_count = body_text.chars().filter(|c| !c.is_whitespace()).count();
+    let total_syllables: usize = words.iter().map(|w| count_syllables(w)).sum();
+
+    let words_per_sentence = word_count as f64 / sentence_count as f64;
+    let syllables_per_word = if word_count > 0 { total_syllables as f64 / word_count as f64 } else { 1.0 };
+
+    let flesch_reading_ease =
+        if word_count >= 10 { (206.835 - (1.015 * words_per_sentence) - (84.6 * syllables_per_word)).clamp(0.0, 100.0) } else { 100.0 };
+
+    let flesch_kincaid_grade =
+        if word_count >= 10 { ((0.39 * words_per_sentence) + (11.8 * syllables_per_word) - 15.59).clamp(0.0, 20.0) } else { 1.0 };
+
+    let reading_level = if flesch_reading_ease >= 90.0 {
+        "Very Easy (5th grade)"
+    } else if flesch_reading_ease >= 80.0 {
+        "Easy (6th grade)"
+    } else if flesch_reading_ease >= 70.0 {
+        "Fairly Easy (7th grade)"
+    } else if flesch_reading_ease >= 60.0 {
+        "Standard (8th-9th grade)"
+    } else if flesch_reading_ease >= 50.0 {
+        "Fairly Difficult (High School)"
+    } else if flesch_reading_ease >= 30.0 {
+        "Difficult (College Level)"
+    } else {
+        "Very Difficult (Graduate Level)"
+    };
+
+    // 3. Optional Auto-Fixes
+    let mut fixed_count = 0;
+    if fix_mode == "tableHeaders" || fix_mode == "all" {
+        for b in &mut s.doc.body {
+            let block = std::sync::Arc::make_mut(b);
+            let Block::Table(t) = block else { continue };
+            let Some(r) = t.rows.first_mut() else { continue };
+            if !r.props.header {
+                r.props.header = true;
+                fixed_count += 1;
+            }
+        }
+    }
+    if fix_mode == "defaultAltText" || fix_mode == "all" {
+        let mut img_idx = 1;
+        for path in s.doc.para_paths(StoryRef::Body) {
+            let Ok(p) = s.doc.para_mut(StoryRef::Body, &path) else { continue };
+            for o in &mut p.objects {
+                let InlineObject::Image { alt, .. } = o else { continue };
+                if alt.trim().is_empty() {
+                    *alt = format!("Figure {img_idx}");
+                    img_idx += 1;
+                    fixed_count += 1;
+                }
+            }
+        }
+    }
+
+    let _ = empty_headings;
+    let _ = unlabelled_images;
+    let _ = tables_without_header;
+
+    Ok(json!({
+        "issues": issues,
+        "ok": issues.is_empty(),
+        "fixed": fixed_count,
+        "readability": {
+            "wordCount": word_count,
+            "sentenceCount": sentence_count,
+            "characterCount": char_count,
+            "fleschReadingEase": (flesch_reading_ease * 10.0).round() / 10.0,
+            "fleschKincaidGrade": (flesch_kincaid_grade * 10.0).round() / 10.0,
+            "readingLevel": reading_level,
+        }
+    }))
+}
+
+fn accessibility(s: &mut Session, v: &Value) -> CmdResult {
+    let rep = audit_document(s, v)?;
+    if let Some(issues) = rep.get("issues") {
+        s.ui_requests.push(json!({"open": "accessibility", "issues": issues}));
+    }
+    Ok(rep)
 }
 
 fn inspect_doc(s: &mut Session, v: &Value) -> CmdResult {
@@ -1389,5 +1541,15 @@ mod tests {
         s.run("tools.customizeKeyboard", &json!({"reset": true})).unwrap();
         assert!(s.cmd_shortcuts.is_empty());
         assert!(s.custom_shortcuts.is_empty());
+    }
+
+    #[test]
+    fn audit_document_and_readability() {
+        let text = "The quick brown fox jumps over the lazy dog. Accessibility and typesetting are fundamental for writing documents.";
+        let mut s = Session::new(Document::from_text(text));
+        let r = s.run("tools.auditDocument", &json!({})).unwrap();
+        assert!(r["readability"]["wordCount"].as_u64().unwrap() >= 15);
+        assert!(r["readability"]["fleschReadingEase"].as_f64().unwrap() > 0.0);
+        assert!(!r["readability"]["readingLevel"].as_str().unwrap().is_empty());
     }
 }

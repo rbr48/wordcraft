@@ -85,6 +85,8 @@ pub struct UiState {
     pub phonetic_buffer: String,
     #[serde(skip)]
     pub phonetic_rendered_len: usize,
+    #[serde(skip)]
+    pub phonetic_candidates: Vec<String>,
 }
 
 impl Default for UiState {
@@ -108,6 +110,7 @@ impl Default for UiState {
             ai_mode: "Draft".into(),
             phonetic_buffer: String::new(),
             phonetic_rendered_len: 0,
+            phonetic_candidates: Vec::new(),
         }
     }
 }
