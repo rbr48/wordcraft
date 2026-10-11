@@ -103,33 +103,61 @@ fn is_bijoy_font(font_name: &str) -> bool {
         || lower == "classic bangla"
 }
 
-fn normalize_blocks_bijoy(blocks: &mut Vec<std::sync::Arc<wordcraft_doc::Block>>) {
+fn normalize_blocks_bijoy(blocks: &mut Vec<std::sync::Arc<wordcraft_doc::Block>>, doc_has_bijoy: bool) {
     for b in blocks {
         let block = std::sync::Arc::make_mut(b);
         match block {
             wordcraft_doc::Block::Para(p) => {
-                let mut para_has_bijoy = false;
-                for r in &mut p.runs {
+                let mut para_has_bijoy = doc_has_bijoy;
+                for r in &p.runs {
                     if let Some(f) = &r.props.font
                         && is_bijoy_font(f)
                     {
-                        r.props.font = Some("Kalpurush".into());
                         para_has_bijoy = true;
+                        break;
                     }
                 }
                 if (para_has_bijoy || p.runs.is_empty()) && !p.text.is_empty() {
-                    let converted = crate::cmd::bangla::ansi_to_unicode(&p.text);
-                    p.text = converted.clone();
-                    p.runs = vec![wordcraft_doc::Run {
-                        len: converted.len(),
-                        props: wordcraft_doc::CharProps { font: Some("Kalpurush".into()), ..Default::default() },
-                    }];
+                    let mut offset = 0;
+                    let mut new_text = String::new();
+                    let mut new_runs = Vec::new();
+
+                    for r in &p.runs {
+                        let end = (offset + r.len).min(p.text.len());
+                        let run_slice = if offset < p.text.len() && offset <= end { &p.text[offset..end] } else { "" };
+                        offset = end;
+
+                        let is_bijoy = r.props.font.as_deref().is_some_and(is_bijoy_font) || (r.props.font.is_none() && para_has_bijoy);
+
+                        if is_bijoy {
+                            let converted = crate::cmd::bangla::ansi_to_unicode(run_slice);
+                            let mut props = r.props.clone();
+                            props.font = Some("Kalpurush".into());
+                            new_runs.push(wordcraft_doc::Run { len: converted.len(), props });
+                            new_text.push_str(&converted);
+                        } else {
+                            new_runs.push(r.clone());
+                            new_text.push_str(run_slice);
+                        }
+                    }
+
+                    if new_runs.is_empty() {
+                        let converted = crate::cmd::bangla::ansi_to_unicode(&p.text);
+                        new_runs.push(wordcraft_doc::Run {
+                            len: converted.len(),
+                            props: wordcraft_doc::CharProps { font: Some("Kalpurush".into()), ..Default::default() },
+                        });
+                        new_text = converted;
+                    }
+
+                    p.text = new_text;
+                    p.runs = new_runs;
                 }
             }
             wordcraft_doc::Block::Table(t) => {
                 for row in &mut t.rows {
                     for cell in &mut row.cells {
-                        normalize_blocks_bijoy(&mut cell.blocks);
+                        normalize_blocks_bijoy(&mut cell.blocks, doc_has_bijoy);
                     }
                 }
             }
@@ -139,7 +167,8 @@ fn normalize_blocks_bijoy(blocks: &mut Vec<std::sync::Arc<wordcraft_doc::Block>>
 
 /// Automatically detects legacy Bijoy/ANSI fonts in the document, transparently
 /// converts raw ASCII glyph keystrokes to standard Bengali Unicode, and assigns
-/// a clean OpenType Unicode font ("Kalpurush").
+/// a clean OpenType Unicode font ("Kalpurush") while strictly preserving character
+/// sizing, bold styling, and document colors.
 pub fn normalize_bijoy_fonts(doc: &mut Document) {
     let mut has_bijoy = false;
 
@@ -150,7 +179,7 @@ pub fn normalize_bijoy_fonts(doc: &mut Document) {
         has_bijoy = true;
     }
 
-    // Check paragraphs
+    // Check paragraphs in body
     if !has_bijoy {
         for b in &doc.body {
             if let wordcraft_doc::Block::Para(p) = &**b {
@@ -169,17 +198,71 @@ pub fn normalize_bijoy_fonts(doc: &mut Document) {
         }
     }
 
+    // Check parts (headers, footers, text boxes)
+    if !has_bijoy {
+        for part in doc.parts.values() {
+            for b in &part.blocks {
+                if let wordcraft_doc::Block::Para(p) = &**b {
+                    for r in &p.runs {
+                        if let Some(f) = &r.props.font
+                            && is_bijoy_font(f)
+                        {
+                            has_bijoy = true;
+                            break;
+                        }
+                    }
+                }
+                if has_bijoy {
+                    break;
+                }
+            }
+            if has_bijoy {
+                break;
+            }
+        }
+    }
+
     if !has_bijoy {
         return;
     }
 
-    // Decode all blocks recursively
-    normalize_blocks_bijoy(&mut doc.body);
+    // Decode all body blocks recursively
+    normalize_blocks_bijoy(&mut doc.body, has_bijoy);
+
+    // Decode all secondary parts (headers, footers, text boxes)
+    for part in doc.parts.values_mut() {
+        normalize_blocks_bijoy(&mut part.blocks, has_bijoy);
+    }
 
     // Update style sheet default font if it was Bijoy
     if let Some(f) = &doc.styles.default_chr.font
         && is_bijoy_font(f)
     {
         doc.styles.default_chr.font = Some("Kalpurush".into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::{Block, CharProps, Document, Paragraph, Rgb, Run, TextColor};
+
+    #[test]
+    fn normalize_bijoy_fonts_preserves_formatting_properties() {
+        let text = "evsjv‡`k K…wl e¨vsK".to_string();
+        let green = TextColor::Rgb(Rgb(0, 102, 0));
+        let props = CharProps { font: Some("SutonnyMJ".into()), size: Some(26.0), bold: Some(true), color: Some(green), ..Default::default() };
+        let p = Paragraph { text: text.clone(), runs: vec![Run { len: text.len(), props }], ..Default::default() };
+        let mut doc = Document { body: vec![std::sync::Arc::new(Block::Para(p))], ..Default::default() };
+
+        normalize_bijoy_fonts(&mut doc);
+
+        let p_out = doc.body[0].as_para().unwrap();
+        assert_eq!(p_out.text, "বাংলাদেশ কৃষি ব্যাংক");
+        assert_eq!(p_out.runs.len(), 1);
+        assert_eq!(p_out.runs[0].props.font.as_deref(), Some("Kalpurush"));
+        assert_eq!(p_out.runs[0].props.size, Some(26.0));
+        assert_eq!(p_out.runs[0].props.bold, Some(true));
+        assert_eq!(p_out.runs[0].props.color, Some(green));
     }
 }

@@ -48,93 +48,146 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .exact_size(30.0)
         .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
+            let avail_w = ui.available_width();
+            let is_narrow = avail_w < 980.0;
+            let is_tight = avail_w < 820.0;
+
+            // Reserve space for right-hand buttons
+            let right_w = if is_tight {
+                130.0
+            } else if is_narrow {
+                180.0
+            } else {
+                320.0
+            };
+            let max_tab_x = (avail_w - right_w).max(180.0);
+
             ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
+                ui.spacing_mut().item_spacing = vec2(if is_narrow { 1.0 } else { 2.0 }, 0.0);
                 let mut tabs: Vec<&str> = TABS.to_vec();
                 for ct in contextual_tabs(&app.session) {
                     if !tabs.contains(&ct) {
                         tabs.push(ct);
                     }
                 }
-                for tab in tabs {
-                    let contextual = tab.starts_with("Table ") || tab == "Picture Format";
+
+                let tab_pad = if is_tight {
+                    8.0
+                } else if is_narrow {
+                    10.0
+                } else {
+                    18.0
+                };
+                let mut overflow_tabs: Vec<&str> = Vec::new();
+                let mut current_x = 0.0;
+
+                for (idx, tab) in tabs.iter().enumerate() {
                     let shown = tl!(tab);
-                    let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
+                    let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + tab_pad;
+                    if idx > 2 && current_x + w + 36.0 > max_tab_x {
+                        overflow_tabs.extend_from_slice(&tabs[idx..]);
+                        break;
+                    }
+                    current_x += w + 2.0;
+
+                    let contextual = tab.starts_with("Table ") || *tab == "Picture Format";
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
-                    let active = app.ui.tab == tab && !app.ui.backstage;
+                    let active = app.ui.tab == *tab && !app.ui.backstage;
                     if resp.hovered() && !active {
                         ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                     }
                     let color = if contextual || active { t.accent_text } else { t.text };
                     ui.painter().text(r.center(), Align2::CENTER_CENTER, shown, if active { semibold(12.5) } else { medium(12.5) }, color);
                     if active {
-                        let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
+                        let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 10.0, 3.0));
                         ui.painter().rect_filled(u, 2.0, t.accent);
                     }
                     if resp.clicked() {
                         let _ = app.run("ui.tab", json!({"tab": tab}));
                     }
-                    if resp.double_clicked() && tab != "File" {
+                    if resp.double_clicked() && *tab != "File" {
                         let _ = app.run("ui.collapseRibbon", json!({}));
                     }
                 }
+
+                if !overflow_tabs.is_empty() {
+                    ui.menu_button(egui::RichText::new("⋯ ▾").font(semibold(12.5)), |ui| {
+                        for tab in overflow_tabs {
+                            let shown = tl!(tab);
+                            let active = app.ui.tab == tab && !app.ui.backstage;
+                            if ui.selectable_label(active, shown).clicked() {
+                                let _ = app.run("ui.tab", json!({"tab": tab}));
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Share, Editing mode, Comments.
+                    // Right utilities: Share, Editing, Comments, Copilot
                     let share = tl!("Share");
-                    let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
-                    let (r, resp) = ui.allocate_exact_size(vec2((share_w + 36.0).max(74.0), 24.0), Sense::click());
+                    let share_w =
+                        if is_narrow { 0.0 } else { ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x) };
+                    let btn_w = if is_narrow { 32.0 } else { (share_w + 36.0).max(74.0) };
+                    let (r, resp) = ui.allocate_exact_size(vec2(btn_w, 24.0), Sense::click());
                     ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
+                    let icon_center = if is_narrow { r.center() } else { pos2(r.min.x + 14.0, r.center().y) };
                     icons::paint(
                         ui.painter(),
-                        Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(14.0, 14.0)),
+                        Rect::from_center_size(icon_center, vec2(14.0, 14.0)),
                         "share",
                         egui::Color32::WHITE,
                         egui::Color32::WHITE,
                     );
-                    ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), egui::Color32::WHITE);
+                    if !is_narrow {
+                        ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), egui::Color32::WHITE);
+                    }
                     if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
                         let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                     }
-                    ui.add_space(6.0);
-                    let track = app.session.doc.settings.track_changes;
-                    ui.menu_button(
-                        egui::RichText::new(format!("✎ {} ▾", if track { tl!("Reviewing") } else { tl!("Editing") })).font(regular(12.0)),
-                        |ui| {
-                            if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
-                                let _ = app.run("review.trackChanges", json!({"value": false}));
-                                ui.close();
-                            }
-                            if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
-                                let _ = app.run("review.trackChanges", json!({"value": true}));
-                                ui.close();
-                            }
-                        },
-                    );
                     ui.add_space(4.0);
-                    if ui.button(egui::RichText::new(format!("💬 {}", tl!("Comments"))).font(regular(12.0))).clicked() {
+                    let track = app.session.doc.settings.track_changes;
+                    let edit_txt = if is_tight {
+                        "✎ ▾".to_string()
+                    } else if is_narrow {
+                        format!("✎ {} ▾", if track { tl!("Rev") } else { tl!("Edit") })
+                    } else {
+                        format!("✎ {} ▾", if track { tl!("Reviewing") } else { tl!("Editing") })
+                    };
+                    ui.menu_button(egui::RichText::new(edit_txt).font(regular(12.0)), |ui| {
+                        if ui.selectable_label(!track, tl!("Editing — edit the document directly")).clicked() {
+                            let _ = app.run("review.trackChanges", json!({"value": false}));
+                            ui.close();
+                        }
+                        if ui.selectable_label(track, tl!("Reviewing — edits become suggestions")).clicked() {
+                            let _ = app.run("review.trackChanges", json!({"value": true}));
+                            ui.close();
+                        }
+                    });
+                    ui.add_space(3.0);
+                    let comments_txt = if is_narrow { "💬".to_string() } else { format!("💬 {}", tl!("Comments")) };
+                    if ui.button(egui::RichText::new(comments_txt).font(regular(12.0))).clicked() {
                         let _ = app.run("view.commentsPane", json!({}));
                     }
-                    ui.add_space(4.0);
+                    ui.add_space(3.0);
                     let copilot_lbl = tl!("Copilot");
                     let is_open = app.ui.ai_pane;
-                    let (cr, cresp) = ui.allocate_exact_size(vec2(74.0, 24.0), Sense::click());
+                    let cp_w = if is_narrow { 30.0 } else { 74.0 };
+                    let (cr, cresp) = ui.allocate_exact_size(vec2(cp_w, 24.0), Sense::click());
                     if cresp.hovered() || is_open {
                         ui.painter().rect_filled(cr, 4.0, if is_open { t.selection } else { t.hover });
                     }
-                    icons::paint(
-                        ui.painter(),
-                        Rect::from_center_size(pos2(cr.min.x + 13.0, cr.center().y), vec2(14.0, 14.0)),
-                        "copilot",
-                        t.accent,
-                        t.text,
-                    );
-                    ui.painter().text(
-                        pos2(cr.min.x + 24.0, cr.center().y),
-                        Align2::LEFT_CENTER,
-                        copilot_lbl,
-                        if is_open { semibold(12.0) } else { regular(12.0) },
-                        if is_open { t.accent_text } else { t.text },
-                    );
+                    let cp_icon_center = if is_narrow { cr.center() } else { pos2(cr.min.x + 13.0, cr.center().y) };
+                    icons::paint(ui.painter(), Rect::from_center_size(cp_icon_center, vec2(14.0, 14.0)), "copilot", t.accent, t.text);
+                    if !is_narrow {
+                        ui.painter().text(
+                            pos2(cr.min.x + 24.0, cr.center().y),
+                            Align2::LEFT_CENTER,
+                            copilot_lbl,
+                            if is_open { semibold(12.0) } else { regular(12.0) },
+                            if is_open { t.accent_text } else { t.text },
+                        );
+                    }
                     if cresp.on_hover_text(tl!("Copilot / AI Assistant")).clicked() {
                         let _ = app.run("ui.copilot", json!({}));
                     }

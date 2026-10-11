@@ -656,76 +656,100 @@ pub fn unicode_to_ansi(text: &str) -> String {
     final_out
 }
 
-/// Converts ANSI (SutonnyMJ encoding) text to Unicode Bengali.
+fn is_bn_consonant(c: char) -> bool {
+    ('ক'..='হ').contains(&c) || ('ড়'..='য়').contains(&c) || c == 'ৎ'
+}
+
+fn is_bn_vowel_sign(c: char) -> bool {
+    matches!(c, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ' | '্' | 'ং' | 'ঃ' | 'ঁ')
+}
+
+fn parse_bn_cluster(chars: &[char], start: usize) -> Option<usize> {
+    if start >= chars.len() || !is_bn_consonant(chars[start]) {
+        return None;
+    }
+    let mut end = start + 1;
+    while end < chars.len() {
+        if chars[end] == '্' && end + 1 < chars.len() && is_bn_consonant(chars[end + 1]) {
+            end += 2;
+        } else {
+            break;
+        }
+    }
+    Some(end)
+}
+
+/// Converts ANSI (SutonnyMJ encoding) text to Unicode Bengali with full ligature,
+/// diacritic reordering, and cluster-aware vowel shaping.
 pub fn ansi_to_unicode(text: &str) -> String {
-    let mut out = String::new();
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
+    // 1. Pre-normalize special symbols and Bijoy shortcuts
+    let mut s = text
+        .replace("...", "„")
+        .replace('…', "„")
+        .replace("K…", "কৃ")
+        .replace("K...", "কৃ")
+        .replace("K„", "কৃ")
+        .replace("M…", "গৃ")
+        .replace("M...", "গৃ")
+        .replace("M„", "গৃ")
+        .replace("d…", "দৃ")
+        .replace("d...", "দৃ")
+        .replace("d„", "দৃ")
+        .replace("e…", "বৃ")
+        .replace("e...", "বৃ")
+        .replace("e„", "বৃ")
+        .replace("k…", "শৃ")
+        .replace("m…", "সৃ")
+        .replace("n…", "হৃ")
+        .replace('™', "ঃ")
+        .replace('|', "।")
+        .replace('‡', "†")
+        .replace('‹', "w")
+        .replace("f‚", "ভূ")
+        .replace("f~", "ভূ")
+        .replace("f„", "ভূ")
+        .replace("TÂ", "ঞা")
+        .replace("Tv", "ঞা")
+        .replace("wLª™", "খ্রিঃ")
+        .replace("wLªt", "খ্রিঃ")
+        .replace("wLª", "খ্রি");
 
-    // 1. Re-position pre-kars:
-    // 'w' + C -> C + ি
-    // '†' + C + 'v' -> C + ো
-    // '†' + C + 'Š' -> C + ৌ
-    // '†' + C -> C + ে
-    // '‰' + C -> C + ৈ
-    while i < len {
-        let ch = chars[i];
-        if ch == 'w' && i + 1 < len {
-            let c = chars[i + 1];
-            out.push(c);
-            out.push('ি');
-            i += 2;
-            continue;
-        } else if ch == '†' && i + 1 < len {
-            let c = chars[i + 1];
-            if i + 2 < len && chars[i + 2] == 'v' {
-                out.push(c);
-                out.push('ো');
-                i += 3;
-                continue;
-            } else if i + 2 < len && chars[i + 2] == 'Š' {
-                out.push(c);
-                out.push('ৌ');
-                i += 3;
-                continue;
-            } else {
-                out.push(c);
-                out.push('ে');
-                i += 2;
-                continue;
-            }
-        } else if ch == '‰' && i + 1 < len {
-            let c = chars[i + 1];
-            out.push(c);
-            out.push('ৈ');
-            i += 2;
-            continue;
-        }
-        out.push(ch);
-        i += 1;
-    }
-
-    // 2. Re-position Reph:
-    // C + '©' -> র্ + C
-    let mut temp = String::new();
-    let chars2: Vec<char> = out.chars().collect();
-    let len2 = chars2.len();
-    i = 0;
-
-    while i < len2 {
-        if i + 1 < len2 && chars2[i + 1] == '©' {
-            temp.push_str("র্");
-            temp.push(chars2[i]);
-            i += 2;
-            continue;
-        }
-        temp.push(chars2[i]);
-        i += 1;
-    }
-
-    // 3. Replace Conjunct Glyphs
+    // 2. Replace Conjunct Glyphs (longest matches first)
     let conjuncts: &[(&str, &str)] = &[
+        ("w¯’", "স্থি"),
+        ("†cÖ", "প্রে"),
+        ("†MÖ", "গ্রে"),
+        ("†¯Í", "স্তে"),
+        ("w¤ú", "ম্পি"),
+        ("wcÖ", "প্রি"),
+        ("wMÖ", "গ্রি"),
+        ("w¯Í", "স্তি"),
+        ("wÎ", "ত্রি"),
+        ("w¶", "ক্ষি"),
+        ("wÁ", "জ্ঞি"),
+        ("wó", "ষ্টি"),
+        ("w›", "ন্দি"),
+        ("wšÍ", "ন্তি"),
+        ("wš", "ন্তি"),
+        ("wµ", "ক্রি"),
+        ("cÖ", "প্র"),
+        ("MÖ", "গ্র"),
+        ("eª", "ব্র"),
+        ("eÖ", "ব্র"),
+        ("¯Í", "স্ত"),
+        ("¯’", "স্থ"),
+        ("¯ú", "স্প"),
+        ("¯^", "স্ব"),
+        ("¯§", "স্ম"),
+        ("mœ", "স্ন"),
+        ("bœ", "ন্ন"),
+        ("¤ú", "ম্প"),
+        ("¤^", "ম্ব"),
+        ("¤¢", "ম্ভ"),
+        ("¤§", "ম্ম"),
+        ("šÍ", "ন্ত"),
+        ("š‘", "ন্তু"),
+        ("š", "ন্ত"),
         ("¶", "ক্ষ"),
         ("Á", "জ্ঞ"),
         ("Î", "ত্র"),
@@ -743,29 +767,15 @@ pub fn ansi_to_unicode(text: &str) -> String {
         ("Ë", "ত্ত"),
         ("Ì", "ত্থ"),
         ("Í", "ত্ন"),
-        ("Î", "ত্ম"),
         ("›", "ন্দ"),
         ("Ü", "ন্ধ"),
-        ("bœ", "ন্ন"),
-        ("¤ú", "ম্প"),
-        ("¤^", "ম্ব"),
-        ("¤¢", "ম্ভ"),
-        ("¤§", "ম্ম"),
         ("ó", "ষ্ট"),
         ("ô", "ষ্ঠ"),
         ("õ", "ষ্ণ"),
         ("ö", "ষ্প"),
         ("÷", "ষ্ফ"),
-        ("¯Í", "স্ত"),
-        ("¯’", "স্থ"),
-        ("mœ", "স্ন"),
-        ("¯ú", "স্প"),
         ("ù", "স্ফ"),
-        ("¯^", "স্ব"),
-        ("¯§", "স্ম"),
         ("µ", "ক্র"),
-        ("cÖ", "প্র"),
-        ("MÖ", "গ্র"),
         ("å", "ভ্র"),
         ("×", "দ্ধ"),
         ("Ø", "দ্ব"),
@@ -773,24 +783,23 @@ pub fn ansi_to_unicode(text: &str) -> String {
         ("þ", "হ্ন"),
         ("ÿ", "হ্ম"),
         ("ü", "হৃ"),
+        ("í", "ল্ক"),
+        ("î", "ল্গ"),
+        ("ï", "ল্ট"),
+        ("ð", "ল্ড"),
+        ("ñ", "ল্প"),
+        ("ò", "ল্ফ"),
     ];
 
     for &(a, u) in conjuncts {
-        temp = temp.replace(a, u);
+        s = s.replace(a, u);
     }
 
-    // 4. Map Remaining Basic Characters
-    let mut final_out = String::with_capacity(temp.len());
-    let mut char_iter = temp.chars().peekable();
-
-    while let Some(c) = char_iter.next() {
-        if c == 'A' && char_iter.peek() == Some(&'v') {
-            char_iter.next();
-            final_out.push('আ');
-            continue;
-        }
-
-        let mapped = match c {
+    // 3. Map Independent Vowels and Consonants to Bengali Unicode
+    s = s.replace("Av", "আ");
+    let mut mapped_chars = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let m = match ch {
             'A' => "অ",
             'B' => "ই",
             'C' => "ঈ",
@@ -837,24 +846,132 @@ pub fn ansi_to_unicode(text: &str) -> String {
             'p' => "ঢ়",
             'q' => "য়",
             'r' => "ৎ",
-            's' => "ং",
-            't' => "ঃ",
-            'u' => "ঁ",
+            '¨' => "্য",
+            'Ö' | 'ª' => "্র",
+            _ => "",
+        };
+        if !m.is_empty() {
+            mapped_chars.push_str(m);
+        } else {
+            mapped_chars.push(ch);
+        }
+    }
+
+    // 4. Cluster-Aware Pre-kar & Split-Vowel Reordering
+    let in_chars: Vec<char> = mapped_chars.chars().collect();
+    let mut out = String::with_capacity(in_chars.len());
+    let mut i = 0;
+
+    while i < in_chars.len() {
+        let ch = in_chars[i];
+        match ch {
+            'w' => {
+                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1) {
+                    for &c in &in_chars[i + 1..c_end] {
+                        out.push(c);
+                    }
+                    out.push('ি');
+                    i = c_end;
+                    continue;
+                }
+            }
+            '†' => {
+                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1) {
+                    let cluster = &in_chars[i + 1..c_end];
+                    if c_end < in_chars.len() && (in_chars[c_end] == 'v' || in_chars[c_end] == 'া') {
+                        for &c in cluster {
+                            out.push(c);
+                        }
+                        out.push('ো');
+                        i = c_end + 1;
+                        continue;
+                    } else if c_end < in_chars.len() && (in_chars[c_end] == 'Š' || in_chars[c_end] == 'ৌ') {
+                        for &c in cluster {
+                            out.push(c);
+                        }
+                        out.push('ৌ');
+                        i = c_end + 1;
+                        continue;
+                    } else {
+                        for &c in cluster {
+                            out.push(c);
+                        }
+                        out.push('ে');
+                        i = c_end;
+                        continue;
+                    }
+                }
+            }
+            '‰' => {
+                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1) {
+                    for &c in &in_chars[i + 1..c_end] {
+                        out.push(c);
+                    }
+                    out.push('ৈ');
+                    i = c_end;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+
+        out.push(ch);
+        i += 1;
+    }
+
+    // 5. Reph (©) Reordering: C + © -> র্ + C
+    let rchars: Vec<char> = out.chars().collect();
+    let mut reph_out = String::with_capacity(rchars.len());
+    let mut j = 0;
+
+    while j < rchars.len() {
+        if let Some(c_end) = parse_bn_cluster(&rchars, j) {
+            let mut v_end = c_end;
+            if v_end < rchars.len() && is_bn_vowel_sign(rchars[v_end]) {
+                v_end += 1;
+            }
+            if v_end < rchars.len() && rchars[v_end] == '©' {
+                reph_out.push_str("র্");
+                for &c in &rchars[j..v_end] {
+                    reph_out.push(c);
+                }
+                j = v_end + 1;
+                continue;
+            }
+        }
+        reph_out.push(rchars[j]);
+        j += 1;
+    }
+
+    // 6. Map Post-Diacritics, Punctuation, and Digits
+    let mut final_out = String::with_capacity(reph_out.len());
+    for ch in reph_out.chars() {
+        let mapped = match ch {
             'v' => "া",
             'x' => "ী",
             'y' => "ু",
             '~' => "ূ",
             '„' => "ৃ",
             '&' => "্",
-            'Ö' => "্র",
-            '¨' => "্য",
+            's' => "ং",
+            't' => "ঃ",
+            'u' => "ঁ",
+            '0' => "০",
+            '1' => "১",
+            '2' => "২",
+            '3' => "৩",
+            '4' => "৪",
+            '5' => "৫",
+            '6' => "৬",
+            '7' => "৭",
+            '8' => "৮",
+            '9' => "৯",
             _ => "",
         };
-
         if !mapped.is_empty() {
             final_out.push_str(mapped);
         } else {
-            final_out.push(c);
+            final_out.push(ch);
         }
     }
 
@@ -1277,5 +1394,31 @@ mod tests {
         assert_eq!(r["opened"], true);
         assert_eq!(s.ui_requests.len(), 1);
         assert_eq!(s.ui_requests[0]["open"], "banglaConverter");
+    }
+
+    #[test]
+    fn bijoy_document_ligatures_and_diacritics() {
+        // 1. Krishi Bank title with ellipsis/ri-kar
+        assert_eq!(ansi_to_unicode("evsjv‡`k K…wl e¨vsK"), "বাংলাদেশ কৃষি ব্যাংক");
+        assert_eq!(ansi_to_unicode("evsjv‡`k K...wl e¨vsK"), "বাংলাদেশ কৃষি ব্যাংক");
+
+        // 2. Dari mapping
+        assert_eq!(ansi_to_unicode("†cÖiY cÖm‡½|"), "প্রেরণ প্রসঙ্গে।");
+
+        // 3. Computer / conjunct with i-kar
+        assert_eq!(ansi_to_unicode("Kw¤úDUvi"), "কম্পিউটার");
+
+        // 4. O-kar split vowel combination
+        assert_eq!(ansi_to_unicode("g‡nv`q"), "মহোদয়");
+
+        // 5. Date with bisarga / TM
+        assert_eq!(ansi_to_unicode("wLª™"), "খ্রিঃ");
+
+        // 6. Address with bhu / nya
+        assert_eq!(ansi_to_unicode("`vMbf‚Tv"), "দাগনভূঞা");
+
+        // 7. Shironame
+        let shiro_ansi = unicode_to_ansi("শিরোনামে");
+        assert_eq!(ansi_to_unicode(&shiro_ansi), "শিরোনামে");
     }
 }

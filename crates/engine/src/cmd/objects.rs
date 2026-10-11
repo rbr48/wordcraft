@@ -330,7 +330,7 @@ pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
         let Some(p) = s.doc.para(story, &path) else { continue };
         for off in p.object_offsets() {
             let inside = if a == b {
-                off + wordcraft_doc::para::OBJ.len_utf8() == a.off || off == a.off
+                off + wordcraft_doc::para::OBJ.len_utf8() == a.off
             } else {
                 (path != a.path || off >= a.off) && (path != b.path || off < b.off)
             };
