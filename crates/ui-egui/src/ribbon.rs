@@ -219,6 +219,88 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if cresp.on_hover_text(tl!("Copilot / AI Assistant")).clicked() {
                         let _ = app.run("ui.copilot", json!({}));
                     }
+                    ui.add_space(3.0);
+
+                    // Converter button to the immediate left of Copilot
+                    let conv_lbl = tl!("Converter");
+                    let conv_w = if is_narrow { 26.0 } else { 76.0 };
+                    let (convr, conv_resp) = ui.allocate_exact_size(vec2(conv_w, 24.0), Sense::click());
+                    if conv_resp.hovered() {
+                        ui.painter().rect_filled(convr, 4.0, t.hover);
+                    }
+                    let conv_icon_center = if is_narrow { convr.center() } else { pos2(convr.min.x + 12.0, convr.center().y) };
+                    icons::paint(ui.painter(), Rect::from_center_size(conv_icon_center, vec2(13.0, 13.0)), "banglaConverter", t.icon, t.text);
+                    if !is_narrow {
+                        ui.painter().text(pos2(convr.min.x + 23.0, convr.center().y), Align2::LEFT_CENTER, conv_lbl, regular(11.5), t.text);
+                    }
+                    if conv_resp.on_hover_text(tl!("Bangla Script Converter (Unicode / Bijoy / ANSI)")).clicked() {
+                        let _ = app.run("tools.banglaConverter", json!({}));
+                    }
+                    ui.add_space(2.0);
+
+                    // Bangla Input Mode dropdown
+                    let is_bangla_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;
+                    let b_label = if is_bangla_on {
+                        match app.session.bangla_mode {
+                            wordcraft_engine::cmd::bangla::BanglaMode::Phonetic => "Bangla (Phonetic) ▾",
+                            wordcraft_engine::cmd::bangla::BanglaMode::Jatiya => "Bangla (Jatiya) ▾",
+                            wordcraft_engine::cmd::bangla::BanglaMode::Ansi => "Bangla (ANSI) ▾",
+                            _ => "Bangla ▾",
+                        }
+                    } else {
+                        "English ▾"
+                    };
+                    ui.menu_button(
+                        egui::RichText::new(b_label).font(if is_bangla_on { semibold(11.5) } else { regular(11.5) }).color(if is_bangla_on {
+                            t.accent_text
+                        } else {
+                            t.text
+                        }),
+                        |ui| {
+                            if ui
+                                .selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Off, "English (F12)")
+                                .clicked()
+                            {
+                                let _ = app.run("tools.banglaMode", json!({"mode": "off"}));
+                                ui.close();
+                            }
+                            if ui
+                                .selectable_label(
+                                    app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic,
+                                    "Bangla Phonetic (Avro)",
+                                )
+                                .clicked()
+                            {
+                                let _ = app.run("tools.banglaMode", json!({"mode": "phonetic"}));
+                                ui.close();
+                            }
+                            if ui
+                                .selectable_label(
+                                    app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Jatiya,
+                                    "Bangla Jatiya (National)",
+                                )
+                                .clicked()
+                            {
+                                let _ = app.run("tools.banglaMode", json!({"mode": "jatiya"}));
+                                ui.close();
+                            }
+                            if ui
+                                .selectable_label(
+                                    app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Ansi,
+                                    "Bangla ANSI (SutonnyMJ)",
+                                )
+                                .clicked()
+                            {
+                                let _ = app.run("tools.banglaMode", json!({"mode": "ansi"}));
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Bangla Converter…").clicked() {
+                                let _ = app.run("tools.banglaConverter", json!({}));
+                                ui.close();
+                            }
+                        },
+                    );
                 });
             });
         });
@@ -579,27 +661,6 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "AI", None, app, |ui, app| {
         big(ui, app, "copilot", "Copilot", "ui.copilot", json!({}), app.ui.ai_pane);
-    });
-    group(ui, "Bangla", None, app, |ui, app| {
-        let is_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;
-        menu_button(ui, app, "bangla", Some(app.session.bangla_mode.label()), "Bangla Input Mode (F12)", is_on, |ui, app| {
-            if ui.selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Off, "English (Off)").clicked() {
-                let _ = app.run("tools.banglaMode", json!({"mode": "off"}));
-            }
-            if ui.selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic, "বাং ফনেটিক (Unicode)").clicked()
-            {
-                let _ = app.run("tools.banglaMode", json!({"mode": "phonetic"}));
-            }
-            if ui.selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Jatiya, "বাং জাতীয় (Unicode)").clicked()
-            {
-                let _ = app.run("tools.banglaMode", json!({"mode": "jatiya"}));
-            }
-            if ui.selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Ansi, "বাং ANSI (SutonnyMJ)").clicked()
-            {
-                let _ = app.run("tools.banglaMode", json!({"mode": "ansi"}));
-            }
-        });
-        small(ui, app, "banglaConverter", Some("Converter"), "Bangla Converter", "tools.banglaConverter", json!({}), false);
     });
 }
 

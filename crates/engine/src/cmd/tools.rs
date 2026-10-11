@@ -509,30 +509,92 @@ fn copilot(s: &mut Session, v: &Value) -> CmdResult {
         return ai_autocomplete(s, v);
     }
 
-    let (title, content) = match action {
-        "rewrite" => {
-            let src = if !prompt.is_empty() { prompt.to_string() } else { s.selected_text() };
-            ("Rewrite".to_string(), rewrite_text(&src, tone))
+    let api_key = p::str(v, "api_key").unwrap_or("");
+    let provider = p::str(v, "provider").unwrap_or("OpenRouter");
+    let model = p::str(v, "model").unwrap_or("");
+    let base_url = p::str(v, "base_url");
+
+    let (title, content) = if !api_key.trim().is_empty() {
+        let (sys_prompt, user_prompt, title_name) = match action {
+            "rewrite" => {
+                let src = if !prompt.is_empty() { prompt.to_string() } else { s.selected_text() };
+                (
+                    format!("You are an expert editing assistant. Rewrite the following text with a {tone} tone. Output ONLY the rewritten text without conversational commentary."),
+                    src,
+                    "Rewrite",
+                )
+            }
+            "summarize" => {
+                let src = if !prompt.is_empty() {
+                    prompt.to_string()
+                } else {
+                    let sel = s.selected_text();
+                    if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
+                };
+                (
+                    format!("You are an executive summarizer. Summarize the text using {tone} format. Output concise, structured, professional text."),
+                    src,
+                    "Summary",
+                )
+            }
+            "proofread" => {
+                let src = if !prompt.is_empty() {
+                    prompt.to_string()
+                } else {
+                    let sel = s.selected_text();
+                    if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
+                };
+                (
+                    "You are a professional proofreader. Correct all spelling, grammar, punctuation, and flow issues. Output the polished corrected text.".into(),
+                    src,
+                    "Proofreading",
+                )
+            }
+            "ask" => {
+                let doc_txt = s.doc.plain_text(StoryRef::Body);
+                (
+                    "You are an intelligent document analyst. Answer the user's question accurately using the provided document context.".into(),
+                    format!("Document text:\n{}\n\nUser question: {}", doc_txt, prompt),
+                    "Ask Document",
+                )
+            }
+            _ => (
+                "You are an expert document author. Draft articulate, ready-to-use document text following the prompt. Output clean prose without meta-commentary.".into(),
+                prompt.to_string(),
+                "Draft",
+            ),
+        };
+
+        match crate::ai_client::query_llm_api(provider, model, api_key, base_url, &sys_prompt, &user_prompt) {
+            Ok(generated) => (title_name.to_string(), generated),
+            Err(e) => return Err(CmdError::Failed(format!("AI Provider ({provider}) error: {e}"))),
         }
-        "summarize" => {
-            let src = if !prompt.is_empty() {
-                prompt.to_string()
-            } else {
-                let sel = s.selected_text();
-                if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
-            };
-            ("Summary".to_string(), summarize_text_mode(&src, tone))
+    } else {
+        match action {
+            "rewrite" => {
+                let src = if !prompt.is_empty() { prompt.to_string() } else { s.selected_text() };
+                ("Rewrite".to_string(), rewrite_text(&src, tone))
+            }
+            "summarize" => {
+                let src = if !prompt.is_empty() {
+                    prompt.to_string()
+                } else {
+                    let sel = s.selected_text();
+                    if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
+                };
+                ("Summary".to_string(), summarize_text_mode(&src, tone))
+            }
+            "proofread" => {
+                let src = if !prompt.is_empty() {
+                    prompt.to_string()
+                } else {
+                    let sel = s.selected_text();
+                    if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
+                };
+                ("Proofreading".to_string(), proofread_text(&src))
+            }
+            _ => ("Draft".to_string(), draft_content(prompt)),
         }
-        "proofread" => {
-            let src = if !prompt.is_empty() {
-                prompt.to_string()
-            } else {
-                let sel = s.selected_text();
-                if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
-            };
-            ("Proofreading".to_string(), proofread_text(&src))
-        }
-        _ => ("Draft".to_string(), draft_content(prompt)),
     };
 
     if replace && !content.is_empty() {

@@ -141,6 +141,20 @@ pub struct UiState {
     pub phonetic_rendered_len: usize,
     #[serde(skip)]
     pub phonetic_candidates: Vec<String>,
+    /// AI Provider: "OpenRouter", "DeepSeek", "Gemini", "Claude", or "Custom".
+    pub ai_provider: String,
+    /// Selected model ID (e.g. "deepseek/deepseek-chat", "gemini-2.0-flash", "claude-3-5-sonnet-20241022").
+    pub ai_model: String,
+    /// API key for the AI provider (persisted in user profile settings).
+    pub ai_api_key: String,
+    /// Optional custom base URL for OpenAI-compatible endpoints.
+    pub ai_base_url: String,
+    /// Whether the AI Settings modal/popover is currently open.
+    #[serde(skip)]
+    pub ai_settings_open: bool,
+    /// Transient status or error message from AI execution.
+    #[serde(skip)]
+    pub ai_status: String,
 }
 
 impl Default for UiState {
@@ -173,6 +187,12 @@ impl Default for UiState {
             phonetic_buffer: String::new(),
             phonetic_rendered_len: 0,
             phonetic_candidates: Vec::new(),
+            ai_provider: "OpenRouter".into(),
+            ai_model: "deepseek/deepseek-chat".into(),
+            ai_api_key: String::new(),
+            ai_base_url: String::new(),
+            ai_settings_open: false,
+            ai_status: String::new(),
         }
     }
 }

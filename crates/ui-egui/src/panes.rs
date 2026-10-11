@@ -649,6 +649,108 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
         return;
     }
 
+    // AI Provider & Model Bar + Settings Button
+    ui.horizontal(|ui| {
+        let is_custom = !app.ui.ai_api_key.trim().is_empty();
+        let status_color = if is_custom { crate::theme::APP_COLOR } else { egui::Color32::from_rgb(120, 120, 120) };
+        let status_badge = if is_custom { format!("● {}", app.ui.ai_provider) } else { "Offline (Built-in)".to_string() };
+        ui.label(egui::RichText::new(status_badge).font(semibold(11.0)).color(status_color));
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(egui::RichText::new("⚙ API Settings").font(regular(11.0))).clicked() {
+                app.ui.ai_settings_open = !app.ui.ai_settings_open;
+            }
+        });
+    });
+
+    // Model selection dropdown
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Model:").font(regular(11.5)));
+        let models: &[&str] = match app.ui.ai_provider.as_str() {
+            "OpenRouter" => &[
+                "deepseek/deepseek-chat",
+                "deepseek/deepseek-r1",
+                "google/gemini-2.0-flash-exp:free",
+                "anthropic/claude-3.5-sonnet",
+                "openai/gpt-4o",
+                "openai/gpt-4o-mini",
+                "meta-llama/llama-3.3-70b-instruct",
+            ],
+            "DeepSeek" => &["deepseek-chat", "deepseek-reasoner"],
+            "Gemini" => &["gemini-2.0-flash", "gemini-2.0-pro-exp-02-05", "gemini-1.5-pro", "gemini-1.5-flash"],
+            "Claude" => &["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+            _ => &["default-model", "custom-model"],
+        };
+        egui::ComboBox::from_id_salt("ai_model_select")
+            .selected_text(if app.ui.ai_model.is_empty() { "Select Model" } else { &app.ui.ai_model })
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for m in models {
+                    ui.selectable_value(&mut app.ui.ai_model, m.to_string(), *m);
+                }
+            });
+    });
+
+    // AI Settings Modal / Collapsible
+    if app.ui.ai_settings_open {
+        let t = Tokens::get(ui.ctx());
+        egui::Frame::NONE.fill(t.menu).inner_margin(8).stroke(Stroke::new(1.0, t.border)).show(ui, |ui| {
+            ui.label(egui::RichText::new("AI Provider & API Key Configuration").font(semibold(12.0)));
+            ui.add_space(2.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Provider:");
+                for p in ["OpenRouter", "DeepSeek", "Gemini", "Claude", "Custom"] {
+                    if ui.selectable_label(app.ui.ai_provider == p, p).clicked() {
+                        app.ui.ai_provider = p.into();
+                        // Set sensible default model when switching provider
+                        match p {
+                            "OpenRouter" => app.ui.ai_model = "deepseek/deepseek-chat".into(),
+                            "DeepSeek" => app.ui.ai_model = "deepseek-chat".into(),
+                            "Gemini" => app.ui.ai_model = "gemini-2.0-flash".into(),
+                            "Claude" => app.ui.ai_model = "claude-3-5-sonnet-20241022".into(),
+                            _ => {}
+                        }
+                    }
+                }
+            });
+
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label("API Key:");
+                let edit = egui::TextEdit::singleline(&mut app.ui.ai_api_key).password(true).desired_width(180.0).hint_text("sk-...");
+                ui.add(edit);
+            });
+
+            if app.ui.ai_provider == "Custom" {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.label("Base URL:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.ui.ai_base_url)
+                            .desired_width(180.0)
+                            .hint_text("https://api.example.com/v1/chat/completions"),
+                    );
+                });
+            }
+
+            ui.add_space(3.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Keys are saved locally in your user profile.").font(regular(10.5)).weak());
+                if ui.button(egui::RichText::new("Done").font(regular(11.0))).clicked() {
+                    app.ui.ai_settings_open = false;
+                }
+            });
+        });
+        ui.add_space(3.0);
+    }
+
+    if !app.ui.ai_status.is_empty() {
+        ui.label(egui::RichText::new(&app.ui.ai_status).font(regular(11.0)).color(egui::Color32::from_rgb(220, 50, 50)));
+        ui.add_space(2.0);
+    }
+
+    ui.add_space(2.0);
     ui.horizontal(|ui| {
         for m in ["Draft", "Rewrite", "Summarize", "Proofread", "Table", "Ask"] {
             if ui.selectable_label(app.ui.ai_mode == m, tl!(m)).clicked() {
@@ -686,14 +788,33 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
                 app.ui.ai_prompt = chip.to_string();
                 let mode_lower = app.ui.ai_mode.to_lowercase();
                 let tone = chip.to_lowercase();
-                let r = app.session.run("tools.copilot", &json!({"action": mode_lower, "prompt": chip, "tone": tone}));
-                if let Ok(res) = r {
-                    if let Some(c) = res.get("content").and_then(Value::as_str) {
-                        app.ui.ai_response = c.to_string();
-                    } else if mode_lower == "table" {
-                        let rows = res.get("rows").and_then(Value::as_u64).unwrap_or(0);
-                        let cols = res.get("cols").and_then(Value::as_u64).unwrap_or(0);
-                        app.ui.ai_response = format!("✓ Inserted native {rows}×{cols} table for \"{chip}\" into document at caret.");
+                let mut payload = json!({
+                    "action": mode_lower,
+                    "prompt": chip,
+                    "tone": tone,
+                    "provider": app.ui.ai_provider,
+                    "model": app.ui.ai_model,
+                });
+                if !app.ui.ai_api_key.trim().is_empty() {
+                    payload["api_key"] = json!(app.ui.ai_api_key);
+                }
+                if !app.ui.ai_base_url.trim().is_empty() {
+                    payload["base_url"] = json!(app.ui.ai_base_url);
+                }
+                app.ui.ai_status.clear();
+                let r = app.session.run("tools.copilot", &payload);
+                match r {
+                    Ok(res) => {
+                        if let Some(c) = res.get("content").and_then(Value::as_str) {
+                            app.ui.ai_response = c.to_string();
+                        } else if mode_lower == "table" {
+                            let rows = res.get("rows").and_then(Value::as_u64).unwrap_or(0);
+                            let cols = res.get("cols").and_then(Value::as_u64).unwrap_or(0);
+                            app.ui.ai_response = format!("✓ Inserted native {rows}×{cols} table for \"{chip}\" into document at caret.");
+                        }
+                    }
+                    Err(e) => {
+                        app.ui.ai_status = format!("Error: {e}");
                     }
                 }
             }
@@ -754,14 +875,33 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
             } else {
                 "professional"
             };
-            let r = app.session.run("tools.copilot", &json!({"action": mode_lower, "prompt": app.ui.ai_prompt, "tone": tone}));
-            if let Ok(res) = r {
-                if let Some(c) = res.get("content").and_then(Value::as_str) {
-                    app.ui.ai_response = c.to_string();
-                } else if mode_lower == "table" {
-                    let rows = res.get("rows").and_then(Value::as_u64).unwrap_or(0);
-                    let cols = res.get("cols").and_then(Value::as_u64).unwrap_or(0);
-                    app.ui.ai_response = format!("✓ Inserted native {rows}×{cols} table for \"{}\" into document at caret.", app.ui.ai_prompt);
+            let mut payload = json!({
+                "action": mode_lower,
+                "prompt": app.ui.ai_prompt,
+                "tone": tone,
+                "provider": app.ui.ai_provider,
+                "model": app.ui.ai_model,
+            });
+            if !app.ui.ai_api_key.trim().is_empty() {
+                payload["api_key"] = json!(app.ui.ai_api_key);
+            }
+            if !app.ui.ai_base_url.trim().is_empty() {
+                payload["base_url"] = json!(app.ui.ai_base_url);
+            }
+            app.ui.ai_status.clear();
+            let r = app.session.run("tools.copilot", &payload);
+            match r {
+                Ok(res) => {
+                    if let Some(c) = res.get("content").and_then(Value::as_str) {
+                        app.ui.ai_response = c.to_string();
+                    } else if mode_lower == "table" {
+                        let rows = res.get("rows").and_then(Value::as_u64).unwrap_or(0);
+                        let cols = res.get("cols").and_then(Value::as_u64).unwrap_or(0);
+                        app.ui.ai_response = format!("✓ Inserted native {rows}×{cols} table for \"{}\" into document at caret.", app.ui.ai_prompt);
+                    }
+                }
+                Err(e) => {
+                    app.ui.ai_status = format!("Error: {e}");
                 }
             }
         }
