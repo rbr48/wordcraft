@@ -719,42 +719,45 @@ pub fn ansi_to_unicode(text: &str) -> String {
     let mut s = text
         .replace("šত্ন", "ন্ত")
         .replace("¯ত্ন", "স্ত")
-        .replace("...", "„")
-        .replace('…', "„")
-        .replace("K…", "কৃ")
-        .replace("K...", "কৃ")
-        .replace("K„", "কৃ")
-        .replace("M…", "গৃ")
-        .replace("M...", "গৃ")
-        .replace("M„", "গৃ")
-        .replace("d…", "দৃ")
-        .replace("d...", "দৃ")
-        .replace("d„", "দৃ")
-        .replace("e…", "বৃ")
-        .replace("e...", "বৃ")
-        .replace("e„", "বৃ")
-        .replace("k…", "শৃ")
-        .replace("m…", "সৃ")
-        .replace("n…", "হৃ")
-        .replace('|', "।")
-        .replace('‡', "†")
-        .replace("††", "†")
-        .replace('ˆ', "‰")
-        .replace("‰‰", "‰")
-        .replace("©©", "©")
-        .replace("f‚", "ভূ")
-        .replace("f~", "ভূ")
-        .replace("f„", "ভূ")
-        .replace("TÂ", "ঞা")
-        .replace("Tv", "ঞা")
-        .replace("wLª™", "খ্রিঃ")
-        .replace("wLªt", "খ্রিঃ")
-        .replace("wLª", "খ্রি")
-        .replace("iæ", "রু")
-        .replace("i“", "রু")
-        .replace('û', "হু")
-        .replace('¸', "গু")
-        .replace('ï', "শু");
+        // Normalise double (accidentally repeated) vowel-diacritic glyphs
+        .replace("~~", "~")
+        .replace("vv", "v")
+        .replace("xx", "x")
+        // Ellipsis / ri-kar shorthand
+        .replace("...", "\u{201E}")
+        .replace('\u{2026}', "\u{201E}")
+        // Precomposed ri-kar pairs: consonant + „ / … / ...
+        .replace("K\u{2026}", "\u{0995}\u{09C3}").replace("K...", "\u{0995}\u{09C3}").replace("K\u{201E}", "\u{0995}\u{09C3}")
+        .replace("M\u{2026}", "\u{0997}\u{09C3}").replace("M...", "\u{0997}\u{09C3}").replace("M\u{201E}", "\u{0997}\u{09C3}")
+        .replace("d\u{2026}", "\u{09A6}\u{09C3}").replace("d...", "\u{09A6}\u{09C3}").replace("d\u{201E}", "\u{09A6}\u{09C3}")
+        .replace("e\u{2026}", "\u{09AC}\u{09C3}").replace("e...", "\u{09AC}\u{09C3}").replace("e\u{201E}", "\u{09AC}\u{09C3}")
+        .replace("k\u{2026}", "\u{09B6}\u{09C3}").replace("m\u{2026}", "\u{09B8}\u{09C3}").replace("n\u{2026}", "\u{09B9}\u{09C3}")
+        // Dari / pipe
+        .replace('|', "\u{0964}")
+        // Normalise alternate e-kar glyph \u{2021} -> \u{2020}  (must happen before conjunct lookup)
+        .replace('\u{2021}', "\u{2020}")
+        // Collapse doubled pre-vowels (typing artefact or split-run re-join)
+        .replace("\u{2020}\u{2020}", "\u{2020}")
+        // ˆ is the alternate oi-kar glyph; normalise to \u{2030} before the conjunct table
+        .replace('\u{02C6}', "\u{2030}")
+        .replace("\u{2030}\u{2030}", "\u{2030}")
+        // Collapse doubled reph (copy-paste artefact)
+        .replace("\u{00A9}\u{00A9}", "\u{00A9}")
+        // Precomposed \u{09AD}\u{09C2} variants
+        .replace("f\u{201A}", "\u{09AD}\u{09C2}").replace("f~", "\u{09AD}\u{09C2}").replace("f\u{201E}", "\u{09AD}\u{09C2}")
+        // \u{099E}\u{09BE} shorthand glyphs
+        .replace("T\u{00C2}", "\u{099E}\u{09BE}").replace("Tv", "\u{099E}\u{09BE}")
+        // \u{0996}\u{09CD}\u{09B0}\u{09BF} + bisarga / visarga
+        .replace("wL\u{00AA}\u{2122}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}")
+        .replace("wL\u{00AA}t", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}")
+        .replace("wL\u{00AA}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}")
+        // Precomposed \u{09B0}\u{09C1} variants (must come BEFORE the conjunct table maps \u{00A9} and \u{2030})
+        .replace("i\u{00E6}", "\u{09B0}\u{09C1}").replace("i\u{201C}", "\u{09B0}\u{09C1}")
+        // Precomposed \u{09B9}\u{09C1} / \u{0997}\u{09C1} / \u{09B6}\u{09C1}
+        .replace('\u{00FB}', "\u{09B9}\u{09C1}").replace('\u{00B8}', "\u{0997}\u{09C1}").replace('\u{00EF}', "\u{09B6}\u{09C1}")
+        // Collapse doubled \u{09CC} glyph
+        .replace("\u{0160}\u{0160}", "\u{0160}");
+
 
     // 2. Replace Conjunct Glyphs and Phalas (longest matches first)
     let conjuncts: &[(&str, &str)] = &[
@@ -1615,5 +1618,30 @@ mod tests {
         assert_eq!(ansi_to_unicode("mvKz©jvi"), "সার্কুলার");
         assert_eq!(ansi_to_unicode("m‡ev©”P"), "সর্বোচ্চ");
         assert_eq!(ansi_to_unicode("wb¤œ¯^vÿiKvix"), "নিম্নস্বাক্ষরকারী");
+
+        // 9. Double uu-kar typing artefact (m~~‡jv → মূলো, not মূূলো)
+        assert_eq!(ansi_to_unicode("m~~‡jv"), "মূলো");
+
+        // 10. Alternate u-kar after non-ra consonants (z = ু)
+        assert_eq!(ansi_to_unicode("LvZzb"), "খাতুন");
+        assert_eq!(ansi_to_unicode("Kzgvi"), "কুমার");
+        assert_eq!(ansi_to_unicode("BqvKzecyi"), "ইয়াকুবপুর");
+        assert_eq!(ansi_to_unicode("RvbœvZzj"), "জান্নাতুল");
+
+        // 11. Alternate u-kar after ra (æ = ু)
+        assert_eq!(ansi_to_unicode("byiæj"), "নুরুল");
+        assert_eq!(ansi_to_unicode("Avbvqviæj"), "আনায়ারুল");
+        assert_eq!(ansi_to_unicode("RvniæjvKwei"), "জাহরুলাকবির");
+
+        // 12. Precomposed হু / শুরু
+        assert_eq!(ansi_to_unicode("ûgvqyb"), "হুমায়ুন");
+
+        // 13. ঞা shorthand Tv
+        assert_eq!(ansi_to_unicode("`vMbf\u{201A}Tv"), "দাগনভূঞা");
+
+        // 14. সর্বোচ্চ — raw Bijoy: m‡ev©"P  (‡=U+2021, ©=U+00A9, "=U+201C)
+        // Note: the curly-quote U+201C is the SutonnyMJ "চ্" shorthand prefix glyph
+        let sarboccho_bijoy = "m\u{2021}ev\u{00A9}\u{201C}P";
+        assert_eq!(ansi_to_unicode(sarboccho_bijoy), "সর্বোচ্চ");
     }
 }
