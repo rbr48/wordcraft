@@ -531,7 +531,7 @@ mod tests {
         let exempt = |c: char, file: &str| match file {
             "equation_tab.rs" => matches!(c, '≜' | '┬'),
             "ribbon.rs" => c == '➢',
-            "keys.rs" | "lib.rs" => c == '\u{09cd}',
+            "keys.rs" | "lib.rs" => c == '\u{0964}' || c == '\u{0965}' || ('\u{0980}'..='\u{09ff}').contains(&c),
             _ => false,
         };
         symbols.retain(|(c, file)| !exempt(*c, file));

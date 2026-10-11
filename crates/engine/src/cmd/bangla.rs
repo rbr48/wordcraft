@@ -71,7 +71,7 @@ pub fn phonetic_transliterate(input: &str) -> String {
 
     // Split text into tokens (alphabetic word tokens vs whitespace/punctuation)
     for ch in input.chars() {
-        let alpha = ch.is_ascii_alphabetic();
+        let alpha = ch.is_ascii_alphabetic() || ch == ':' || ch == '\'';
         if alpha == is_alpha {
             current_word.push(ch);
         } else {
@@ -104,6 +104,7 @@ pub fn phonetic_transliterate(input: &str) -> String {
                     }
                     '$' => out.push('৳'),
                     '|' => out.push('।'),
+                    ':' => out.push('ঃ'),
                     _ => out.push(ch),
                 }
             }
@@ -134,6 +135,8 @@ fn phonetic_word(word: &str) -> String {
         "dhaka" => return "ঢাকা".into(),
         "sonar" => return "সোনার".into(),
         "shonar" => return "সোনার".into(),
+        "du:kh" | "du:kho" | "dukho" => return "দুঃখ".into(),
+        "du:khi" | "dukkhi" => return "দুঃখী".into(),
         _ => {}
     }
 
@@ -144,6 +147,26 @@ fn phonetic_word(word: &str) -> String {
     let mut last_was_consonant = false;
 
     while i < len {
+        let ch0 = chars[i];
+        if ch0 == ':' {
+            res.push('ঃ');
+            last_was_consonant = false;
+            i += 1;
+            continue;
+        }
+        if ch0 == '\'' {
+            // Avro syllable separator (resets consonant context, suppressed in output)
+            last_was_consonant = false;
+            i += 1;
+            continue;
+        }
+        if ch0 == 'A' {
+            res.push('আ');
+            last_was_consonant = false;
+            i += 1;
+            continue;
+        }
+
         // 1. Check for 3-letter consonant matches
         if i + 2 < len {
             let trio: String = chars[i..i + 3].iter().collect();
@@ -173,15 +196,20 @@ fn phonetic_word(word: &str) -> String {
 
         // 2. Check for 2-letter vowel matches
         if i + 1 < len {
-            let pair: String = chars[i..i + 2].iter().collect();
-            let lower_pair = pair.to_ascii_lowercase();
-            let vowel_match = match lower_pair.as_str() {
-                "aa" => Some(('আ', 'া')),
-                "ee" => Some(('ঈ', 'ী')),
-                "oo" => Some(('ঊ', 'ূ')),
-                "oi" => Some(('ঐ', 'ৈ')),
-                "ou" => Some(('ঔ', 'ৌ')),
-                _ => None,
+            let c2 = chars[i + 1];
+            let vowel_match = if c2 == 'A' {
+                None
+            } else {
+                let pair: String = chars[i..i + 2].iter().collect();
+                let lower_pair = pair.to_ascii_lowercase();
+                match lower_pair.as_str() {
+                    "aa" => Some(('আ', 'া')),
+                    "ee" => Some(('ঈ', 'ী')),
+                    "oo" => Some(('ঊ', 'ূ')),
+                    "oi" => Some(('ঐ', 'ৈ')),
+                    "ou" => Some(('ঔ', 'ৌ')),
+                    _ => None,
+                }
             };
             if let Some((ind, dep)) = vowel_match {
                 if last_was_consonant {
@@ -418,7 +446,8 @@ pub fn jatiya_key(ch: char) -> Option<&'static str> {
 
         // Symbols
         ':' => Some("ঃ"),
-        ';' => Some("；"),
+        ';' => Some(";"),
+        '.' => Some("।"),
         '$' => Some("৳"),
         '&' | '^' => Some("ঁ"),
         '|' => Some("।"),
@@ -503,6 +532,7 @@ pub fn bijoy_ansi_key(ch: char) -> Option<&'static str> {
         // Symbols
         ':' => Some("t"), // ঃ
         ';' => Some(";"),
+        '.' => Some("."), // । (SutonnyMJ '.' renders as Bengali Dari)
         '$' => Some("৳"),
         '&' | '^' => Some("u"), // ঁ
         '|' => Some("."),       // । (Dari)
@@ -525,6 +555,8 @@ pub fn jatiya_linker_vowel(ch: char) -> Option<&'static str> {
         'c' => Some("এ"), // g + c = এ
         'C' => Some("ঐ"), // g + C = ঐ
         'X' => Some("ঔ"), // g + X = ঔ
+        'x' => Some("ও"), // g + x = ও
+        'F' => Some("অ"), // g + F = অ
         _ => None,
     }
 }
@@ -541,6 +573,8 @@ pub fn bijoy_linker_vowel(ch: char) -> Option<&'static str> {
         'c' => Some("G"),  // g + c = এ
         'C' => Some("H"),  // g + C = ঐ
         'X' => Some("J"),  // g + X = ঔ
+        'x' => Some("I"),  // g + x = ও
+        'F' => Some("A"),  // g + F = অ
         _ => None,
     }
 }
@@ -1942,5 +1976,45 @@ mod tests {
         // Note: the curly-quote U+201C is the SutonnyMJ "চ্" shorthand prefix glyph
         let sarboccho_bijoy = "m\u{2021}ev\u{00A9}\u{201C}P";
         assert_eq!(ansi_to_unicode(sarboccho_bijoy), "সর্বোচ্চ");
+    }
+
+    #[test]
+    fn test_dari_bisarga_and_middle_vowels() {
+        // Phonetic transliteration tests:
+        // Dari '|'
+        assert_eq!(phonetic_transliterate("bangladesh|"), "বাংলাদেশ।");
+        assert_eq!(phonetic_transliterate("desh |"), "দেশ ।");
+
+        // Bisarga ':'
+        assert_eq!(phonetic_transliterate("du:kho"), "দুঃখ");
+        assert_eq!(phonetic_transliterate("ba:"), "বাঃ");
+        assert_eq!(phonetic_transliterate(":"), "ঃ");
+
+        // Middle-of-word independent 'আ' and other vowels
+        assert_eq!(phonetic_transliterate("k'a"), "কআ");
+        assert_eq!(phonetic_transliterate("ka'a"), "কাআ");
+        assert_eq!(phonetic_transliterate("kA"), "কআ");
+        assert_eq!(phonetic_transliterate("naA"), "নাআ");
+        assert_eq!(phonetic_transliterate("m'haAkash"), "মহাআকাশ");
+        assert_eq!(phonetic_transliterate("k'k"), "কক");
+
+        // Jatiya key mappings
+        assert_eq!(jatiya_key(':'), Some("ঃ"));
+        assert_eq!(jatiya_key(';'), Some(";"));
+        assert_eq!(jatiya_key('|'), Some("।"));
+        assert_eq!(jatiya_key('.'), Some("।"));
+
+        // Jatiya linker vowels
+        assert_eq!(jatiya_linker_vowel('f'), Some("আ"));
+        assert_eq!(jatiya_linker_vowel('x'), Some("ও"));
+        assert_eq!(jatiya_linker_vowel('F'), Some("অ"));
+
+        // Bijoy ANSI mappings
+        assert_eq!(bijoy_ansi_key(':'), Some("t"));
+        assert_eq!(bijoy_ansi_key('|'), Some("."));
+        assert_eq!(bijoy_ansi_key('.'), Some("."));
+        assert_eq!(bijoy_linker_vowel('f'), Some("Av"));
+        assert_eq!(bijoy_linker_vowel('x'), Some("I"));
+        assert_eq!(bijoy_linker_vowel('F'), Some("A"));
     }
 }

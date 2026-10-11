@@ -220,21 +220,18 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                                         app.ui.jatiya_linker = false;
                                     } else {
                                         app.ui.jatiya_linker = true;
-                                        let before_caret = app
-                                            .session
-                                            .doc
-                                            .para_at(&app.session.sel.focus)
-                                            .and_then(|p| p.text.get(..app.session.sel.focus.off))
-                                            .unwrap_or("");
+                                        let f = app.session.sel.focus.clone();
+                                        let before_caret = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
                                         let prev_char = before_caret.chars().next_back();
                                         if let Some(kar @ ('ি' | 'ে' | 'ৈ')) = prev_char {
-                                            let without_kar = &before_caret[..before_caret.len() - kar.len_utf8()];
-                                            let prev_cons = without_kar.chars().next_back();
-                                            if let Some(cons) = prev_cons {
-                                                let _ = app.run("text.backspace", json!({}));
-                                                let mut repl = cons.to_string();
-                                                repl.push('্');
-                                                let _ = app.run("text.insert", json!({"text": repl}));
+                                            let kar_len = kar.len_utf8();
+                                            if f.off >= kar_len {
+                                                let start_off = f.off - kar_len;
+                                                let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                                if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                    app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                                }
+                                                let _ = app.run("text.insert", json!({"text": "্"}));
                                                 app.ui.jatiya_pre_kar = Some(match kar {
                                                     'ি' => "ি",
                                                     'ে' => "ে",
@@ -256,8 +253,42 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                                     app.ui.jatiya_linker = false;
                                     // Check for independent vowel: 'g' + 'f' -> 'আ', 'g' + 'd' -> 'ই', etc.
                                     if let Some(vowel) = wordcraft_engine::cmd::bangla::jatiya_linker_vowel(c) {
-                                        let _ = app.run("text.backspace", json!({}));
+                                        let f = app.session.sel.focus.clone();
+                                        let before = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                        if before.ends_with('্') && f.off >= '্'.len_utf8() {
+                                            let start_off = f.off - '্'.len_utf8();
+                                            let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                            if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                            }
+                                        }
                                         let _ = app.run("text.insert", json!({"text": vowel}));
+                                        continue;
+                                    }
+                                    if c == ':' {
+                                        let f = app.session.sel.focus.clone();
+                                        let before = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                        if before.ends_with('্') && f.off >= '্'.len_utf8() {
+                                            let start_off = f.off - '্'.len_utf8();
+                                            let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                            if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                            }
+                                        }
+                                        let _ = app.run("text.insert", json!({"text": "ঃ"}));
+                                        continue;
+                                    }
+                                    if c == '.' || c == '|' {
+                                        let f = app.session.sel.focus.clone();
+                                        let before = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                        if before.ends_with('্') && f.off >= '্'.len_utf8() {
+                                            let start_off = f.off - '্'.len_utf8();
+                                            let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                            if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                            }
+                                        }
+                                        let _ = app.run("text.insert", json!({"text": "।"}));
                                         continue;
                                     }
                                     // Otherwise, it was a consonant in a conjunct!
@@ -303,26 +334,44 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                                 // In Bijoy, 'c' (ে) + consonant + 'f' (া) = 'ো' (O-kar)
                                 // In Bijoy, 'c' (ে) + consonant + 'X' (ৌ) = 'ৌ' (Ou-kar)
                                 if c == 'f' || c == 'X' {
+                                    let f = app.session.sel.focus.clone();
+                                    let before_caret = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                    if before_caret.ends_with('ে') && f.off >= 'ে'.len_utf8() {
+                                        let start_off = f.off - 'ে'.len_utf8();
+                                        let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                        if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                            app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                        }
+                                        let kar = if c == 'f' { "ো" } else { "ৌ" };
+                                        let _ = app.run("text.insert", json!({"text": kar}));
+                                        continue;
+                                    }
+                                }
+
+                                // 6. Stop mark / Dari: '.' or '|'
+                                if c == '|' {
+                                    let _ = app.run("text.insert", json!({"text": "।"}));
+                                    continue;
+                                }
+                                if c == '.' {
                                     let before_caret = app
                                         .session
                                         .doc
                                         .para_at(&app.session.sel.focus)
                                         .and_then(|p| p.text.get(..app.session.sel.focus.off))
                                         .unwrap_or("");
-                                    if before_caret.ends_with('ে') {
-                                        let without_e = &before_caret[..before_caret.len() - 'ে'.len_utf8()];
-                                        if let Some(cons) = without_e.chars().next_back() {
-                                            let _ = app.run("text.backspace", json!({}));
-                                            let kar = if c == 'f' { "ো" } else { "ৌ" };
-                                            let mut repl = cons.to_string();
-                                            repl.push_str(kar);
-                                            let _ = app.run("text.insert", json!({"text": repl}));
-                                            continue;
-                                        }
+                                    let prev_char = before_caret.chars().next_back();
+                                    if let Some(ch) = prev_char
+                                        && (ch.is_ascii_digit() || ('\u{09E6}'..='\u{09EF}').contains(&ch))
+                                    {
+                                        let _ = app.run("text.insert", json!({"text": "."}));
+                                    } else {
+                                        let _ = app.run("text.insert", json!({"text": "।"}));
                                     }
+                                    continue;
                                 }
 
-                                // 6. Normal character lookup:
+                                // 7. Normal character lookup:
                                 if let Some(s) = wordcraft_engine::cmd::bangla::jatiya_key(c) {
                                     let mut out = String::new();
                                     if app.ui.jatiya_reph {
@@ -401,12 +450,35 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             }
                         }
                         wordcraft_engine::cmd::bangla::BanglaMode::Phonetic => {
-                            let is_delim = t.chars().all(|c| c.is_whitespace() || ",.!?;:()[]{}\"'/\\-+=*&^%$#@~`<>|".contains(c));
+                            let is_delim = t.chars().all(|c| c.is_whitespace() || ",.!?;()[]{}\"/\\-+=*&^%$#@~`<>|".contains(c));
                             if is_delim {
                                 app.ui.phonetic_buffer.clear();
                                 app.ui.phonetic_rendered_len = 0;
                                 app.ui.phonetic_candidates.clear();
-                                let _ = app.run("text.insert", json!({"text": t}));
+                                for c in t.chars() {
+                                    if c == '|' {
+                                        let _ = app.run("text.insert", json!({"text": "।"}));
+                                    } else if c == '.' {
+                                        let before_caret = app
+                                            .session
+                                            .doc
+                                            .para_at(&app.session.sel.focus)
+                                            .and_then(|p| p.text.get(..app.session.sel.focus.off))
+                                            .unwrap_or("");
+                                        let prev_char = before_caret.chars().next_back();
+                                        if let Some(ch) = prev_char
+                                            && (ch.is_ascii_digit() || ('\u{09E6}'..='\u{09EF}').contains(&ch))
+                                        {
+                                            let _ = app.run("text.insert", json!({"text": "."}));
+                                        } else {
+                                            let _ = app.run("text.insert", json!({"text": "।"}));
+                                        }
+                                    } else if c == '$' {
+                                        let _ = app.run("text.insert", json!({"text": "৳"}));
+                                    } else {
+                                        let _ = app.run("text.insert", json!({"text": c.to_string()}));
+                                    }
+                                }
                             } else {
                                 app.ui.phonetic_buffer.push_str(&t);
                                 app.ui.phonetic_candidates = wordcraft_engine::cmd::bangla::phonetic_candidates(&app.ui.phonetic_buffer);

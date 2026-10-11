@@ -2799,6 +2799,72 @@ mod tests {
         });
         type_keys(&mut a, &ctx, "kZ");
         assert_eq!(body_text(&a).trim(), "ত্য");
+
+        // 10. Independent vowels in the middle of words (শব্দের মাঝে 'আ' / 'ই'):
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "jgf");
+        assert_eq!(body_text(&a).trim(), "কআ");
+
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "jfgf");
+        assert_eq!(body_text(&a).trim(), "কাআ");
+
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "hgd");
+        assert_eq!(body_text(&a).trim(), "বই");
+
+        // 11. Stop mark / Dari ('.' and '|'):
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "j.");
+        assert_eq!(body_text(&a).trim(), "ক।");
+
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "j|");
+        assert_eq!(body_text(&a).trim(), "ক।");
+
+        // 12. Bisarga (':'):
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, ":");
+        assert_eq!(body_text(&a).trim(), "ঃ");
+
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "j:");
+        assert_eq!(body_text(&a).trim(), "কঃ");
     }
 
     #[test]
@@ -2846,6 +2912,26 @@ mod tests {
         // 4. Independent vowel: g + f -> Av (আ)
         type_keys(&mut a, &ctx, "gf");
         assert_eq!(body_text(&a).trim(), "Av");
+
+        // 5. Dari in ANSI ('.' and '|'):
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "j.");
+        assert_eq!(body_text(&a).trim(), "K.");
+
+        // 6. Bisarga in ANSI (':'):
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, ":");
+        assert_eq!(body_text(&a).trim(), "t");
     }
 
     #[test]
@@ -2863,5 +2949,38 @@ mod tests {
 
         type_keys(&mut a, &ctx, "bangla");
         assert_eq!(body_text(&a).trim(), "আমার সোনার বাংলা");
+
+        // Dari in Phonetic ('.' and '|'):
+        type_keys(&mut a, &ctx, ".");
+        assert_eq!(body_text(&a).trim(), "আমার সোনার বাংলা।");
+
+        // Bisarga in Phonetic (':'):
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "du:kho ");
+        assert_eq!(body_text(&a).trim(), "দুঃখ");
+
+        // Middle-of-word independent 'আ':
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "naA ");
+        assert_eq!(body_text(&a).trim(), "নাআ");
+
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "k'a ");
+        assert_eq!(body_text(&a).trim(), "কআ");
     }
 }
