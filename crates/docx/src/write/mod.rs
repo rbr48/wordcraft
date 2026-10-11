@@ -1,5 +1,7 @@
 //! [`Document`] → DOCX.
 
+mod embed;
+mod math;
 mod props;
 mod story;
 
@@ -32,6 +34,14 @@ impl PartRels {
         self.index.insert(key, id.clone());
         id
     }
+    /// Add a relationship with a given id (the id a kept part's markup uses); a repeated id is
+    /// ignored. Not to be mixed with [`PartRels::add`] in one part.
+    pub fn add_with_id(&mut self, id: &str, kind: &str, target: &str, external: bool) {
+        if self.list.iter().any(|(i, ..)| i == id) {
+            return;
+        }
+        self.list.push((id.to_string(), kind.to_string(), target.to_string(), external));
+    }
     fn is_empty(&self) -> bool {
         self.list.is_empty()
     }
@@ -52,6 +62,8 @@ impl PartRels {
 
 pub(crate) struct Writer<'d> {
     doc: &'d Document,
+    /// Numbered display equations written so far (automatic numbers are written as text).
+    pub(crate) eq_number: u32,
     /// Media key → file name under `word/media/`.
     media_files: BTreeMap<String, String>,
     bookmarks: HashMap<String, u32>,
@@ -79,6 +91,10 @@ pub(crate) struct Writer<'d> {
     toc_end_here: bool,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
+    /// Bounds writing text boxes inside text boxes (as layout shows them).
+    boxes: wordcraft_doc::BoxBudget,
+    /// Charts, diagrams and OLE objects kept from a file: the parts they need.
+    embeds: embed::EmbedWriter<'d>,
 }
 
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
@@ -90,7 +106,18 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
 
 /// Write a package of the given flavour (`.docx`, `.docm`, `.dotx`, `.dotm`).
 pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
+    // A range field must be whole in the file: drop markers that lost their partner in editing.
+    let balanced;
+    let doc = if doc.has_unbalanced_field_ranges() {
+        let mut d = doc.clone();
+        d.balance_field_ranges();
+        balanced = d;
+        &balanced
+    } else {
+        doc
+    };
     let mut wr = Writer {
+        eq_number: 0,
         doc,
         media_files: BTreeMap::new(),
         bookmarks: HashMap::new(),
@@ -108,8 +135,11 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         toc_begin_here: false,
         toc_end_here: false,
         used_media: Default::default(),
+        boxes: wordcraft_doc::BoxBudget::default(),
+        embeds: embed::EmbedWriter::new(doc),
     };
     wr.assign_media();
+    wr.embeds.reserve_media(wr.media_files.values());
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut rels = PartRels::default();
@@ -304,6 +334,11 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         }
     }
 
+    // Parts of charts, diagrams and OLE objects kept from a file, as the objects written need them.
+    for (name, bytes, ct, prels) in std::mem::take(&mut wr.embeds.parts) {
+        push_part(&mut entries, &mut overrides, &name, bytes, &ct, prels);
+    }
+
     // The macro project and the parts it relates to (VBA data, signatures…), verbatim. A
     // macro-free package can't hold them (Word drops them too).
     if let Some(vba) = doc.passthrough.get(VBA_PROJECT_PART).filter(|b| !b.is_empty()) {
@@ -354,11 +389,9 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
     overrides.push(("/docProps/core.xml".into(), "application/vnd.openxmlformats-package.core-properties+xml".into()));
     entries.push(("docProps/app.xml".into(), app_xml(doc)));
     overrides.push(("/docProps/app.xml".into(), "application/vnd.openxmlformats-officedocument.extended-properties+xml".into()));
-    if let Some(custom) = doc.passthrough.get("docProps/custom.xml")
-        && xml::parse(custom).is_ok()
-    {
+    if !doc.custom_props.is_empty() {
         root.add(rt::CUSTOM, "docProps/custom.xml", false);
-        entries.push(("docProps/custom.xml".into(), custom.to_vec()));
+        entries.push(("docProps/custom.xml".into(), crate::custom::write(&doc.custom_props)));
         overrides.push(("/docProps/custom.xml".into(), "application/vnd.openxmlformats-officedocument.custom-properties+xml".into()));
     }
     entries.insert(0, ("_rels/.rels".into(), root.xml()));
@@ -549,7 +582,7 @@ fn styles_xml(doc: &Document) -> Vec<u8> {
     w.close("w:rPrDefault");
     w.open("w:pPrDefault", &[]);
     w.open("w:pPr", &[]);
-    props::ppr_inner(&mut w, &s.default_para, false);
+    props::ppr_inner(&mut w, &s.default_para, false, None);
     w.close("w:pPr");
     w.close("w:pPrDefault");
     w.close("w:docDefaults");
@@ -604,7 +637,7 @@ fn style_xml(w: &mut W, st: &Style) {
     }
     if !st.para.is_empty() && st.kind != StyleKind::Character {
         w.open("w:pPr", &[]);
-        props::ppr_inner(w, &st.para, false);
+        props::ppr_inner(w, &st.para, false, None);
         w.close("w:pPr");
     }
     if props::has_rpr(&st.chr) && st.kind != StyleKind::Numbering {
@@ -613,39 +646,62 @@ fn style_xml(w: &mut W, st: &Style) {
         w.close("w:rPr");
     }
     if let Some(t) = &st.table {
-        if let Some(b) = &t.borders {
+        if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() {
             w.open("w:tblPr", &[]);
-            props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+            if let Some(n) = t.band_size {
+                w.val("w:tblStyleRowBandSize", &n.clamp(1, 1000).to_string());
+            }
+            if let Some(b) = &t.borders {
+                props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+            }
+            if let Some(m) = &t.cell_margins {
+                props::margins(w, "w:tblCellMar", m);
+            }
             w.close("w:tblPr");
         }
-        let cond =
-            |w: &mut W, ty: &str, chr: &wordcraft_doc::CharProps, fill: Option<wordcraft_doc::Rgb>, top: Option<&wordcraft_doc::props::Border>| {
-                if !props::has_rpr(chr) && fill.is_none() && top.is_none() {
-                    return;
+        // One conditional formatting region (ECMA-376 §17.7.6): run properties, then cell borders
+        // and shading.
+        let cond = |w: &mut W,
+                    ty: &str,
+                    chr: &wordcraft_doc::CharProps,
+                    fill: Option<wordcraft_doc::Rgb>,
+                    borders: Option<wordcraft_doc::props::Borders>| {
+            if !props::has_rpr(chr) && fill.is_none() && borders.is_none() {
+                return;
+            }
+            w.open("w:tblStylePr", &[("w:type", ty)]);
+            if props::has_rpr(chr) {
+                w.open("w:rPr", &[]);
+                props::rpr_inner(w, chr);
+                w.close("w:rPr");
+            }
+            if fill.is_some() || borders.is_some() {
+                w.open("w:tcPr", &[]);
+                if let Some(bs) = &borders {
+                    props::borders(w, "w:tcBorders", bs, Some("w:insideH"), &[]);
                 }
-                w.open("w:tblStylePr", &[("w:type", ty)]);
-                if props::has_rpr(chr) {
-                    w.open("w:rPr", &[]);
-                    props::rpr_inner(w, chr);
-                    w.close("w:rPr");
+                if let Some(f) = fill {
+                    w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &f.hex())]);
                 }
-                if fill.is_some() || top.is_some() {
-                    w.open("w:tcPr", &[]);
-                    if let Some(b) = top {
-                        let bs = wordcraft_doc::props::Borders { top: Some(*b), ..Default::default() };
-                        props::borders(w, "w:tcBorders", &bs, None, &[]);
-                    }
-                    if let Some(f) = fill {
-                        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &f.hex())]);
-                    }
-                    w.close("w:tcPr");
-                }
-                w.close("w:tblStylePr");
-            };
-        cond(w, "firstRow", &t.header_chr, t.header_fill, None);
-        cond(w, "lastRow", &t.total_chr, None, t.total_border_top.as_ref());
-        cond(w, "firstCol", &t.first_col_chr, None, None);
-        cond(w, "band1Horz", &wordcraft_doc::CharProps::default(), t.band_fill, None);
+                w.close("w:tcPr");
+            }
+            w.close("w:tblStylePr");
+        };
+        cond(w, "wholeTable", &wordcraft_doc::CharProps::default(), t.fill, None);
+        cond(w, "firstRow", &t.header_chr, t.header_fill, t.header_borders);
+        // The total row's borders, its top edge falling back to the built-in top rule.
+        let total_borders = match (t.total_borders, t.total_border_top) {
+            (Some(mut b), top) => {
+                b.top = b.top.or(top);
+                Some(b)
+            }
+            (None, top) => top.map(|b| wordcraft_doc::props::Borders { top: Some(b), ..Default::default() }),
+        };
+        cond(w, "lastRow", &t.total_chr, t.total_fill, total_borders);
+        cond(w, "firstCol", &t.first_col_chr, t.first_col_fill, t.first_col_borders);
+        cond(w, "lastCol", &t.last_col_chr, t.last_col_fill, t.last_col_borders);
+        cond(w, "band1Vert", &t.col_band_chr, t.col_band_fill, t.col_band_borders);
+        cond(w, "band1Horz", &t.band_chr, t.band_fill, t.band_borders);
     }
     w.close("w:style");
 }
@@ -697,6 +753,8 @@ fn write_level(w: &mut W, i: usize, l: &Level) {
     w.val("w:numFmt", l.format.ooxml());
     if !l.restart {
         w.val("w:lvlRestart", "0");
+    } else if let Some(k) = l.restart_after.filter(|k| (1..=9).contains(k)) {
+        w.val("w:lvlRestart", &k.to_string());
     }
     if let Some(s) = &l.style {
         w.val("w:pStyle", s);
@@ -712,6 +770,11 @@ fn write_level(w: &mut W, i: usize, l: &Level) {
     w.val("w:lvlText", &l.text);
     w.val("w:lvlJc", props::align_val(l.align));
     w.open("w:pPr", &[]);
+    if let Some(t) = l.tab.filter(|t| t.is_finite()) {
+        w.open("w:tabs", &[]);
+        w.empty("w:tab", &[("w:val", "num"), ("w:pos", &crate::units::twips(t.clamp(-1584.0, 1584.0)))]);
+        w.close("w:tabs");
+    }
     let ind = crate::units::twips(l.indent);
     if l.hanging >= 0.0 {
         w.empty("w:ind", &[("w:left", &ind), ("w:hanging", &crate::units::twips(l.hanging))]);
@@ -749,6 +812,11 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     if s.even_odd_headers {
         w.empty("w:evenAndOddHeaders", &[]);
     }
+    for (tag, v) in [("w:drawingGridHorizontalSpacing", s.grid_h), ("w:drawingGridVerticalSpacing", s.grid_v)] {
+        if v.is_finite() && (v - wordcraft_doc::DEFAULT_GRID).abs() > 0.01 {
+            w.val(tag, &crate::units::twips(v.clamp(0.5, 1584.0)));
+        }
+    }
     w.val("w:characterSpacingControl", "doNotCompress");
     for (tag, fmt, used, el) in
         [("w:footnotePr", s.footnote_format, footnotes, "w:footnote"), ("w:endnotePr", s.endnote_format, endnotes, "w:endnote")]
@@ -762,8 +830,12 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
         w.close(tag);
     }
     w.open("w:compat", &[]);
-    w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", "15")]);
+    let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
+    w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");
+    if let Some(m) = &s.math {
+        math::math_pr(&mut w, m);
+    }
     w.close("w:settings");
     w.into_bytes()
 }

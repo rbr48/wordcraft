@@ -9,28 +9,47 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(target_os = "macos")]
+mod apple_events;
 mod control_server;
+mod file_dialogs;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
+mod print;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
+    paste_picture::ClipboardPicture,
     window_geometry::{WindowGeometry, take_rescue},
 };
 
-/// The app, the restored window geometry until the first frame has checked it, and the control
-/// server's key file (removed on exit).
-struct App(WordApp, Option<WindowGeometry>, Option<control_server::KeyFile>);
+/// The app, the restored window geometry until the first frame has checked it, the control
+/// server's key file (removed on exit), the file dialogs the app asked for and, on macOS, the
+/// documents opened from Finder.
+struct App(
+    WordApp,
+    Option<WindowGeometry>,
+    Option<control_server::KeyFile>,
+    file_dialogs::Launcher,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+);
 
 impl eframe::App for App {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        apple_events::poll(&self.4, &mut self.0, ctx);
         self.0.logic(ctx);
+        self.3.show(frame);
         let prev = self.0.ui.window;
         self.0.ui.window = ctx.input(|i| WindowGeometry::track(prev, i.viewport(), i.viewport_rect().size()));
         if let Some(pos) = ctx.input(|i| take_rescue(&mut self.1, i.viewport())) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+        }
+        // The window's close button: with unsaved changes, ask first (`WordApp::close_requested`).
+        if ctx.input(|i| i.viewport().close_requested()) && !self.0.close_requested() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         if self.0.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -39,8 +58,9 @@ impl eframe::App for App {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.0.raw_input_hook(raw);
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        self.3.show(frame);
     }
     fn on_exit(&mut self) {
         save_prefs(&self.0);
@@ -100,22 +120,28 @@ fn save_prefs(app: &WordApp) {
     }
 }
 
-fn services() -> Services {
+/// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
+/// through the system's PDF viewer (`print`, #15), and pictures on the system clipboard (#45).
+fn services(file_dialog: file_dialogs::Hook) -> Services {
     Services {
-        pick_open: Some(Box::new(|purpose: &str| {
-            let d = rfd::FileDialog::new();
-            let d = if purpose == "picture" {
-                d.add_filter("Pictures", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
-            } else {
-                d.add_filter("Documents", &["docx", "docm", "dotx", "dotm", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json"])
-                    .add_filter("Word document", &["docx"])
-                    .add_filter("All files", &["*"])
-            };
-            d.pick_file().map(|p| p.to_string_lossy().to_string())
-        })),
-        pick_save: Some(Box::new(|name: &str| rfd::FileDialog::new().set_file_name(name).save_file().map(|p| p.to_string_lossy().to_string()))),
+        file_dialog: Some(file_dialog),
+        print: Some(print::hook()),
+        clipboard_picture: Some(Box::new(clipboard_picture)),
         ..Default::default()
     }
+}
+
+/// The picture on the system clipboard (#45): copied files, else image pixels. The UI checks the
+/// sizes before inserting anything.
+fn clipboard_picture() -> Option<ClipboardPicture> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| log::warn!("clipboard: {e}")).ok()?;
+    if let Ok(files) = clipboard.get().file_list()
+        && !files.is_empty()
+    {
+        return Some(ClipboardPicture::Files(files));
+    }
+    let image = clipboard.get_image().ok()?;
+    Some(ClipboardPicture::Pixels { width: image.width, height: image.height, rgba: image.bytes.into_owned() })
 }
 
 /// Window, Dock and taskbar icon.
@@ -180,19 +206,27 @@ fn main() -> eframe::Result {
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
-    // Before eframe creates the wgpu instance: default Windows to DirectX 12 only (see graphics.rs).
+    // Before eframe creates the wgpu instance: default Windows to DirectX 12 only, or OpenGL when
+    // DirectX 12 has no GPU driver (see graphics.rs).
     #[cfg(target_os = "windows")]
     graphics::configure(&mut options, eframe::wgpu::Backends::from_env());
     let restored = saved_window();
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
     }
+    // Registered before the event loop starts, so it catches the Finder event that launched us as
+    // well as later ones. Lives until the event loop returns; the app creator only borrows it.
+    #[cfg(target_os = "macos")]
+    let apple_events = apple_events::AppleEvents::install();
+    #[cfg(target_os = "macos")]
+    let apple_events = &apple_events;
     eframe::run_native(
         "WordCraft",
         options,
         Box::new(move |cc| {
             let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
-            let mut app = WordApp::new(Session::new(doc), services());
+            let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
+            let mut app = WordApp::new(Session::new(doc), services(file_dialog));
             load_prefs(&mut app);
             app.ui.window = restored;
             app.integrated_titlebar = cfg!(target_os = "macos");
@@ -208,7 +242,14 @@ fn main() -> eframe::Result {
                     log::warn!("{f}: {e}");
                 }
             }
-            Ok(Box::new(App(app, restored, key_file)))
+            Ok(Box::new(App(
+                app,
+                restored,
+                key_file,
+                dialogs,
+                #[cfg(target_os = "macos")]
+                apple_events.connect(&cc.egui_ctx),
+            )))
         }),
     )
 }

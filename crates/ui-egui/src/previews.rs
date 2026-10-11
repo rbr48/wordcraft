@@ -43,7 +43,7 @@ impl Previews {
         Box::new(|ui: &mut Ui, name: &str| {
             let key = format!("font:{name}");
             let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::new(&key)));
-            let (r, resp) = ui.allocate_exact_size(vec2(260.0, 24.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
             let t = Tokens::get(ui.ctx());
             if resp.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
@@ -94,7 +94,7 @@ impl Previews {
         })
     }
 
-    fn get_or(&mut self, ctx: &egui::Context, key: &str, make: impl FnOnce() -> Option<egui::ColorImage>) -> Option<TextureHandle> {
+    pub(crate) fn get_or(&mut self, ctx: &egui::Context, key: &str, make: impl FnOnce() -> Option<egui::ColorImage>) -> Option<TextureHandle> {
         if let Some(t) = self.tex.get(key) {
             return Some(t.clone());
         }
@@ -130,6 +130,59 @@ impl Previews {
     }
 }
 
+/// An equation rasterised for a gallery tile or a button (`pt`: font size; `size`: the tile in
+/// points), with its empty slots shown. Cached by `key`; `None` while waiting for this frame's
+/// rendering budget.
+pub fn math_texture(
+    app: &mut WordApp,
+    ctx: &egui::Context,
+    key: &str,
+    nodes: &wordcraft_doc::math::Arg,
+    display: bool,
+    pt: f32,
+    size: egui::Vec2,
+) -> Option<TextureHandle> {
+    let ppp = ctx.pixels_per_point();
+    let k = format!("math:{key}:{pt}:{}x{}:{ppp}", size.x, size.y);
+    app.previews.get_or(ctx, &k, || math_image(nodes, display, pt, size.x, size.y, ppp))
+}
+
+fn math_image(nodes: &wordcraft_doc::math::Arg, display: bool, pt: f32, w: f32, h: f32, ppp: f32) -> Option<egui::ColorImage> {
+    use wordcraft_doc::math::{Math, to_linear};
+    let props = CharProps { size: Some(pt), ..Default::default() };
+    let mut p = Paragraph::with_text("", props.clone());
+    p.props.align = Some(wordcraft_doc::props::Align::Center);
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    let eq = wordcraft_doc::InlineObject::Equation { linear: to_linear(nodes), display, math: Math { nodes: nodes.clone(), ..Default::default() } };
+    p.insert_object(0, eq, &props).ok()?;
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    d.last_section.page_w = w;
+    d.last_section.page_h = 2000.0;
+    d.last_section.margin_left = 0.0;
+    d.last_section.margin_right = 0.0;
+    d.last_section.margin_top = 0.0;
+    d.last_section.margin_bottom = 0.0;
+    let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
+    let page = l.pages.first()?;
+    // Centre the equation's line in the tile.
+    let mid = page
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Lines { para, y, .. } => Some(y + para.height / 2.0),
+            _ => None,
+        })
+        .unwrap_or(h / 2.0);
+    let mut opts = wordcraft_render::RenderOptions::default();
+    opts.display.placeholders = true;
+    let img = wordcraft_render::render_area(&d, page, 0.0, mid - h / 2.0, w, h, ppp, &opts);
+    let px = img.to_straight();
+    Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px))
+}
+
 /// Lay out `para` (with `base`'s styles) in a `w`×`h` pt box and rasterise it.
 pub fn snippet(base: &Document, para: Paragraph, w: f32, h: f32, ppp: f32, margin: f32) -> Option<egui::ColorImage> {
     snippet_blocks(base, vec![Block::Para(para)], w, h, ppp, margin, None)
@@ -156,13 +209,62 @@ fn snippet_blocks(
     d.last_section.margin_bottom = 0.0;
     let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
     let page = l.pages.first()?;
-    let mut opts = wordcraft_render::RenderOptions::default();
+    let mut opts = crate::canvas::screen_render_options();
     if let Some(p) = paper {
         opts.paper = p;
     }
     let img = wordcraft_render::render_area(&d, page, 0.0, 0.0, w + 2.0 * margin, h + margin, ppp, &opts);
     let px = img.to_straight();
     Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px))
+}
+
+/// Manage Styles' preview of one style (`ty`: the `styles.manage` type), `size` points wide and
+/// tall: a line of sample text, or a small table for a table style.
+pub fn style_preview(app: &mut WordApp, ui: &mut Ui, id: &str, ty: &str, size: egui::Vec2) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(size, Sense::hover());
+    ui.painter().rect(r, 3.0, egui::Color32::WHITE, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let rev = app.session.rev();
+    let skey = app.previews.styles_key(&app.session.doc, rev);
+    let ppp = ui.ctx().pixels_per_point();
+    let (w, h) = (size.x - 12.0, size.y - 8.0);
+    let key = format!("manage:{id}:{ty}:{skey}:{ppp}:{w}x{h}");
+    let doc = &app.session.doc;
+    let tex = app.previews.get_or(ui.ctx(), &key, || {
+        let block = match ty {
+            "table" => {
+                let mut tb = Table::new(3, 4, w - 4.0);
+                tb.props.style = Some(id.to_string());
+                for (ri, row) in tb.rows.iter_mut().enumerate() {
+                    for (ci, cell) in row.cells.iter_mut().enumerate() {
+                        let txt = match (ri, ci) {
+                            (0, c) => ["", "A", "B", "C"].get(c).copied().unwrap_or(""),
+                            (_, 0) => "Row",
+                            _ => "1",
+                        };
+                        cell.blocks = vec![para_block(Paragraph::with_text(txt, CharProps::default()))];
+                    }
+                }
+                Block::Table(tb)
+            }
+            "character" => Block::Para(Paragraph::with_text("AaBbCcYyZz", CharProps { style: Some(id.to_string()), ..CharProps::default() })),
+            _ => {
+                let mut p = Paragraph::with_text("AaBbCcYyZz", CharProps::default()).styled(id);
+                p.props.space_before = Some(0.0);
+                p.props.indent_left = Some(0.0);
+                p.props.indent_first = Some(0.0);
+                p.props.numbering = None;
+                Block::Para(p)
+            }
+        };
+        snippet_blocks(doc, vec![block], w, h, ppp, 4.0, None)
+    });
+    if let Some(hd) = tex {
+        let sz = hd.size_vec2() / ppp;
+        let ir = Rect::from_min_size(pos2(r.min.x + 2.0, r.min.y + 2.0), sz.min(r.size() - vec2(4.0, 4.0)));
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
+        ui.painter().with_clip_rect(r).image(hd.id(), ir, uv, egui::Color32::WHITE);
+    }
 }
 
 /// The Home tab's Styles gallery.
@@ -276,7 +378,9 @@ pub fn table_style_tile(ui: &mut Ui, app: &mut WordApp, style: &str) -> Response
     if resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
-    let key = format!("tstyle:{style}:{ppp}");
+    // Keyed by the style sheet too, so a modified table style redraws.
+    let skey = app.previews.styles_key(&app.session.doc, app.session.rev());
+    let key = format!("tstyle:{style}:{skey}:{ppp}");
     let doc = &app.session.doc;
     let tex = app.previews.get_or(ui.ctx(), &key, || {
         let mut tb = Table::new(5, 4, 100.0);

@@ -250,6 +250,9 @@ pub struct CharProps {
     /// Character shading (background fill).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shading: Option<Rgb>,
+    /// Character border (`w:bdr`); `style: None` = explicitly no border.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vert_align: Option<VertAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -283,8 +286,26 @@ pub struct CharProps {
     pub lang: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_proof: Option<bool>,
+    /// Right-to-left run (OOXML `w:rtl`): its characters are complex script and read right to left.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtl: Option<bool>,
+    /// Format the whole run with the complex-script properties below (OOXML `w:cs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cs: Option<bool>,
+    /// Complex-script font (Arabic, Persian, Hebrew…; OOXML `w:rFonts/@w:cs`). `None` = `font`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_cs: Option<String>,
+    /// Complex-script size, points (`w:szCs`). `None` = the same as `size` (see [`CharProps::overlay`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_cs: Option<f32>,
+    /// Complex-script bold / italic (`w:bCs`, `w:iCs`). `None` = the same as `bold` / `italic`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bold_cs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub italic_cs: Option<bool>,
+    /// BCP 47 language of complex-script text (`w:lang/@w:bidi`, e.g. `fa-IR`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang_bidi: Option<String>,
     /// Hyperlink target: a URL, or `#bookmark` for an internal link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
@@ -294,6 +315,37 @@ pub struct CharProps {
     /// Tracked deletion: index into `Document::revisions`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub del: Option<u32>,
+    /// Tracked formatting change (`w:rPrChange`): the formatting before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<CharProps>>>,
+}
+
+/// A tracked formatting change (ECMA-376 §17.13.5: `w:rPrChange`, `w:pPrChange`,
+/// `w:tblPrChange`, `w:trPrChange`, `w:tcPrChange`, `w:sectPrChange`): the properties as they
+/// were before the change, and the revision (author, date) that made it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PropChange<T> {
+    /// Index into `Document::revisions`.
+    pub rev: u32,
+    /// The properties before the change (formatting only: no revision or link marks).
+    pub old: T,
+}
+
+impl<T> PropChange<T> {
+    pub fn boxed(rev: u32, old: T) -> Option<Box<PropChange<T>>> {
+        Some(Box::new(PropChange { rev, old }))
+    }
+}
+
+/// A tracked change of a paragraph's list numbering (`w:numberingChange`, kept for round trip):
+/// `original` is the number as it was shown before the change.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NumChange {
+    /// Index into `Document::revisions`.
+    pub rev: u32,
+    pub original: String,
 }
 
 macro_rules! overlay_fields {
@@ -303,11 +355,36 @@ macro_rules! overlay_fields {
 }
 
 impl CharProps {
+    /// The same formatting outside a hyperlink: no link target, and no "Hyperlink" character
+    /// style that came with it. What a paragraph mark or text typed next to a link gets.
+    pub fn unlinked(&self) -> CharProps {
+        let mut c = self.clone();
+        if c.link.take().is_some() && c.style.as_deref() == Some("Hyperlink") {
+            c.style = None;
+        }
+        c
+    }
+
     /// Apply every `Some` field of `patch` on top of `self`.
+    ///
+    /// Size, bold and italic come in pairs with their complex-script values (Word's own buttons
+    /// set both): a patch that sets the plain value and leaves the complex-script one `None` sets
+    /// both, so a run's size or bold isn't overridden for its Persian/Arabic characters by an
+    /// inherited `w:szCs` / `w:bCs`. The complex-script font inherits on its own (Word often
+    /// sets only the Latin font and lets complex-script text keep the style's).
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            link, ins, del);
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
+            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del, fmt_change);
+        if patch.size.is_some() && patch.size_cs.is_none() {
+            self.size_cs = None;
+        }
+        if patch.bold.is_some() && patch.bold_cs.is_none() {
+            self.bold_cs = None;
+        }
+        if patch.italic.is_some() && patch.italic_cs.is_none() {
+            self.italic_cs = None;
+        }
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {
         self.overlay(patch);
@@ -319,7 +396,11 @@ impl CharProps {
     /// Clear direct formatting but keep what isn't "formatting" (links, revisions, character style
     /// is cleared too, as Word's Clear Formatting does).
     pub fn cleared(&self) -> CharProps {
-        CharProps { link: self.link.clone(), ins: self.ins, del: self.del, ..Default::default() }
+        CharProps { link: self.link.clone(), ins: self.ins, del: self.del, fmt_change: self.fmt_change.clone(), ..Default::default() }
+    }
+    /// Just the formatting: without the link, revision marks and tracked formatting change.
+    pub fn formatting(&self) -> CharProps {
+        CharProps { link: None, ins: None, del: None, fmt_change: None, ..self.clone() }
     }
 }
 
@@ -332,6 +413,19 @@ pub enum Align {
     Right,
     Justify,
     Distribute,
+}
+
+impl Align {
+    /// Alignment is logical (`Left` is the start edge, ISO 29500 `start`): the alignment as seen
+    /// on the page, or the logical one for a visual choice, in a paragraph that reads right to
+    /// left when `rtl` (Left and Right swap; the swap is its own inverse).
+    pub fn visual(self, rtl: bool) -> Align {
+        match self {
+            Align::Left if rtl => Align::Right,
+            Align::Right if rtl => Align::Left,
+            a => a,
+        }
+    }
 }
 
 /// Line spacing rule.
@@ -573,13 +667,40 @@ pub struct ParaProps {
     /// Drop cap: lines to drop (0 = none) — applies to the first character(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_cap: Option<u8>,
+    /// Asian typography (`w:kinsoku`): East Asian line-breaking rules — no line starts with
+    /// closing punctuation such as 、。」 or ends with opening punctuation such as 「（.
+    /// Unset = on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kinsoku: Option<bool>,
+    /// `w:wordWrap`: Latin words wrap whole; `false` lets them break at any character (Word's
+    /// "Allow Latin text to wrap in the middle of a word"). Unset = on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_wrap: Option<bool>,
+    /// `w:overflowPunct`: punctuation may hang past the line end. Unset = on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overflow_punct: Option<bool>,
+    /// `w:topLinePunct`: compress punctuation at the start of a line. Unset = off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_line_punct: Option<bool>,
+    /// `w:autoSpaceDE`: automatic space between Asian and Latin text. Unset = on.
+    #[serde(rename = "autoSpaceDE", skip_serializing_if = "Option::is_none")]
+    pub auto_space_de: Option<bool>,
+    /// `w:autoSpaceDN`: automatic space between Asian text and numbers. Unset = on.
+    #[serde(rename = "autoSpaceDN", skip_serializing_if = "Option::is_none")]
+    pub auto_space_dn: Option<bool>,
+    /// Tracked change of the list numbering (`w:numberingChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_change: Option<Box<NumChange>>,
+    /// Tracked formatting change (`w:pPrChange`): the paragraph properties before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<ParaProps>>>,
 }
 
 impl ParaProps {
     pub fn overlay(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, space_before, space_after, line_spacing,
             contextual_spacing, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
-            suppress_hyphens, suppress_line_numbers, bidi, drop_cap);
+            suppress_hyphens, suppress_line_numbers, bidi, drop_cap, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);
@@ -587,6 +708,10 @@ impl ParaProps {
     }
     pub fn is_empty(&self) -> bool {
         *self == ParaProps::default()
+    }
+    /// Just the formatting: without the tracked changes.
+    pub fn formatting(&self) -> ParaProps {
+        ParaProps { num_change: None, fmt_change: None, ..self.clone() }
     }
 }
 
@@ -597,6 +722,50 @@ pub enum VAlign {
     Top,
     Center,
     Bottom,
+}
+
+/// Which way a table cell's text runs (`w:textDirection`, ECMA-376 §17.4.72).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextDirection {
+    /// Left to right, lines stacking downwards.
+    #[default]
+    Horizontal,
+    /// Turned 90° clockwise: lines read top to bottom and stack from right to left (`tbRl`).
+    Down,
+    /// Turned 90° counter-clockwise: lines read bottom to top and stack from left to right (`btLr`).
+    Up,
+}
+
+impl TextDirection {
+    /// The direction an OOXML `ST_TextDirection` value names (transitional and strict names).
+    /// The East Asian vertical layouts turn like `Down`; unknown values are horizontal.
+    pub fn from_ooxml(v: &str) -> TextDirection {
+        match v {
+            "tbRl" | "tbRlV" | "tbLrV" | "rl" | "rlV" | "lrV" => TextDirection::Down,
+            "btLr" | "lr" => TextDirection::Up,
+            _ => TextDirection::Horizontal,
+        }
+    }
+    /// The transitional OOXML name.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            TextDirection::Horizontal => "lrTb",
+            TextDirection::Down => "tbRl",
+            TextDirection::Up => "btLr",
+        }
+    }
+    /// Word's Text Direction button: horizontal → down → up → horizontal.
+    pub fn next(self) -> TextDirection {
+        match self {
+            TextDirection::Horizontal => TextDirection::Down,
+            TextDirection::Down => TextDirection::Up,
+            TextDirection::Up => TextDirection::Horizontal,
+        }
+    }
+    pub fn is_turned(self) -> bool {
+        self != TextDirection::Horizontal
+    }
 }
 
 /// Table-wide properties.
@@ -622,6 +791,39 @@ pub struct TableProps {
     pub shading: Option<Rgb>,
     /// Alternative text.
     pub caption: Option<String>,
+    /// Floating placement (`w:tblpPr`); `None` for a table in the text flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub float: Option<TableFloat>,
+    /// Tracked formatting change (`w:tblPrChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<TableProps>>>,
+}
+
+/// Where a floating table sits; the text after it wraps around it.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TableFloat {
+    /// What `x` is measured from: the column (`Column`), the margin or the page.
+    pub h_rel: crate::para::Anchor,
+    /// What `y` is measured from: the text where the table stands (`Paragraph`), the margin or
+    /// the page.
+    pub v_rel: crate::para::Anchor,
+    /// Offsets, points (used when the matching alignment is `None`).
+    pub x: f32,
+    pub y: f32,
+    pub h_align: Option<crate::para::FloatAlign>,
+    pub v_align: Option<crate::para::FloatAlign>,
+    /// Distance from surrounding text: left, top, right, bottom (points).
+    pub dist: [f32; 4],
+    /// Whether it may overlap other floating tables (`w:tblOverlap`); Word's default is yes.
+    pub overlap: bool,
+}
+
+impl TableFloat {
+    /// The distances from text, finite and clamped (left, top, right, bottom).
+    pub fn dist_from_text(&self) -> [f32; 4] {
+        self.dist.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -660,6 +862,9 @@ pub struct RowProps {
     pub header: bool,
     /// Don't let the row break across pages.
     pub cant_split: bool,
+    /// Tracked formatting change (`w:trPrChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<RowProps>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -678,6 +883,9 @@ pub enum VMerge {
 pub struct CellProps {
     /// Preferred width, points.
     pub width: Option<f32>,
+    /// Preferred width as a percentage of the table's (`w:tcW w:type="pct"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_pct: Option<f32>,
     /// Number of grid columns spanned (1 = no horizontal merge).
     pub span: u32,
     pub vmerge: VMerge,
@@ -686,9 +894,12 @@ pub struct CellProps {
     pub valign: VAlign,
     /// Cell margins override (top, left, bottom, right), points.
     pub margins: Option<[f32; 4]>,
-    /// Text direction: false = horizontal, true = rotated (top-to-bottom).
-    pub vertical_text: bool,
+    /// Which way the cell's text runs.
+    pub text_direction: TextDirection,
     pub no_wrap: bool,
+    /// Tracked formatting change (`w:tcPrChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<CellProps>>>,
 }
 
 #[cfg(test)]
@@ -737,6 +948,23 @@ mod tests {
         for h in Highlight::ALL {
             assert_eq!(Highlight::from_ooxml(h.ooxml()), h);
         }
+    }
+
+    #[test]
+    fn text_direction_names() {
+        let mut d = TextDirection::Horizontal;
+        for _ in 0..3 {
+            assert_eq!(TextDirection::from_ooxml(d.ooxml()), d);
+            d = d.next();
+        }
+        assert_eq!(d, TextDirection::Horizontal, "the button cycles through three directions");
+        // Strict names, East Asian vertical layouts and junk.
+        assert_eq!(TextDirection::from_ooxml("rl"), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml("lr"), TextDirection::Up);
+        assert_eq!(TextDirection::from_ooxml("tbRlV"), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml("tb"), TextDirection::Horizontal);
+        assert_eq!(TextDirection::from_ooxml("lrTbV"), TextDirection::Horizontal);
+        assert_eq!(TextDirection::from_ooxml("é?"), TextDirection::Horizontal);
     }
 
     #[test]

@@ -50,13 +50,14 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
 | Method | Params | Result |
 |---|---|---|
-| `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"|"pt-br"}`)…) |
+| `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.zotero.*` (see `docs/zotero.md`), `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"|"pt-br"|"es"|"uk"|"sr"|"sr-latn"|"et"}`), `ui.theme` (`{"value": "system"|"light"|"dark"}`; `system` follows the OS appearance, light when it reports none), `ui.interfaceSize` (`{"percent": 80–200}`, clamped; no value reads it; scales the interface on top of the system display scale, document zoom stays `view.zoom`)…) |
 | `engine.commands` | — | every command: id, label, location, shortcut, params, enabled |
 | `document.inspect` | `text?` | blocks (text, style, runs, lists, tables), parts, sections, selection, pages |
-| `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, perf |
+| `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, comment balloons (`balloons`: id + screen rect; `balloon`: the selected one), perf |
 | `ui.click` | `x`, `y`, `button?`, `count?`, `shift?`, `cmd?`, `alt?` | real pointer input at window coordinates |
 | `ui.clickText` | `page` (0-based), `x`, `y` (points from the page's top-left), `count?` | click inside a page |
 | `ui.move` / `ui.drag` | `x`,`y` / `x`,`y`,`toX`,`toY`,`steps?` | pointer move / drag |
+| `ui.press` / `ui.release` | `x`,`y`, modifiers | primary button down / up there (with `ui.move` between: a drag you can screenshot halfway) |
 | `ui.key` | `key` (`B`, `Enter`, `Left`…), `shift?`, `alt?`, `cmd?` | key press through egui (shortcuts apply) |
 | `ui.text` | `text` | typed text through egui |
 | `ui.screenshot` | `path?` | PNG of the window |

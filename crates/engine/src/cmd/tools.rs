@@ -173,11 +173,6 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"hint": "Save or export a copy (PDF, Word document) to share it."}))
         })
         .pure(),
-        CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", |s, _| {
-            s.status = "Password encryption isn't available yet; use Restrict Editing to prevent changes.".into();
-            Err(CmdError::Failed("password encryption isn't available yet".into()))
-        })
-        .pure(),
         CommandSpec::new("insert.quickParts", "Quick Parts", "Insert › Text", quick_parts)
             .params(r#"{"save"?: name (from the selection), "insert"?: name, "delete"?: name} → list"#),
         CommandSpec::new("insert.autoText", "AutoText", "Insert › Text › Quick Parts", quick_parts).params(r#"{"save"?: name, "insert"?: name}"#),
@@ -218,6 +213,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             let frag = wordcraft_doc::edit::Fragment {
                 blocks: lines.iter().map(|l| Block::Para(Paragraph::with_text(l, CharProps::default()).styled("NoSpacing"))).collect(),
+                ..Default::default()
             };
             let end = s.doc.insert_fragment(&at, &frag)?;
             s.sel = Selection::caret(end);
@@ -273,14 +269,6 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"header": sect.header, "footer": sect.footer}))
         })
         .params(r#"{"header"?: pt, "footer"?: pt}"#),
-        CommandSpec::new("table.textDirection", "Text Direction", "Table Layout › Alignment", |s, _| {
-            let Some((tp, r, c)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
-            let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
-            if let Some(cell) = t.rows.get_mut(r).and_then(|x| x.cells.get_mut(c)) {
-                cell.props.vertical_text = !cell.props.vertical_text;
-            }
-            sel_result(s)
-        }),
         CommandSpec::new("table.cellMargins", "Cell Margins", "Table Layout › Alignment", |s, v| {
             let Some((tp, _, _)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
             let m = [
@@ -352,13 +340,6 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
-        CommandSpec::new("para.rtl", "Right-to-Left Text Direction", "Home › Paragraph", |s, v| {
-            let on = p::bool(v, "value").unwrap_or_else(|| !s.doc.para_at(&s.sel.focus).and_then(|x| x.props.bidi).unwrap_or(false));
-            super::para::fmt(s, &|pp| {
-                pp.bidi = Some(on);
-                pp.align = Some(if on { wordcraft_doc::Align::Right } else { wordcraft_doc::Align::Left });
-            })
-        }),
         CommandSpec::new("review.language", "Language", "Review › Language", |s, v| {
             let lang = p::str(v, "lang").unwrap_or("en-US").to_string();
             let no_proof = p::bool(v, "noProof");
@@ -372,11 +353,11 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"lang": "en-US|en-GB|fr-FR|…", "noProof"?: bool}"#),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
+            s.relayout();
             Ok(json!({"value": s.view.show_markup}))
         })
         .pure(),
         CommandSpec::new("review.editor", "Editor", "Home › Editor", |s, v| s.run("review.spelling", v)).pure(),
-        CommandSpec::new("review.readAloud", "Read Aloud", "Review › Speech", read_aloud).pure(),
         CommandSpec::new("select.similar", "Select Text with Similar Formatting", "Home › Editing › Select", select_similar).pure(),
         CommandSpec::new("select.extend", "Extend Selection", "Editing › Selection", |s, _| {
             // F8 grows the selection: word → sentence → paragraph → document.
@@ -1764,6 +1745,12 @@ fn audit_document(s: &mut Session, v: &Value) -> CmdResult {
                     "fix": "Run picture.altText or auditDocument {fix: \"defaultAltText\"}"
                 }));
             }
+            // Charts and diagrams can't be given alt text yet (see objects.rs), so only report them.
+            if let InlineObject::Graphic { alt, .. } = o
+                && alt.trim().is_empty()
+            {
+                issues.push(json!({"kind": "error", "issue": "Chart or diagram has no alternative text", "where": path.0}));
+            }
         }
         if let Some(l) = s.doc.styles.resolve_para(&p.props).outline_level {
             if let Some(prev) = last_level
@@ -1990,52 +1977,6 @@ fn hf_nav(s: &mut Session, dir: i32) -> CmdResult {
     let next = ids.get(((i + dir).rem_euclid(n)) as usize).copied().unwrap_or(cur);
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Part(next)));
     sel_result(s)
-}
-
-fn read_aloud(s: &mut Session, _: &Value) -> CmdResult {
-    let text = if s.sel.is_collapsed() {
-        let f = s.sel.focus.clone();
-        s.doc
-            .para_paths(f.story)
-            .into_iter()
-            .filter(|p| *p >= f.path)
-            .filter_map(|p| s.doc.para(f.story, &p).map(|x| x.plain_text()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        s.selected_text()
-    };
-    let text: String = text.chars().take(20_000).collect();
-    #[cfg(target_arch = "wasm32")]
-    let _ = &text;
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("say").arg(&text).spawn().map_err(|e| CmdError::Failed(e.to_string()))?;
-        return Ok(json!({"speaking": text.len()}));
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let script = "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak([Console]::In.ReadToEnd())";
-        if let Ok(mut c) =
-            std::process::Command::new("powershell").args(["-NoProfile", "-Command", script]).stdin(std::process::Stdio::piped()).spawn()
-            && let Some(mut i) = c.stdin.take()
-        {
-            use std::io::Write;
-            let _ = i.write_all(text.as_bytes());
-        }
-        return Ok(json!({"speaking": text.len()}));
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = std::process::Command::new("spd-say")
-            .arg(&text)
-            .spawn()
-            .or_else(|_| std::process::Command::new("espeak").arg(&text).spawn())
-            .map_err(|e| CmdError::Failed(format!("no speech engine found: {e}")))?;
-        return Ok(json!({"speaking": text.len()}));
-    }
-    #[allow(unreachable_code)]
-    Err(CmdError::Failed("Read Aloud isn't available on this platform".into()))
 }
 
 fn select_similar(s: &mut Session, _: &Value) -> CmdResult {

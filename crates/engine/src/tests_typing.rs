@@ -298,3 +298,82 @@ fn shift_enter_stays_inside_the_list_item() {
     typ(&mut s, "cont\ntwo");
     assert_eq!(paras(&s), vec![para("Line one\ncont", Some(0)), para("two", Some(0))]);
 }
+
+/// Body paragraph texts, lower-cased (AutoCorrect may capitalise a sentence start).
+fn texts(s: &Session) -> Vec<String> {
+    paras(s).into_iter().map(|p| p.0.to_lowercase()).collect()
+}
+
+#[test]
+fn tracked_enter_and_backspace_track_the_paragraph_mark() {
+    // Issue #229: with Track Changes on, Enter inserts a tracked paragraph mark that Reject All
+    // takes out again; Backspace over your own Enter removes it outright.
+    let mut s = typed("one");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\ntwo");
+    assert_eq!(texts(&s), ["one", "two"]);
+    typ(&mut s, "\u{8}\u{8}\u{8}\u{8}");
+    assert_eq!(texts(&s), ["one"]);
+    typ(&mut s, "\n");
+    assert_eq!(texts(&s), ["one", ""]);
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(texts(&s), ["one"]);
+    // A break that was already there isn't removed: Backspace marks it deleted and moves before it.
+    let mut s = typed("one\ntwo");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(texts(&s), ["one", "two"]);
+    assert_eq!(s.sel.focus, Pos::body(0, 3));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.mark.del.is_some()));
+}
+
+/// Linked text in each body paragraph, and whether its paragraph mark carries a link.
+fn links(s: &Session) -> Vec<(String, bool)> {
+    s.doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .map(|p| {
+            let linked = p.run_ranges().filter(|(_, c)| c.link.is_some()).filter_map(|(r, _)| p.text.get(r)).collect();
+            (linked, p.mark.link.is_some())
+        })
+        .collect()
+}
+
+#[test]
+fn a_link_covers_only_its_own_text() {
+    // Issue #413: linking a whole paragraph also linked its mark, so Enter carried the link into
+    // the next paragraph and everything typed there (or hovered below it) became the link.
+    let mut s = typed("hi\nhello");
+    run(&mut s, "select.text", json!({"text": "hello"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/"}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 5}}));
+    typ(&mut s, "\nnext");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "above");
+    assert_eq!(texts(&s), ["hi", "above", "hello", "next"]);
+    let unlinked = (String::new(), false);
+    assert_eq!(links(&s), [unlinked.clone(), unlinked.clone(), ("Hello".into(), false), unlinked]);
+}
+
+#[test]
+fn typing_at_either_end_of_a_link_is_not_linked() {
+    // As in Word: a link typed in with Ctrl+K, then text typed after it, at its end later on,
+    // at its start, or after Enter, stays outside the link; typing inside it extends it.
+    let mut s = typed("see ");
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "site"}));
+    typ(&mut s, " now");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 8}}));
+    typ(&mut s, "!");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 4}}));
+    typ(&mut s, "a ");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 8}}));
+    typ(&mut s, "x");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 11}}));
+    typ(&mut s, "\nmore");
+    assert_eq!(texts(&s), ["see a sixte", "more! now"]);
+    assert_eq!(links(&s), [("sixte".into(), false), (String::new(), false)]);
+}

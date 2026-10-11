@@ -6,12 +6,43 @@ use wordcraft_doc::{Block, Document, StoryRef};
 use super::{pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
+/// Longest user name kept, in characters; longer names are cut, not refused.
+pub const MAX_AUTHOR_CHARS: usize = 255;
+
+/// Sets the user name that new tracked changes and comments are recorded under. The name is
+/// trimmed, stripped of control characters (they can't go into the saved XML) and cut to
+/// [`MAX_AUTHOR_CHARS`]; a blank name is refused so revisions always carry an author.
+fn set_author(s: &mut Session, v: &Value) -> CmdResult {
+    let name: String = p::req_str(v, "name")?.trim().chars().filter(|c| !c.is_control()).take(MAX_AUTHOR_CHARS).collect();
+    let name = name.trim_end();
+    if name.is_empty() {
+        return Err(CmdError::Params("`name` must not be blank".into()));
+    }
+    s.author = name.to_string();
+    let mut r = sel_result(s)?;
+    if let Some(o) = r.as_object_mut() {
+        o.insert("name".into(), json!(s.author));
+    }
+    Ok(r)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
-        CommandSpec::new("file.open", "Open", "File", open).key("Mod+O").params(r#"{"path": string}"#).pure(),
-        CommandSpec::new("file.save", "Save", "File", save).key("Mod+S").params(r#"{"path"?: string}"#).pure(),
-        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key("F12").params(r#"{"path": string}"#).pure(),
+        CommandSpec::new("file.open", "Open", "File", open)
+            .key("Mod+O")
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .pure(),
+        CommandSpec::new("file.save", "Save", "File", save)
+            .key("Mod+S")
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does)}"#)
+            .pure(),
+        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key("F12").params(r#"{"path": string, "password"?: string}"#).pure(),
+        // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
+        // to undo; it marks the document as changed itself.
+        CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
+            .params(r#"{"password": string (Word documents are saved encrypted with it) | null or "" (saved unencrypted)}"#)
+            .pure(),
         CommandSpec::new("file.exportPdf", "Export PDF", "File › Export", |s, v| {
             let path = p::req_str(v, "path")?;
             let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
@@ -37,18 +68,16 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+W")
         .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
-            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?}"#),
+            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
         CommandSpec::new("file.options", "Options", "File", |s, _| {
             s.ui_requests.push(json!({"open": "options"}));
             sel_result(s)
         })
         .pure(),
-        CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", |s, v| {
-            s.author = p::req_str(v, "name")?.to_string();
-            sel_result(s)
-        })
-        .pure(),
+        CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
+            .params(r#"{"name": string (author of new tracked changes and comments)}"#)
+            .pure(),
         CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool}"#).pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
             let story = super::story_param(s, v);
@@ -95,15 +124,39 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         s.ui_requests.push(json!({"open": "openFile"}));
         return sel_result(s);
     };
-    let doc = if let Some(data) = p::str(v, "data") {
+    let password = p::str(v, "password");
+    let (doc, encrypted) = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
-        crate::io::open_bytes(path, &bytes).map_err(CmdError::Failed)?
+        crate::io::open_bytes_with(path, &bytes, password).map_err(CmdError::Failed)?
     } else {
-        crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
+        crate::io::open_path_with(std::path::Path::new(path), password).map_err(CmdError::Failed)?
     };
     s.set_document(doc);
     s.path = Some(path.into());
-    Ok(json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count()}))
+    // Like Word, a document opened with a password is saved with it again.
+    if encrypted {
+        s.password = password.map(crate::io::Password::new);
+    }
+    Ok(json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted}))
+}
+
+/// File › Info › Protect Document › Encrypt with Password: the password Word documents are saved
+/// with from now on, or none.
+fn encrypt(s: &mut Session, v: &Value) -> CmdResult {
+    let password = match v.get("password") {
+        Some(Value::Null) => None,
+        Some(Value::String(pw)) if pw.is_empty() => None,
+        Some(Value::String(pw)) => {
+            wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;
+            Some(crate::io::Password::new(pw))
+        }
+        _ => return Err(CmdError::Params("`password` must be a string, or null to remove the password".into())),
+    };
+    if password != s.password {
+        s.password = password;
+        s.dirty = true;
+    }
+    Ok(json!({"encrypted": s.password.is_some()}))
 }
 
 fn save(s: &mut Session, v: &Value) -> CmdResult {
@@ -114,19 +167,26 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(json!({"saved": false}));
         }
     };
-    s.doc.core.modified = super::now_iso();
-    if s.doc.core.created.is_empty() {
-        s.doc.core.created = s.doc.core.modified.clone();
+    if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
+        let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
+            return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
+        };
+        if !crate::io::can_encrypt(&path.to_string_lossy()) {
+            return Err(CmdError::Params("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password".into()));
+        }
+        wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;
+        s.password = Some(crate::io::Password::new(pw));
     }
-    s.doc.core.last_modified_by = s.author.clone();
-    s.doc.core.revision = s.doc.core.revision.saturating_add(1);
-    crate::io::save_path(&path, &s.doc).map_err(CmdError::Failed)?;
+    s.stamp_save();
+    let password = s.password.as_ref().map(crate::io::Password::as_str);
+    crate::io::save_path_with(&path, &s.doc, password).map_err(CmdError::Failed)?;
+    let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
         s.dirty = false;
     }
-    Ok(json!({"saved": true, "path": path.to_string_lossy()}))
+    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
 }
 
 fn save_as(s: &mut Session, v: &Value) -> CmdResult {
@@ -163,8 +223,34 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     set(&mut c.keywords, "keywords");
     set(&mut c.description, "comments");
     set(&mut c.category, "category");
-    Ok(serde_json::to_value(&s.doc.core).unwrap_or(Value::Null))
+    if let Some(custom) = v.get("custom") {
+        let Some(m) = custom.as_object() else {
+            return Err(CmdError::Params("`custom` must be an object of name → string or null".into()));
+        };
+        for (name, val) in m {
+            if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
+                return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
+            }
+            match val {
+                Value::Null => {
+                    s.doc.remove_custom_prop(name);
+                }
+                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => s.doc.set_custom_prop(name, x),
+                _ => return Err(CmdError::Params(format!("custom property `{name}` must be a string (≤ {MAX_CUSTOM_VALUE} bytes) or null"))),
+            }
+        }
+    }
+    let mut out = serde_json::to_value(&s.doc.core).unwrap_or(Value::Null);
+    if let Some(o) = out.as_object_mut() {
+        o.insert("custom".into(), serde_json::to_value(&s.doc.custom_props).unwrap_or(Value::Null));
+    }
+    Ok(out)
 }
+
+/// Longest custom property name (Word's limit).
+const MAX_CUSTOM_NAME: usize = 255;
+/// Largest custom property value we accept from a command.
+const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 
 fn info(s: &mut Session, _: &Value) -> CmdResult {
     let l = s.layout();
@@ -178,6 +264,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "trackChanges": s.doc.settings.track_changes,
         "comments": s.doc.comments.len(),
         "sections": s.doc.sections().len(),
+        "encrypted": s.password.is_some(),
         "layoutMs": l.ms,
     }))
 }

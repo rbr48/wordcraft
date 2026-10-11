@@ -116,6 +116,10 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.text(10.0, 10.0, 12.0, "ab", c, false);
             pen.line_c(&[(3.0, 10.5), (17.0, 10.5)], c);
         }
+        "charborder" => {
+            pen.rect(3.0, 3.0, 17.0, 17.0, a);
+            pen.text(10.0, 6.0, 9.0, "A", c, false);
+        }
         "subscript" => {
             pen.text(8.0, 9.0, 13.0, "x", c, false);
             pen.text(15.0, 14.5, 8.0, "2", a, true);
@@ -201,6 +205,19 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             ().then_lines(&pen, 8.0, 17.0, &[7.0, 13.0])
         }
         "justify" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // Text direction: lines set from the start edge, an arrow in the reading direction.
+        "textLtr" => {
+            pen.lines(3.0, 14.0, &[4.0, 8.0]);
+            pen.lines(3.0, 10.0, &[12.0]);
+            pen.line_c(&[(3.0, 16.5), (16.5, 16.5)], a);
+            pen.line_c(&[(13.5, 14.0), (16.5, 16.5), (13.5, 19.0)], a);
+        }
+        "textRtl" => {
+            pen.lines(6.0, 17.0, &[4.0, 8.0]);
+            pen.lines(10.0, 17.0, &[12.0]);
+            pen.line_c(&[(17.0, 16.5), (3.5, 16.5)], a);
+            pen.line_c(&[(6.5, 14.0), (3.5, 16.5), (6.5, 19.0)], a);
+        }
         "lineSpacing" => {
             pen.lines(9.0, 17.0, &[5.0, 10.0, 15.0]);
             pen.line_c(&[(4.5, 3.0), (4.5, 17.0)], a);
@@ -286,6 +303,13 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(4.0, 18.0), (4.0, 13.0), (16.0, 13.0), (16.0, 18.0)]);
             pen.line_c(&[(2.0, 10.0), (18.0, 10.0)], a);
         }
+        "drawTable" => {
+            pen.rect(2.5, 3.0, 14.0, 14.5, c);
+            pen.line(&[(2.5, 8.5), (14.0, 8.5)]);
+            pen.line(&[(8.0, 3.0), (8.0, 14.5)]);
+            pen.line(&[(9.5, 18.0), (17.0, 10.5), (18.5, 12.0), (11.0, 19.5), (9.0, 19.8), (9.5, 18.0)]);
+            pen.fill(&[(17.0, 10.5), (18.0, 9.5), (19.5, 11.0), (18.5, 12.0)], a);
+        }
         "table" => {
             pen.frect(3.0, 3.0, 17.0, 7.0, a);
             pen.rect(3.0, 3.0, 17.0, 17.0, c);
@@ -307,6 +331,14 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "shapes" => {
             pen.rect(3.0, 3.0, 11.0, 11.0, c);
             pen.fcircle(13.0, 13.0, 4.5, a);
+        }
+        // Shape Effects: a square casting a soft shadow down and to the right.
+        "shapeEffects" => {
+            for (k, alpha) in [(2.0, 30), (1.0, 50), (0.0, 80)] {
+                pen.frect(7.0 - k, 7.0 - k, 18.0 + k, 18.0 + k, Color32::from_rgba_unmultiplied(0, 0, 0, alpha));
+            }
+            pen.frect(3.0, 3.0, 14.0, 14.0, a);
+            pen.rect(3.0, 3.0, 14.0, 14.0, c);
         }
         "icons" => {
             pen.circle(10.0, 10.0, 7.5, c);
@@ -443,6 +475,12 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "eraser" => {
             pen.closed(&[(3.0, 13.0), (11.0, 5.0), (17.0, 11.0), (11.0, 17.0), (7.0, 17.0)], c);
             pen.fill(&[(3.0, 13.0), (7.0, 9.0), (13.0, 15.0), (11.0, 17.0), (7.0, 17.0)], Color32::from_rgb(0xE8, 0x6F, 0xA0));
+        }
+        // Ink thickness: three strokes, thin to thick.
+        "thickness" => {
+            pen.frect(3.0, 4.5, 17.0, 5.5, c);
+            pen.frect(3.0, 9.0, 17.0, 11.0, c);
+            pen.frect(3.0, 14.0, 17.0, 17.0, a);
         }
         "lasso" => {
             pen.closed(&[(4.0, 7.0), (9.0, 3.0), (16.0, 5.0), (16.0, 11.0), (10.0, 13.0), (4.0, 11.0)], c);
@@ -618,6 +656,40 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.circle(9.0, 9.0, 5.0, c);
             pen.line_c(&[(12.5, 12.5), (17.0, 17.0)], a);
             pen.lines(6.5, 11.5, &[8.0, 10.0]);
+        }
+        // Zotero
+        "docPrefs" => {
+            pen.page(3.0, 2.5, 13.0, 17.5);
+            pen.lines(5.0, 10.0, &[7.5, 10.0]);
+            // A small gear: ring and teeth.
+            pen.circle(14.0, 14.0, 2.2, a);
+            for k in 0..6 {
+                let t = k as f32 * std::f32::consts::PI / 3.0;
+                let (dx, dy) = (t.cos(), t.sin());
+                pen.line_c(&[(14.0 + 2.8 * dx, 14.0 + 2.8 * dy), (14.0 + 4.2 * dx, 14.0 + 4.2 * dy)], a);
+            }
+        }
+        "unlinkCitations" => {
+            // Two chain links pulled apart, with a break between them.
+            pen.closed(
+                &[(2.5, 12.5), (6.0, 9.0), (8.5, 9.0), (8.5, 10.8), (6.8, 10.8), (4.6, 13.0), (6.8, 15.2), (8.5, 15.2), (8.5, 17.0), (6.0, 17.0)],
+                c,
+            );
+            pen.closed(
+                &[(17.5, 7.5), (14.0, 11.0), (11.5, 11.0), (11.5, 9.2), (13.2, 9.2), (15.4, 7.0), (13.2, 4.8), (11.5, 4.8), (11.5, 3.0), (14.0, 3.0)],
+                c,
+            );
+            pen.line_c(&[(9.0, 6.5), (7.5, 5.0)], a);
+            pen.line_c(&[(11.0, 13.5), (12.5, 15.0)], a);
+            pen.line_c(&[(10.0, 5.5), (10.0, 3.5)], a);
+            pen.line_c(&[(10.0, 14.5), (10.0, 16.5)], a);
+        }
+        "addNote" => {
+            pen.closed(&[(3.0, 3.0), (17.0, 3.0), (17.0, 12.5), (12.5, 17.0), (3.0, 17.0)], c);
+            pen.line(&[(12.5, 17.0), (12.5, 12.5), (17.0, 12.5)]);
+            pen.line_c(&[(6.0, 8.0), (11.0, 8.0)], a);
+            pen.line_c(&[(8.5, 5.5), (8.5, 10.5)], a);
+            pen.lines(6.0, 11.0, &[13.5]);
         }
         "citation" => {
             pen.text(6.0, 9.0, 14.0, "“", a, true);
@@ -827,6 +899,14 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(6.0, 8.5), (11.0, 8.5)]);
             pen.line(&[(8.5, 6.0), (8.5, 11.0)]);
         }
+        "zoomIn" | "zoomOut" => {
+            pen.circle(8.5, 8.5, 5.5, c);
+            pen.line_c(&[(12.5, 12.5), (17.5, 17.5)], a);
+            pen.line(&[(6.0, 8.5), (11.0, 8.5)]);
+            if name == "zoomIn" {
+                pen.line(&[(8.5, 6.0), (8.5, 11.0)]);
+            }
+        }
         "zoom100" => pen.text(10.0, 10.0, 7.5, "100", a, true),
         "onePage" => pen.page(5.0, 2.0, 15.0, 18.0),
         "multiplePages" => {
@@ -840,6 +920,12 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "darkMode" => {
             pen.fcircle(10.0, 10.0, 7.0, c);
             pen.fcircle(13.0, 8.0, 6.0, Color32::from_rgba_unmultiplied(255, 255, 255, 230));
+        }
+        "interfaceTheme" => {
+            // A window, its right half dark: light, dark or both (follow the system).
+            pen.frect(10.0, 3.5, 17.5, 16.5, c);
+            pen.rect(2.5, 3.5, 17.5, 16.5, c);
+            pen.line_c(&[(2.5, 6.5), (10.0, 6.5)], a);
         }
         "newWindow" => {
             pen.rect(2.5, 5.0, 13.0, 15.0, c);
@@ -1020,6 +1106,34 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "chevronRight" => pen.line(&[(7.0, 4.0), (13.0, 10.0), (7.0, 16.0)]),
         "chevronUp" => pen.line(&[(4.0, 13.0), (10.0, 7.0), (16.0, 13.0)]),
         "chevronDown" => pen.line(&[(4.0, 7.0), (10.0, 13.0), (16.0, 7.0)]),
+        // Read Aloud player
+        "mediaPlay" => pen.fill(&[(6.0, 4.0), (16.0, 10.0), (6.0, 16.0)], c),
+        "mediaPause" => {
+            pen.frect(5.5, 4.0, 8.5, 16.0, c);
+            pen.frect(11.5, 4.0, 14.5, 16.0, c);
+        }
+        "mediaStop" => pen.frect(5.0, 5.0, 15.0, 15.0, c),
+        "mediaPrev" => {
+            pen.frect(4.0, 5.0, 6.0, 15.0, c);
+            pen.fill(&[(16.0, 5.0), (7.0, 10.0), (16.0, 15.0)], c);
+        }
+        "mediaNext" => {
+            pen.frect(14.0, 5.0, 16.0, 15.0, c);
+            pen.fill(&[(4.0, 5.0), (13.0, 10.0), (4.0, 15.0)], c);
+        }
+        // Move past citation: a bracketed citation with an arrow hopping over it to the caret.
+        "pastCitation" => {
+            pen.line_c(&[(4.5, 9.0), (3.0, 9.0), (3.0, 17.0), (4.5, 17.0)], c);
+            pen.line_c(&[(11.5, 9.0), (13.0, 9.0), (13.0, 17.0), (11.5, 17.0)], c);
+            pen.lines(5.5, 10.5, &[12.0, 14.5]);
+            pen.line_c(&[(4.0, 6.0), (8.0, 2.5), (14.0, 2.5), (16.5, 7.0)], a);
+            pen.line_c(&[(14.0, 6.0), (16.5, 7.0), (17.5, 4.5)], a);
+            pen.line_c(&[(17.0, 9.0), (17.0, 17.5)], a);
+        }
+        "chevronDoubleRight" => {
+            pen.line(&[(4.0, 4.0), (9.0, 10.0), (4.0, 16.0)]);
+            pen.line(&[(11.0, 4.0), (16.0, 10.0), (11.0, 16.0)]);
+        }
         "addins" => {
             pen.rect(3.0, 3.0, 9.0, 9.0, c);
             pen.rect(11.0, 3.0, 17.0, 9.0, c);

@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::Pos;
-use wordcraft_doc::props::{CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
+use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
 
 use super::sel_result;
@@ -13,12 +13,34 @@ pub const SIZES: [f32; 17] = [8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("format.bold", "Bold", "Home › Font", |s, v| toggle(s, v, |r| r.bold, |c, on| c.bold = Some(on)))
-            .key("Mod+B")
-            .params(r#"{"value"?: bool}"#),
-        CommandSpec::new("format.italic", "Italic", "Home › Font", |s, v| toggle(s, v, |r| r.italic, |c, on| c.italic = Some(on)))
-            .key("Mod+I")
-            .params(r#"{"value"?: bool}"#),
+        CommandSpec::new("format.bold", "Bold", "Home › Font", |s, v| {
+            // Like Word's button, for complex-script (Persian, Arabic) text too: an unset `bold_cs`
+            // follows `bold`.
+            toggle(
+                s,
+                v,
+                |r| r.bold,
+                |c, on| {
+                    c.bold = Some(on);
+                    c.bold_cs = None;
+                },
+            )
+        })
+        .key("Mod+B")
+        .params(r#"{"value"?: bool}"#),
+        CommandSpec::new("format.italic", "Italic", "Home › Font", |s, v| {
+            toggle(
+                s,
+                v,
+                |r| r.italic,
+                |c, on| {
+                    c.italic = Some(on);
+                    c.italic_cs = None;
+                },
+            )
+        })
+        .key("Mod+I")
+        .params(r#"{"value"?: bool}"#),
         CommandSpec::new("format.underline", "Underline", "Home › Font", underline)
             .key("Mod+U")
             .params(r#"{"value"?: bool, "style"?: "single|double|thick|dotted|dash|dotDash|dotDotDash|wave|words"}"#),
@@ -32,6 +54,11 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+Shift+W"),
         CommandSpec::new("format.strikethrough", "Strikethrough", "Home › Font", |s, v| toggle(s, v, |r| r.strike, |c, on| c.strike = Some(on)))
             .params(r#"{"value"?: bool}"#),
+        // Note: off clears the direct property only; a border inherited from a character style stays on.
+        CommandSpec::new("format.border", "Character Border", "Home › Font", |s, v| {
+            toggle(s, v, |r| r.border.is_some(), |c, on| c.border = on.then(|| Border::single(0.5)))
+        })
+        .params(r#"{"value"?: bool}"#),
         CommandSpec::new("format.doubleStrikethrough", "Double Strikethrough", "Home › Font › Font", |s, v| {
             toggle(s, v, |r| r.double_strike, |c, on| c.double_strike = Some(on))
         }),
@@ -109,20 +136,10 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+D")
         .pure(),
-        CommandSpec::new("format.border", "Character Border", "Home › Font", border).params(r#"{"value"?: bool, "color"?: string}"#),
         CommandSpec::new("format.phonetic", "Phonetic Guide", "Home › Font", phonetic).params(r#"{"ruby"?: string}"#),
         CommandSpec::new("format.enclose", "Enclose Characters", "Home › Font", enclose).params(r#"{"shape"?: "circle|square|triangle"}"#),
         CommandSpec::new("format.state", "Formatting at Selection", "Home › Font", |s, _| Ok(state(s))).pure(),
     ]
-}
-
-fn border(s: &mut Session, v: &Value) -> CmdResult {
-    let on = v.get("value").and_then(Value::as_bool).unwrap_or(true);
-    let color = v.get("color").and_then(Value::as_str).and_then(Rgb::parse).unwrap_or(Rgb(0x40, 0x40, 0x40));
-    apply(s, &|c| {
-        c.shading = if on { Some(Rgb(0xEE, 0xEE, 0xEE)) } else { None };
-    })?;
-    Ok(json!({"border": on, "color": color.hex()}))
 }
 
 fn phonetic(s: &mut Session, v: &Value) -> CmdResult {
@@ -157,8 +174,28 @@ fn target(s: &Session) -> Option<(Pos, Pos)> {
     None
 }
 
+/// The non-empty rows of a column selection, if one is active.
+fn column_rows(s: &Session) -> Option<Vec<(Pos, Pos)>> {
+    let segs = s.column_segments()?;
+    let rows: Vec<(Pos, Pos)> = segs
+        .iter()
+        .map(|(a, b)| (s.doc.clamp(a), s.doc.clamp(b)))
+        .filter(|(a, b)| a != b && a.path == b.path && a.story == b.story)
+        .map(|(a, b)| if a <= b { (a, b) } else { (b, a) })
+        .collect();
+    // An empty block (column mode just started) formats like a caret.
+    (!rows.is_empty()).then_some(rows)
+}
+
 /// Apply a change to the selection (or the pending caret formatting).
 pub fn apply(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> CmdResult {
+    // A column selection formats each row's piece.
+    if let Some(rows) = column_rows(s) {
+        for (a, b) in rows {
+            s.doc.format_range(&a, &b, f)?;
+        }
+        return sel_result(s);
+    }
     match target(s) {
         Some((a, b)) => {
             s.doc.format_range(&a, &b, f)?;
@@ -183,6 +220,22 @@ pub fn apply(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> CmdResult {
 /// Resolved formatting of every character in the target (or the caret).
 fn resolved(s: &Session) -> Vec<ResolvedChar> {
     let mut out = Vec::new();
+    if let Some(rows) = column_rows(s) {
+        for (a, b) in rows {
+            let Some(p) = s.doc.para_at(&a) else { continue };
+            for (r, c) in p.run_ranges() {
+                if r.end > a.off && r.start < b.off {
+                    out.push(s.doc.styles.resolve_char(p.props.style.as_deref(), c));
+                }
+            }
+            if out.len() > 10_000 {
+                break;
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
     let Some((a, b)) = target(s) else {
         let f = &s.sel.focus;
         let style = s.doc.para_at(f).and_then(|p| p.props.style.clone());
@@ -233,7 +286,11 @@ fn font(s: &mut Session, v: &Value) -> CmdResult {
     if name.is_empty() || name.len() > 128 {
         return Err(CmdError::Params("bad font name".into()));
     }
-    apply(s, &|c| c.font = Some(name.clone()))
+    // The font applies to Persian/Arabic text in the selection too (its complex-script font).
+    apply(s, &|c| {
+        c.font = Some(name.clone());
+        c.font_cs = Some(name.clone());
+    })
 }
 
 fn size(s: &mut Session, v: &Value) -> CmdResult {
@@ -243,7 +300,10 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
     }
     // Word rounds to half points.
     let sz = (sz * 2.0).round() / 2.0;
-    apply(s, &|c| c.size = Some(sz))
+    apply(s, &|c| {
+        c.size = Some(sz);
+        c.size_cs = None;
+    })
 }
 
 fn current_size(s: &Session) -> f32 {
@@ -259,12 +319,18 @@ fn step_size(s: &mut Session, dir: i32) -> CmdResult {
     };
     let next = next.clamp(1.0, 1638.0);
     // Each run steps from its own size when the selection mixes sizes.
-    apply(s, &|c| c.size = Some(next))
+    apply(s, &|c| {
+        c.size = Some(next);
+        c.size_cs = None;
+    })
 }
 
 fn nudge_size(s: &mut Session, d: f32) -> CmdResult {
     let next = (current_size(s) + d).clamp(1.0, 1638.0);
-    apply(s, &|c| c.size = Some(next))
+    apply(s, &|c| {
+        c.size = Some(next);
+        c.size_cs = None;
+    })
 }
 
 fn color(s: &mut Session, v: &Value) -> CmdResult {
@@ -431,6 +497,7 @@ pub fn state(s: &Session) -> Value {
         "italic": all.iter().all(|r| r.italic),
         "underline": all.iter().all(|r| r.underline != Underline::None),
         "strike": all.iter().all(|r| r.strike),
+        "border": all.iter().all(|r| r.border.is_some()),
         "subscript": all.iter().all(|r| r.vert_align == VertAlign::Subscript),
         "superscript": all.iter().all(|r| r.vert_align == VertAlign::Superscript),
         "color": same(&|r| json!(match r.color { TextColor::Auto => "auto".to_string(), TextColor::Rgb(c) => c.hex() })),
