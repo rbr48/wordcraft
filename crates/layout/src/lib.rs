@@ -19,14 +19,14 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{Counters, Level};
-use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, ShapeKind, Wrap};
 use wordcraft_doc::props::{Border, CharProps, Rgb};
 use wordcraft_doc::section::{SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
 use wordcraft_geom::Rect;
 
 pub use fields::FieldCtx;
-pub use para::{LineEnd, ParaLayout};
+pub use para::{ContourKind, LineEnd, ParaLayout};
 
 /// How the document is viewed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -338,7 +338,7 @@ fn layout_box(
     // Pictures behind the text go first; `behind` counts them.
     let mut behind = 0;
     // Wrap areas of the box's floating objects.
-    let mut excl: Vec<(Rect, bool)> = Vec::new();
+    let mut excl: Vec<(Rect, bool, ContourKind)> = Vec::new();
     let mut y = 0.0f32;
     let mut prev_after = 0.0f32;
     let mut prev_style: Option<(String, bool)> = None;
@@ -362,7 +362,10 @@ fn layout_box(
                 for (oi, o) in p.objects.iter().enumerate() {
                     let Some((w, h, float)) = floating(o) else { continue };
                     let r = float_rect(frame, (0.0, width), y, w, h, float);
-                    excl.extend(wrap_area(r, float));
+                    if let Some((area, tb)) = wrap_area(r, float) {
+                        let contour = contour_for(o, float.wrap);
+                        excl.push((area, tb, contour));
+                    }
                     floats.push((oi, r, float.wrap == Wrap::BehindText));
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
@@ -466,7 +469,7 @@ struct PageBuilder<'a> {
     /// The previous paragraph: (style, contextual spacing, space after) for contextual spacing.
     prev: Option<(String, bool, f32)>,
     /// Wrap areas of floating objects on this page (see [`wrap_area`]).
-    excl: Vec<(Rect, bool)>,
+    excl: Vec<(Rect, bool, ContourKind)>,
     /// Line numbering counter.
     line_no: u32,
     /// Index of the first body item of the current page (vertical alignment shifts from here).
@@ -1072,10 +1075,32 @@ fn wrap_area(r: Rect, float: &Float) -> Option<(Rect, bool)> {
     Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom))
 }
 
+fn contour_for(o: &InlineObject, wrap: Wrap) -> ContourKind {
+    if !matches!(wrap, Wrap::Tight | Wrap::Through) {
+        return ContourKind::Box;
+    }
+    match o {
+        InlineObject::Shape { kind, .. } => match kind {
+            ShapeKind::Ellipse => ContourKind::Ellipse,
+            ShapeKind::Diamond => ContourKind::Diamond,
+            ShapeKind::Triangle | ShapeKind::RightTriangle => ContourKind::Triangle,
+            _ => ContourKind::Box,
+        },
+        _ => ContourKind::Box,
+    }
+}
+
 /// Wrap areas relative to a paragraph whose column starts at `x0` and whose top is `y0`.
-fn rel_exclusions(excl: &[(Rect, bool)], x0: f32, y0: f32) -> Vec<para::Exclusion> {
+fn rel_exclusions(excl: &[(Rect, bool, ContourKind)], x0: f32, y0: f32) -> Vec<para::Exclusion> {
     excl.iter()
-        .map(|(r, tb)| para::Exclusion { top: r.y - y0, bottom: r.bottom() - y0, left: r.x - x0, right: r.right() - x0, top_bottom: *tb })
+        .map(|(r, tb, ck)| para::Exclusion {
+            top: r.y - y0,
+            bottom: r.bottom() - y0,
+            left: r.x - x0,
+            right: r.right() - x0,
+            top_bottom: *tb,
+            contour: *ck,
+        })
         .filter(|e| e.bottom > 0.0)
         .collect()
 }
@@ -1114,8 +1139,9 @@ fn anchor_floats(
             let Some((w, h, float)) = floating(o) else { continue };
             let r = float_rect(Some(frame), (col_x, width), y0, w, h, float);
             rects.insert(oi, r);
-            if let Some(area) = wrap_area(r, float) {
-                pb.excl.push(area);
+            if let Some((area, tb)) = wrap_area(r, float) {
+                let contour = contour_for(o, float.wrap);
+                pb.excl.push((area, tb, contour));
             }
         }
     }

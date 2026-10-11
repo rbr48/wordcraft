@@ -168,6 +168,65 @@ pub struct Exclusion {
     pub right: f32,
     /// Text only above and below (no text beside it).
     pub top_bottom: bool,
+    pub contour: ContourKind,
+}
+
+/// Geometric contour type for tight / through text wrapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ContourKind {
+    #[default]
+    Box,
+    Ellipse,
+    Diamond,
+    Triangle,
+}
+
+impl Exclusion {
+    /// Effective horizontal exclusion range `(left, right)` at the given vertical slice `y_top..y_bottom`.
+    pub fn bounds_at(&self, y_top: f32, y_bottom: f32) -> (f32, f32) {
+        match self.contour {
+            ContourKind::Box => (self.left, self.right),
+            ContourKind::Ellipse => {
+                let h = (self.bottom - self.top).max(1.0);
+                let w = (self.right - self.left).max(1.0);
+                let mid_y = (self.top + self.bottom) / 2.0;
+                let line_y = ((y_top + y_bottom) / 2.0).clamp(self.top, self.bottom);
+                let dy = (line_y - mid_y).abs();
+                let ry = h / 2.0;
+                if dy >= ry {
+                    let cx = (self.left + self.right) / 2.0;
+                    (cx, cx)
+                } else {
+                    let rx = w / 2.0;
+                    let ratio = (dy / ry).clamp(0.0, 1.0);
+                    let half_w = rx * (1.0 - ratio * ratio).sqrt();
+                    let cx = (self.left + self.right) / 2.0;
+                    (cx - half_w, cx + half_w)
+                }
+            }
+            ContourKind::Diamond => {
+                let h = (self.bottom - self.top).max(1.0);
+                let w = (self.right - self.left).max(1.0);
+                let mid_y = (self.top + self.bottom) / 2.0;
+                let line_y = ((y_top + y_bottom) / 2.0).clamp(self.top, self.bottom);
+                let dy = (line_y - mid_y).abs();
+                let ry = h / 2.0;
+                let ratio = (dy / ry).clamp(0.0, 1.0);
+                let half_w = (w / 2.0) * (1.0 - ratio);
+                let cx = (self.left + self.right) / 2.0;
+                (cx - half_w, cx + half_w)
+            }
+            ContourKind::Triangle => {
+                let h = (self.bottom - self.top).max(1.0);
+                let w = (self.right - self.left).max(1.0);
+                let line_y = ((y_top + y_bottom) / 2.0).clamp(self.top, self.bottom);
+                let ratio = ((line_y - self.top) / h).clamp(0.0, 1.0);
+                let half_w = (w / 2.0) * ratio;
+                let cx = (self.left + self.right) / 2.0;
+                (cx - half_w, cx + half_w)
+            }
+        }
+    }
 }
 
 fn style_key(rc: &ResolvedChar) -> String {
@@ -617,14 +676,15 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 if e.bottom <= top || e.top >= top + est_h {
                     continue;
                 }
-                if e.top_bottom || (e.left <= lo + 1.0 && e.right >= hi - 1.0) {
+                let (e_left, e_right) = e.bounds_at(top, top + est_h);
+                if e.top_bottom || (e_left <= lo + 1.0 && e_right >= hi - 1.0) {
                     push = Some(push.map_or(e.bottom, |p: f32| p.max(e.bottom)));
                     continue;
                 }
-                if (e.left + e.right) / 2.0 < (lo + hi) / 2.0 {
-                    lo = lo.max(e.right);
+                if (e_left + e_right) / 2.0 < (lo + hi) / 2.0 {
+                    lo = lo.max(e_right);
                 } else {
-                    hi = hi.min(e.left);
+                    hi = hi.min(e_left);
                 }
             }
             if push.is_none() && hi - lo < 36.0 {

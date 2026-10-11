@@ -434,6 +434,37 @@ fn text_wraps_around_square_float() {
 }
 
 #[test]
+fn text_wraps_around_contour_tight_float() {
+    let mut d = Document::from_text(&"Contour line of text wrapping smoothly. ".repeat(30));
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Tight,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 0.0,
+        ..Default::default()
+    };
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Ellipse,
+        w: 200.0,
+        h: 150.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let Placed::Lines { para, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).unwrap() else { panic!() };
+    // Near the top of the ellipse (y ~ 5-15pt), the contour width is much narrower than the full 200pt.
+    let top_line = &para.lines[0];
+    let mid_line = para.lines.iter().find(|ln| (ln.top - 75.0).abs() < 15.0).unwrap();
+    assert!(top_line.left < mid_line.left, "tight wrap: top line ({}) is closer than equator line ({})", top_line.left, mid_line.left);
+}
+
+#[test]
 fn line_numbers_borders_text_boxes() {
     let mut d = Document::from_text("one\ntwo\nthree");
     d.last_section.line_numbers = Some(Default::default());
