@@ -604,6 +604,7 @@ impl Session {
             // Column selection, like `sel`'s shape: valid only while `sel` matches it.
             column: _,
             column_mode: _,
+            ..
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {

@@ -706,12 +706,22 @@ mod tests {
         use wordcraft_doc::{Style, StyleKind, Watermark};
 
         // Base style with SutonnyMJ
-        let mut st1 = Style::new("BaseBangla", StyleKind::Paragraph);
+        let mut st1 = Style {
+            id: "BaseBangla".into(),
+            name: "Base Bangla".into(),
+            kind: StyleKind::Paragraph,
+            ..Default::default()
+        };
         st1.chr.font = Some("SutonnyMJ".into());
 
         // Child style inheriting from BaseBangla
-        let mut st2 = Style::new("ChildBangla", StyleKind::Paragraph);
-        st2.based_on = Some("BaseBangla".into());
+        let st2 = Style {
+            id: "ChildBangla".into(),
+            name: "Child Bangla".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("BaseBangla".into()),
+            ..Default::default()
+        };
 
         let mut doc = Document::new();
         doc.styles.styles.push(st1);

@@ -827,6 +827,8 @@ pub fn ansi_to_unicode(text: &str) -> String {
         ("•¶", "ঙ্ক্ষ"),
         ("”P", "চ্চ"),
         ("”Q", "চ্ছ"),
+        ("“P", "চ্চ"),
+        ("“Q", "চ্ছ"),
         ("¶", "ক্ষ"),
         ("ÿ", "ক্ষ"),
         ("Á", "জ্ঞ"),
@@ -1619,22 +1621,22 @@ mod tests {
         assert_eq!(ansi_to_unicode("m‡ev©”P"), "সর্বোচ্চ");
         assert_eq!(ansi_to_unicode("wb¤œ¯^vÿiKvix"), "নিম্নস্বাক্ষরকারী");
 
-        // 9. Double uu-kar typing artefact (m~~‡jv → মূলো, not মূূলো)
-        assert_eq!(ansi_to_unicode("m~~‡jv"), "মূলো");
+        // 9. Double uu-kar typing artefact (g~~‡jv → মূলো, not মূূলো)
+        assert_eq!(ansi_to_unicode("g~~‡jv"), "মূলো");
 
         // 10. Alternate u-kar after non-ra consonants (z = ু)
         assert_eq!(ansi_to_unicode("LvZzb"), "খাতুন");
         assert_eq!(ansi_to_unicode("Kzgvi"), "কুমার");
-        assert_eq!(ansi_to_unicode("BqvKzecyi"), "ইয়াকুবপুর");
+        assert_eq!(ansi_to_unicode("BqvKzecyi"), "ইয়াকুবপুর");
         assert_eq!(ansi_to_unicode("RvbœvZzj"), "জান্নাতুল");
 
         // 11. Alternate u-kar after ra (æ = ু)
         assert_eq!(ansi_to_unicode("byiæj"), "নুরুল");
-        assert_eq!(ansi_to_unicode("Avbvqviæj"), "আনায়ারুল");
+        assert_eq!(ansi_to_unicode("Avbvqviæj"), "আনায়ারুল");
         assert_eq!(ansi_to_unicode("RvniæjvKwei"), "জাহরুলাকবির");
 
         // 12. Precomposed হু / শুরু
-        assert_eq!(ansi_to_unicode("ûgvqyb"), "হুমায়ুন");
+        assert_eq!(ansi_to_unicode("ûgvqyb"), "হুমায়ুন");
 
         // 13. ঞা shorthand Tv
         assert_eq!(ansi_to_unicode("`vMbf\u{201A}Tv"), "দাগনভূঞা");

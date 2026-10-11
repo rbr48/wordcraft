@@ -165,7 +165,8 @@ fn is_persian_sans(f: &str) -> bool {
 }
 
 /// Bengali document and legacy font names (SutonnyMJ, Kalpurush, SolaimanLipi, etc.).
-fn is_bengali_family(f: &str) -> bool {
+fn is_bengali_family(family: &str) -> bool {
+    let f = family.to_ascii_lowercase();
     const NAMES: &[&str] = &[
         "kalpurush",
         "kalpurush ansi",
@@ -188,12 +189,13 @@ fn is_bengali_family(f: &str) -> bool {
         "boshonto",
         "durgamj",
     ];
-    NAMES.contains(&f)
-        || f.contains("sutonny")
-        || f.contains("bijoy")
-        || f.contains("bangla")
-        || f.contains("bengali")
-        || f.ends_with("mj")
+    let f_str = f.as_str();
+    NAMES.contains(&f_str)
+        || f_str.contains("sutonny")
+        || f_str.contains("bijoy")
+        || f_str.contains("bangla")
+        || f_str.contains("bengali")
+        || f_str.ends_with("mj")
 }
 
 
