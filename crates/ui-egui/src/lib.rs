@@ -142,6 +142,18 @@ pub struct UiState {
     pub phonetic_rendered_len: usize,
     #[serde(skip)]
     pub phonetic_candidates: Vec<String>,
+    #[serde(skip)]
+    pub jatiya_pre_kar: Option<&'static str>,
+    #[serde(skip)]
+    pub jatiya_linker: bool,
+    #[serde(skip)]
+    pub jatiya_reph: bool,
+    #[serde(skip)]
+    pub ansi_linker: bool,
+    #[serde(skip)]
+    pub ansi_prev_bn: Option<char>,
+    #[serde(skip)]
+    pub ansi_prev_ansi_len: usize,
     /// AI Provider: "OpenRouter", "DeepSeek", "Gemini", "Claude", or "Custom".
     pub ai_provider: String,
     /// Selected model ID (e.g. "deepseek/deepseek-chat", "gemini-2.0-flash", "claude-3-5-sonnet-20241022").
@@ -188,6 +200,12 @@ impl Default for UiState {
             phonetic_buffer: String::new(),
             phonetic_rendered_len: 0,
             phonetic_candidates: Vec::new(),
+            jatiya_pre_kar: None,
+            jatiya_linker: false,
+            jatiya_reph: false,
+            ansi_linker: false,
+            ansi_prev_bn: None,
+            ansi_prev_ansi_len: 0,
             ai_provider: "OpenRouter".into(),
             ai_model: "deepseek/deepseek-chat".into(),
             ai_api_key: String::new(),
@@ -2643,5 +2661,207 @@ mod tests {
         a.run("ui.openRecipientList", json!({})).unwrap();
         a.run("format.bold", json!({})).unwrap();
         assert!(!a.recipient_list_pending);
+    }
+
+    fn type_keys(a: &mut WordApp, ctx: &egui::Context, keys: &str) {
+        for ch in keys.chars() {
+            ctx.input_mut(|i| {
+                i.events.clear();
+                i.events.push(egui::Event::Text(ch.to_string()));
+            });
+            crate::keys::canvas_events(a, ctx);
+            ctx.input_mut(|i| i.events.clear());
+        }
+    }
+
+    #[test]
+    fn bangla_jatiya_typing_independent_vowels_and_joint_words() {
+        let mut a = app();
+        a.session.bangla_mode = wordcraft_engine::cmd::bangla::BanglaMode::Jatiya;
+        let ctx = egui::Context::default();
+
+        // 1. Independent vowel: g + f -> আ
+        type_keys(&mut a, &ctx, "gf");
+        assert_eq!(body_text(&a).trim(), "আ");
+
+        // 2. Clear document
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 3. Joint words:
+        // j + g + N -> ক্ষ
+        type_keys(&mut a, &ctx, "jgN");
+        assert_eq!(body_text(&a).trim(), "ক্ষ");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // k + g + k -> ত্ত
+        type_keys(&mut a, &ctx, "kgk");
+        assert_eq!(body_text(&a).trim(), "ত্ত");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 4. Pre-kar + conjunct:
+        // d + j + g + N -> ক্ষি
+        type_keys(&mut a, &ctx, "djgN");
+        assert_eq!(body_text(&a).trim(), "ক্ষি");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 5. Pre-kar + consonant + aa-kar -> O-kar:
+        // c + n + f -> সো
+        type_keys(&mut a, &ctx, "cnf");
+        assert_eq!(body_text(&a).trim(), "সো");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 6. Complete word: আমার (gf + m + f + v)
+        type_keys(&mut a, &ctx, "gfmfv");
+        assert_eq!(body_text(&a).trim(), "আমার");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 7. Joint word with ri-kar and pre-kar: বৃষ্টি (h + a + d + N + g + t)
+        type_keys(&mut a, &ctx, "hadNgt");
+        assert_eq!(body_text(&a).trim(), "বৃষ্টি");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 8. Reph: কর্ম (j + A + m)
+        type_keys(&mut a, &ctx, "jAm");
+        assert_eq!(body_text(&a).trim(), "কর্ম");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 9. Ra-fala and Ya-fala: ছাত্র (y + f + k + z), সত্য (n + k + Z)
+        type_keys(&mut a, &ctx, "yfzk");
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "kz");
+        assert_eq!(body_text(&a).trim(), "ত্র");
+
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "kZ");
+        assert_eq!(body_text(&a).trim(), "ত্য");
+    }
+
+    #[test]
+    fn bangla_ansi_typing_joint_words_and_vowels() {
+        let mut a = app();
+        a.session.bangla_mode = wordcraft_engine::cmd::bangla::BanglaMode::Ansi;
+        let ctx = egui::Context::default();
+
+        // 1. Joint word in ANSI: j + g + N -> ¶ (ক্ষ)
+        type_keys(&mut a, &ctx, "jgN");
+        assert_eq!(body_text(&a).trim(), "¶");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 2. Joint word: k + g + k -> Ë (ত্ত)
+        type_keys(&mut a, &ctx, "kgk");
+        assert_eq!(body_text(&a).trim(), "Ë");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 3. Joint word: b + g + k -> šÍ (ন্ত)
+        type_keys(&mut a, &ctx, "bgk");
+        assert_eq!(body_text(&a).trim(), "šÍ");
+
+        // Clear doc
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+
+        // 4. Independent vowel: g + f -> Av (আ)
+        type_keys(&mut a, &ctx, "gf");
+        assert_eq!(body_text(&a).trim(), "Av");
+    }
+
+    #[test]
+    fn bangla_phonetic_typing_preserves_earlier_words_on_space() {
+        let mut a = app();
+        a.session.bangla_mode = wordcraft_engine::cmd::bangla::BanglaMode::Phonetic;
+        let ctx = egui::Context::default();
+
+        // Type "amar " then "shonar " then "bangla"
+        type_keys(&mut a, &ctx, "amar ");
+        assert_eq!(body_text(&a).trim(), "আমার");
+
+        type_keys(&mut a, &ctx, "shonar ");
+        assert_eq!(body_text(&a).trim(), "আমার সোনার");
+
+        type_keys(&mut a, &ctx, "bangla");
+        assert_eq!(body_text(&a).trim(), "আমার সোনার বাংলা");
     }
 }

@@ -132,6 +132,8 @@ fn phonetic_word(word: &str) -> String {
         "bangla" => return "বাংলা".into(),
         "bangladesh" => return "বাংলাদেশ".into(),
         "dhaka" => return "ঢাকা".into(),
+        "sonar" => return "সোনার".into(),
+        "shonar" => return "সোনার".into(),
         _ => {}
     }
 
@@ -359,16 +361,16 @@ pub fn jatiya_key(ch: char) -> Option<&'static str> {
         'p' => Some("ড়"),
         'a' => Some("ৃ"),
         's' => Some("ু"),
-        'd' => Some("্"), // Hasanta / Virama
-        'f' => Some("া"),
-        'g' => Some("্"), // Linker / Hasanta
+        'd' => Some("ি"), // i-kar
+        'f' => Some("া"),  // aa-kar
+        'g' => Some("্"),  // Linker / Hasanta
         'h' => Some("ব"),
         'j' => Some("ক"),
         'k' => Some("ত"),
         'l' => Some("দ"),
         'z' => Some("্র"), // Rafala
         'x' => Some("ও"),
-        'c' => Some("ে"),
+        'c' => Some("ে"), // e-kar
         'v' => Some("র"),
         'b' => Some("ন"),
         'n' => Some("স"),
@@ -386,9 +388,9 @@ pub fn jatiya_key(ch: char) -> Option<&'static str> {
         'O' => Some("ঘ"),
         'P' => Some("ঢ়"),
         'A' => Some("র্"), // Reph
-        'S' => Some("ূ"),
-        'D' => Some("ৎ"),
-        'F' => Some("অ"),
+        'S' => Some("ূ"),  // uu-kar
+        'D' => Some("ী"), // ee-kar
+        'F' => Some("অ"), // Dependent vowel A
         'G' => Some("জ্ঞ"),
         'H' => Some("ভ"),
         'J' => Some("খ"),
@@ -396,7 +398,7 @@ pub fn jatiya_key(ch: char) -> Option<&'static str> {
         'L' => Some("ধ"),
         'Z' => Some("্য"), // Yafala
         'X' => Some("ৌ"),
-        'C' => Some("ৈ"),
+        'C' => Some("ৈ"), // oi-kar
         'V' => Some("ল"),
         'B' => Some("ণ"),
         'N' => Some("ষ"),
@@ -420,7 +422,263 @@ pub fn jatiya_key(ch: char) -> Option<&'static str> {
         '$' => Some("৳"),
         '&' | '^' => Some("ঁ"),
         '|' => Some("।"),
+        '\\' => Some("ৎ"),
+        '~' => Some("ঁ"),
 
+        _ => None,
+    }
+}
+
+/// Maps a physical keypress directly to SutonnyMJ ANSI ASCII character for Bijoy Classic typing.
+pub fn bijoy_ansi_key(ch: char) -> Option<&'static str> {
+    match ch {
+        // Lowercase
+        'q' => Some("O"), // ঙ
+        'w' => Some("h"), // য
+        'e' => Some("W"), // ড
+        'r' => Some("c"), // প
+        't' => Some("U"), // ট
+        'y' => Some("P"), // চ
+        'u' => Some("R"), // জ
+        'i' => Some("n"), // হ
+        'o' => Some("M"), // গ
+        'p' => Some("o"), // ড়
+        'a' => Some("„"), // ৃ
+        's' => Some("y"), // ু
+        'd' => Some("w"), // ি (pre-kar)
+        'f' => Some("v"), // া
+        'g' => Some("&"), // ্ (hasanta)
+        'h' => Some("e"), // ব
+        'j' => Some("K"), // ক
+        'k' => Some("Z"), // ত
+        'l' => Some("`"), // দ
+        'z' => Some("Ö"), // ্র
+        'x' => Some("I"), // ও
+        'c' => Some("†"), // ে (pre-kar)
+        'v' => Some("i"), // র
+        'b' => Some("b"), // ন
+        'n' => Some("m"), // স
+        'm' => Some("g"), // ম
+
+        // Uppercase
+        'Q' => Some("s"),  // ং
+        'W' => Some("q"),  // য়
+        'E' => Some("X"),  // ঢ
+        'R' => Some("d"),  // ফ
+        'T' => Some("V"),  // ঠ
+        'Y' => Some("Q"),  // ছ
+        'U' => Some("S"),  // ঝ
+        'I' => Some("T"),  // ঞ
+        'O' => Some("N"),  // ঘ
+        'P' => Some("p"),  // ঢ়
+        'A' => Some("Av"), // আ
+        'S' => Some("~"),  // ূ
+        'D' => Some("x"),  // ী
+        'F' => Some("A"),  // অ
+        'G' => Some("Á"),  // জ্ঞ
+        'H' => Some("f"),  // ভ
+        'J' => Some("L"),  // খ
+        'K' => Some("_"),  // থ
+        'L' => Some("a"),  // ধ
+        'Z' => Some("¨"),  // ্য
+        'X' => Some("†Š"), // ৌ
+        'C' => Some("‰"),  // ৈ (pre-kar)
+        'V' => Some("j"),  // ল
+        'B' => Some("Y"),  // ণ
+        'N' => Some("l"),  // ষ
+        'M' => Some("k"),  // শ
+
+        // Numbers
+        '0' => Some("0"),
+        '1' => Some("1"),
+        '2' => Some("2"),
+        '3' => Some("3"),
+        '4' => Some("4"),
+        '5' => Some("5"),
+        '6' => Some("6"),
+        '7' => Some("7"),
+        '8' => Some("8"),
+        '9' => Some("9"),
+
+        // Symbols
+        ':' => Some("t"), // ঃ
+        ';' => Some(";"),
+        '$' => Some("৳"),
+        '&' | '^' => Some("u"), // ঁ
+        '|' => Some("."),       // । (Dari)
+        '\\' => Some("r"),      // ৎ
+        '~' => Some("u"),       // ঁ
+
+        _ => None,
+    }
+}
+
+/// Returns the independent Unicode vowel corresponding to 'g' (linker) + vowel key.
+pub fn jatiya_linker_vowel(ch: char) -> Option<&'static str> {
+    match ch {
+        'f' => Some("আ"), // g + f = আ
+        'd' => Some("ই"), // g + d = ই
+        'D' => Some("ঈ"), // g + D = ঈ
+        's' => Some("উ"), // g + s = উ
+        'S' => Some("ঊ"), // g + S = ঊ
+        'a' => Some("ঋ"), // g + a = ঋ
+        'c' => Some("এ"), // g + c = এ
+        'C' => Some("ঐ"), // g + C = ঐ
+        'X' => Some("ঔ"), // g + X = ঔ
+        _ => None,
+    }
+}
+
+/// Returns the SutonnyMJ glyph for an independent vowel typed via 'g' (linker) + vowel key.
+pub fn bijoy_linker_vowel(ch: char) -> Option<&'static str> {
+    match ch {
+        'f' => Some("Av"), // g + f = আ
+        'd' => Some("B"),  // g + d = ই
+        'D' => Some("C"),  // g + D = ঈ
+        's' => Some("D"),  // g + s = উ
+        'S' => Some("E"),  // g + S = ঊ
+        'a' => Some("F"),  // g + a = ঋ
+        'c' => Some("G"),  // g + c = এ
+        'C' => Some("H"),  // g + C = ঐ
+        'X' => Some("J"),  // g + X = ঔ
+        _ => None,
+    }
+}
+
+/// Looks up the SutonnyMJ conjunct glyph for two Bengali consonants joined by 'g' (hasanta).
+pub fn find_bijoy_conjunct(c1: char, c2: char) -> Option<&'static str> {
+    match (c1, c2) {
+        ('ক', 'ক') => Some("°"),   // ক্ক
+        ('ক', 'ট') => Some("±"),   // ক্ট
+        ('ক', 'ত') => Some("³"),   // ক্ত
+        ('ক', 'ব') => Some("K^"),  // ক্ব
+        ('ক', 'ম') => Some("K¥"),  // ক্ম
+        ('ক', 'ল') => Some("Kø"),  // ক্ল
+        ('ক', 'ষ') => Some("¶"),   // ক্ষ
+        ('ক', 'স') => Some("·"),   // ক্স
+        ('খ', 'ব') => Some("L^"),  // খ্ব
+        ('গ', 'ধ') => Some("»"),   // গ্ধ
+        ('গ', 'ন') => Some("Mœ"),  // গ্ন
+        ('গ', 'ব') => Some("M^"),  // গ্ব
+        ('গ', 'ম') => Some("M¥"),  // গ্ম
+        ('গ', 'ল') => Some("Mø"),  // গ্ল
+        ('ঘ', 'ন') => Some("Nœ"),  // ঘ্ন
+        ('ঙ', 'ক') => Some("¼"),   // ঙ্ক
+        ('ঙ', 'খ') => Some("•"),   // ঙ্খ
+        ('ঙ', 'গ') => Some("½"),   // ঙ্গ
+        ('ঙ', 'ঘ') => Some("O&o"), // ঙ্ঘ
+        ('ঙ', 'ম') => Some("O¥"),  // ঙ্ম
+        ('চ', 'চ') => Some("”P"),  // চ্চ
+        ('চ', 'ছ') => Some("”Q"),  // চ্ছ
+        ('চ', 'ঞ') => Some("P&T"), // চ্ঞ
+        ('চ', 'ব') => Some("P^"),  // চ্ব
+        ('জ', 'জ') => Some("¾"),   // জ্জ
+        ('জ', 'ঝ') => Some("S&R"), // জ্ঝ
+        ('জ', 'ঞ') => Some("Á"),   // জ্ঞ
+        ('জ', 'ব') => Some("R^"),  // জ্ব
+        ('ঞ', 'চ') => Some("Â"),   // ঞ্চ
+        ('ঞ', 'ছ') => Some("Ã"),   // ঞ্ছ
+        ('ঞ', 'জ') => Some("Ä"),   // ঞ্জ
+        ('ঞ', 'ঝ') => Some("Å"),   // ঞ্ঝ
+        ('ট', 'ট') => Some("Æ"),   // ট্ট
+        ('ট', 'ব') => Some("U^"),  // ট্ব
+        ('ঠ', 'ব') => Some("V^"),  // ঠ্ব
+        ('ড', 'ড') => Some("Ç"),   // ড্ড
+        ('ড', 'ব') => Some("W^"),  // ড্ব
+        ('ণ', 'ট') => Some("È"),   // ণ্ট
+        ('ণ', 'ঠ') => Some("É"),   // ণ্ঠ
+        ('ণ', 'ড') => Some("Ê"),   // ণ্ড
+        ('ণ', 'ণ') => Some("Yœ"),  // ণ্ণ
+        ('ণ', 'ব') => Some("Y^"),  // ণ্ব
+        ('ণ', 'ম') => Some("Y¥"),  // ণ্ম
+        ('ত', 'ত') => Some("Ë"),   // ত্ত
+        ('ত', 'থ') => Some("Ì"),   // ত্থ
+        ('ত', 'ন') => Some("Zœ"),  // ত্ন
+        ('ত', 'ব') => Some("Z^"),  // ত্ব
+        ('ত', 'ম') => Some("Z¥"),  // ত্ম
+        ('থ', 'ব') => Some("_^"),  // থ্ব
+        ('দ', 'গ') => Some("`M"),  // দ্গ
+        ('দ', 'ঘ') => Some("`N"),  // দ্ঘ
+        ('দ', 'দ') => Some("Ï"),   // দ্দ
+        ('দ', 'ধ') => Some("×"),   // দ্ধ
+        ('দ', 'ব') => Some("Ø"),   // দ্ব
+        ('দ', 'ভ') => Some("™¢"),  // দ্ভ
+        ('দ', 'ম') => Some("Ù"),   // দ্ম
+        ('ধ', 'ন') => Some("aœ"),  // ধ্ন
+        ('ধ', 'ব') => Some("a^"),  // ধ্ব
+        ('ন', 'ট') => Some("›U"),  // ন্ট
+        ('ন', 'ঠ') => Some("›V"),  // ন্ঠ
+        ('ন', 'ড') => Some("Û"),   // ন্ড
+        ('ন', 'ত') => Some("šÍ"),  // ন্ত
+        ('ন', 'থ') => Some("š’"),  // ন্থ
+        ('ন', 'দ') => Some("›`"),  // ন্দ
+        ('ন', 'ধ') => Some("Ü"),   // ন্ধ
+        ('ন', 'ন') => Some("bœ"),  // ন্ন
+        ('ন', 'ব') => Some("b^"),  // ন্ব
+        ('ন', 'ম') => Some("b¥"),  // ন্ম
+        ('ন', 'স') => Some("Ý"),   // ন্স
+        ('প', 'ট') => Some("Þ"),   // প্ট
+        ('প', 'ত') => Some("ß"),   // প্ত
+        ('প', 'ন') => Some("cœ"),  // প্ন
+        ('প', 'প') => Some("à"),   // প্প
+        ('প', 'ল') => Some("cø"),  // প্ল
+        ('প', 'স') => Some("cm"),  // প্স
+        ('ফ', 'ট') => Some("d&U"), // ফ্ট
+        ('ফ', 'ল') => Some("dø"),  // ফ্ল
+        ('ব', 'জ') => Some("eR"),  // ব্জ
+        ('ব', 'দ') => Some("ã"),   // ব্দ
+        ('ব', 'ধ') => Some("ä"),   // ব্ধ
+        ('ব', 'ব') => Some("eŸ"),  // ব্ব
+        ('ব', 'ল') => Some("ej"),  // ব্ল
+        ('ভ', 'ল') => Some("fj"),  // ভ্ল
+        ('ম', 'ন') => Some("¤œ"),  // ম্ন
+        ('ম', 'প') => Some("¤ú"),  // ম্প
+        ('ম', 'ফ') => Some("¯£"),  // ম্ফ
+        ('ম', 'ব') => Some("¤^"),  // ম্ব
+        ('ম', 'ভ') => Some("¤¢"),  // ম্ভ
+        ('ম', 'ম') => Some("¤§"),  // ম্ম
+        ('ম', 'ল') => Some("¤ø"),  // ম্ল
+        ('ল', 'ক') => Some("é"),   // ল্ক
+        ('ল', 'গ') => Some("ë"),   // ল্গ
+        ('ল', 'ট') => Some("ë"),   // ল্ট
+        ('ল', 'ড') => Some("ì"),   // ল্ড
+        ('ল', 'প') => Some("í"),   // ল্প
+        ('ল', 'ফ') => Some("j&d"), // ল্ফ
+        ('ল', 'ব') => Some("j^"),  // ল্ব
+        ('ল', 'ভ') => Some("j&f"), // ল্ভ
+        ('ল', 'ম') => Some("j¥"),  // ল্ম
+        ('ল', 'ল') => Some("jø"),  // ল্ল
+        ('শ', 'চ') => Some("ð"),   // শ্চ
+        ('শ', 'ছ') => Some("kQ"),  // শ্ছ
+        ('শ', 'ন') => Some("kœ"),  // শ্ন
+        ('শ', 'ব') => Some("k^"),  // শ্ব
+        ('শ', 'ম') => Some("k¥"),  // শ্ম
+        ('শ', 'ল') => Some("kø"),  // শ্ল
+        ('ষ', 'ক') => Some("®‹"),  // ষ্ক
+        ('ষ', 'ট') => Some("ó"),   // ষ্ট
+        ('ষ', 'ঠ') => Some("ô"),   // ষ্ঠ
+        ('ষ', 'ণ') => Some("õ"),   // ষ্ণ
+        ('ষ', 'প') => Some("ö"),   // ষ্প
+        ('ষ', 'ফ') => Some("®£"),  // ষ্ফ
+        ('ষ', 'ব') => Some("l^"),  // ষ্ব
+        ('ষ', 'ম') => Some("®§"),  // ষ্ম
+        ('স', 'ক') => Some("¯‹"),  // স্ক
+        ('স', 'খ') => Some("¯L"),  // স্খ
+        ('স', 'ট') => Some("÷"),   // স্ট
+        ('স', 'ত') => Some("¯Í"),  // স্ত
+        ('স', 'থ') => Some("¯’"),  // স্থ
+        ('স', 'ন') => Some("mœ"),  // স্ন
+        ('স', 'প') => Some("¯ú"),  // স্প
+        ('স', 'ফ') => Some("ù"),   // স্ফ
+        ('স', 'ব') => Some("¯^"),  // স্ব
+        ('স', 'ম') => Some("¯§"),  // স্ম
+        ('স', 'ল') => Some("mø"),  // স্ল
+        ('হ', 'ণ') => Some("n&Y"), // হ্ণ
+        ('হ', 'ন') => Some("ý"),   // হ্ন
+        ('হ', 'ব') => Some("n^"),  // হ্ব
+        ('হ', 'ম') => Some("n&g"), // হ্ম
+        ('হ', 'ল') => Some("n&j"), // হ্ল
+        ('হ', 'য') => Some("n¨"),  // হ্য
         _ => None,
     }
 }
@@ -1486,9 +1744,38 @@ mod tests {
     fn jatiya_keymap() {
         assert_eq!(jatiya_key('h'), Some("ব"));
         assert_eq!(jatiya_key('j'), Some("ক"));
-        assert_eq!(jatiya_key('d'), Some("্"));
+        assert_eq!(jatiya_key('d'), Some("ি"));
+        assert_eq!(jatiya_key('D'), Some("ী"));
+        assert_eq!(jatiya_key('g'), Some("্"));
         assert_eq!(jatiya_key('f'), Some("া"));
         assert_eq!(jatiya_key('1'), Some("১"));
+        assert_eq!(jatiya_key('\\'), Some("ৎ"));
+        assert_eq!(jatiya_key('~'), Some("ঁ"));
+    }
+
+    #[test]
+    fn bijoy_conjunct_and_vowel_mappings() {
+        // Independent vowels via 'g'
+        assert_eq!(jatiya_linker_vowel('f'), Some("আ"));
+        assert_eq!(jatiya_linker_vowel('d'), Some("ই"));
+        assert_eq!(jatiya_linker_vowel('D'), Some("ঈ"));
+        assert_eq!(jatiya_linker_vowel('s'), Some("উ"));
+        assert_eq!(jatiya_linker_vowel('S'), Some("ঊ"));
+        assert_eq!(jatiya_linker_vowel('a'), Some("ঋ"));
+        assert_eq!(jatiya_linker_vowel('c'), Some("এ"));
+        assert_eq!(jatiya_linker_vowel('C'), Some("ঐ"));
+        assert_eq!(jatiya_linker_vowel('X'), Some("ঔ"));
+
+        // Major conjuncts
+        assert_eq!(find_bijoy_conjunct('ক', 'ষ'), Some("¶"));
+        assert_eq!(find_bijoy_conjunct('ত', 'ত'), Some("Ë"));
+        assert_eq!(find_bijoy_conjunct('ন', 'ত'), Some("šÍ"));
+        assert_eq!(find_bijoy_conjunct('জ', 'ঞ'), Some("Á"));
+        assert_eq!(find_bijoy_conjunct('ম', 'প'), Some("¤ú"));
+        assert_eq!(find_bijoy_conjunct('ষ', 'ট'), Some("ó"));
+        assert_eq!(find_bijoy_conjunct('স', 'ত'), Some("¯Í"));
+        assert_eq!(find_bijoy_conjunct('দ', 'ধ'), Some("×"));
+        assert_eq!(find_bijoy_conjunct('হ', 'ম'), Some("n&g"));
     }
 
     #[test]

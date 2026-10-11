@@ -22,6 +22,7 @@ serde_json = { workspace = true }
 log = { workspace = true }
 # Pictures pasted from the system clipboard arrive as pixels and are inserted as PNG (#45).
 image = { workspace = true }
+unicode-segmentation = { workspace = true }
 # The system's preferred interface languages (#8). Native: OS APIs; wasm: none (English).
 sys-locale = "0.3"
 

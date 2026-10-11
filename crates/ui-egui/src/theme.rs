@@ -527,9 +527,11 @@ mod tests {
         // Equation gallery templates are UnicodeMath input (`lim┬(n→∞)`, `≜`) that the math
         // renderer draws with document fonts, not interface text.
         // The ➢ bullet is a value for `para.bullets`; its menu tile draws the shape instead.
+        // Bengali diacritics/virama in typing IME (keys.rs) and unit tests (lib.rs) are document text.
         let exempt = |c: char, file: &str| match file {
             "equation_tab.rs" => matches!(c, '≜' | '┬'),
             "ribbon.rs" => c == '➢',
+            "keys.rs" | "lib.rs" => c == '\u{09cd}',
             _ => false,
         };
         symbols.retain(|(c, file)| !exempt(*c, file));
