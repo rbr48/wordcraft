@@ -152,6 +152,12 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         w.open(tag, &ns_refs);
         let blocks: Blocks = doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
         wr.blocks(&mut w, &blocks, &mut prels, false, 0);
+        if !footer
+            && file == "header1.xml"
+            && let Some(wm) = &doc.settings.watermark
+        {
+            write_watermark(&mut w, wm);
+        }
         w.close(tag);
         push_part(
             &mut entries,
@@ -474,7 +480,7 @@ impl Writer<'_> {
     }
 
     fn hf_rel(&mut self, part: u32, footer: bool, rels: &mut PartRels) -> Option<String> {
-        let kind = self.doc.parts.get(&part)?.kind;
+        let kind = self.doc.parts.get(&part).map(|p| p.kind).unwrap_or(if footer { PartKind::Footer } else { PartKind::Header });
         if !matches!(kind, PartKind::Header | PartKind::Footer) {
             return None;
         }
@@ -871,4 +877,38 @@ fn app_xml(doc: &Document) -> Vec<u8> {
     w.leaf("DocSecurity", &[], "0");
     w.close("Properties");
     w.into_bytes()
+}
+
+fn write_watermark(w: &mut W, wm: &wordcraft_doc::Watermark) {
+    w.open("w:p", &[]);
+    w.open("w:pPr", &[]);
+    w.empty("w:pStyle", &[("w:val", "Header")]);
+    w.close("w:pPr");
+    w.open("w:r", &[]);
+    w.open("w:pict", &[]);
+    w.open(
+        "v:shapetype",
+        &[("id", "_x0000_t136"), ("coordsize", "21600,21600"), ("o:spt", "136"), ("adj", "10800"), ("path", "m@7,l@8,m@5,21600l@6,21600e")],
+    );
+    w.empty("v:path", &[("textpathok", "t"), ("o:connecttype", "rect")]);
+    w.empty("v:textpath", &[("on", "t"), ("fitshape", "t")]);
+    w.close("v:shapetype");
+    let rot = if wm.diagonal { "315" } else { "0" };
+    let hex = format!("#{}", wm.color.hex());
+    let shape_style = format!(
+        "position:absolute;left:0;text-align:center;margin-left:0;margin-top:0;width:527.85pt;height:131.95pt;rotation:{rot};z-index:-251657216;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin"
+    );
+    w.open(
+        "v:shape",
+        &[("id", "PowerPlusWaterMarkObject"), ("type", "#_x0000_t136"), ("style", &shape_style), ("fillcolor", &hex), ("stroked", "f")],
+    );
+    let op = if wm.semitransparent { "0.5" } else { "1.0" };
+    w.empty("v:fill", &[("opacity", op)]);
+    let font_escaped = wm.font.replace(['\'', '"'], "");
+    let text_style = format!("font-family:'{font_escaped}';font-size:1pt");
+    w.empty("v:textpath", &[("style", &text_style), ("string", &wm.text)]);
+    w.close("v:shape");
+    w.close("w:pict");
+    w.close("w:r");
+    w.close("w:p");
 }

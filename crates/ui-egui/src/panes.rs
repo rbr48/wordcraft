@@ -279,7 +279,7 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
     }
 
     ui.horizontal(|ui| {
-        for m in ["Draft", "Rewrite", "Summarize", "Proofread"] {
+        for m in ["Draft", "Rewrite", "Summarize", "Proofread", "Table", "Ask"] {
             if ui.selectable_label(app.ui.ai_mode == m, tl!(m)).clicked() {
                 app.ui.ai_mode = m.into();
             }
@@ -303,9 +303,11 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
     // Quick prompt chips
     ui.horizontal_wrapped(|ui| {
         let chips: &[&str] = match app.ui.ai_mode.as_str() {
-            "Rewrite" => &["Professional", "Concise", "Casual"],
-            "Summarize" => &["Key Takeaways", "Executive Summary", "Bullet Points"],
+            "Rewrite" => &["Professional", "Academic", "Executive", "Concise", "Casual"],
+            "Summarize" => &["Key Takeaways", "Executive Summary", "Structured Abstract"],
             "Proofread" => &["Check Clarity", "Find Repeated Words"],
+            "Table" => &["Project Roadmap", "Feature Comparison", "Pricing Tiers", "Team Roster", "KPI Metrics", "SWOT Analysis"],
+            "Ask" => &["Action Items & Deadlines", "Document Statistics & Length", "Readability Analysis", "Outline & Headings"],
             _ => &["Meeting Minutes", "Status Report", "Project Proposal", "Executive Memo"],
         };
         for chip in chips {
@@ -314,10 +316,14 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
                 let mode_lower = app.ui.ai_mode.to_lowercase();
                 let tone = chip.to_lowercase();
                 let r = app.session.run("tools.copilot", &json!({"action": mode_lower, "prompt": chip, "tone": tone}));
-                if let Ok(res) = r
-                    && let Some(c) = res.get("content").and_then(Value::as_str)
-                {
-                    app.ui.ai_response = c.to_string();
+                if let Ok(res) = r {
+                    if let Some(c) = res.get("content").and_then(Value::as_str) {
+                        app.ui.ai_response = c.to_string();
+                    } else if mode_lower == "table" {
+                        let rows = res.get("rows").and_then(Value::as_u64).unwrap_or(0);
+                        let cols = res.get("cols").and_then(Value::as_u64).unwrap_or(0);
+                        app.ui.ai_response = format!("✓ Inserted native {rows}×{cols} table for \"{chip}\" into document at caret.");
+                    }
                 }
             }
         }
@@ -328,6 +334,8 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
         "Rewrite" => tl!("Prompt or tone for rewriting selected text…"),
         "Summarize" => tl!("Summarization instructions…"),
         "Proofread" => tl!("Proofreading instructions or focus…"),
+        "Table" => tl!("Describe the table or paste markdown table rows…"),
+        "Ask" => tl!("Ask a question about document content, stats, or tasks…"),
         _ => tl!("Describe what you want to draft…"),
     };
 
@@ -339,6 +347,8 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
             "Rewrite" => "Rewrite Selection",
             "Summarize" => "Summarize",
             "Proofread" => "Proofread",
+            "Table" => "Generate Table",
+            "Ask" => "Ask Document",
             _ => "Generate Draft",
         };
         let run_btn = ui.add(
@@ -349,21 +359,39 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
         if run_btn.clicked() {
             let mode_lower = app.ui.ai_mode.to_lowercase();
             let tone = if mode_lower == "rewrite" {
-                if app.ui.ai_prompt.to_lowercase().contains("concise") {
+                let p = app.ui.ai_prompt.to_lowercase();
+                if p.contains("academic") {
+                    "academic"
+                } else if p.contains("executive") {
+                    "executive"
+                } else if p.contains("concise") {
                     "concise"
-                } else if app.ui.ai_prompt.to_lowercase().contains("casual") {
+                } else if p.contains("casual") {
                     "casual"
                 } else {
                     "professional"
+                }
+            } else if mode_lower == "summarize" {
+                let p = app.ui.ai_prompt.to_lowercase();
+                if p.contains("abstract") {
+                    "abstract"
+                } else if p.contains("executive") {
+                    "executive"
+                } else {
+                    "bullets"
                 }
             } else {
                 "professional"
             };
             let r = app.session.run("tools.copilot", &json!({"action": mode_lower, "prompt": app.ui.ai_prompt, "tone": tone}));
-            if let Ok(res) = r
-                && let Some(c) = res.get("content").and_then(Value::as_str)
-            {
-                app.ui.ai_response = c.to_string();
+            if let Ok(res) = r {
+                if let Some(c) = res.get("content").and_then(Value::as_str) {
+                    app.ui.ai_response = c.to_string();
+                } else if mode_lower == "table" {
+                    let rows = res.get("rows").and_then(Value::as_u64).unwrap_or(0);
+                    let cols = res.get("cols").and_then(Value::as_u64).unwrap_or(0);
+                    app.ui.ai_response = format!("✓ Inserted native {rows}×{cols} table for \"{}\" into document at caret.", app.ui.ai_prompt);
+                }
             }
         }
         if !app.ui.ai_response.is_empty() && ui.small_button(tl!("Clear")).clicked() {

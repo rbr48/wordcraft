@@ -76,11 +76,13 @@ pub struct PdfOptions {
     pub include_markup: bool,
     /// Compress content streams.
     pub compress: bool,
+    /// Export conforming to PDF/A archival standards (enforces tagging and metadata).
+    pub pdf_a: bool,
 }
 
 impl Default for PdfOptions {
     fn default() -> Self {
-        PdfOptions { pages: None, title: None, author: None, tagged: true, include_markup: false, compress: true }
+        PdfOptions { pages: None, title: None, author: None, tagged: true, include_markup: false, compress: true, pdf_a: false }
     }
 }
 
@@ -129,7 +131,8 @@ enum Attempt {
 }
 
 fn write(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], outlined: &HashSet<u32>) -> Result<Attempt, PdfError> {
-    let settings = krilla::SerializeSettings { compress_content_streams: opts.compress, enable_tagging: opts.tagged, ..Default::default() };
+    let enable_tagging = opts.tagged || opts.pdf_a;
+    let settings = krilla::SerializeSettings { compress_content_streams: opts.compress, enable_tagging, ..Default::default() };
     let mut pdf = krilla::Document::new_with(settings);
     pdf.set_metadata(metadata(doc, opts));
 
@@ -163,7 +166,7 @@ fn write(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], ou
         }
         kp.finish();
     }
-    if opts.tagged {
+    if enable_tagging {
         pdf.set_tag_tree(ex.tag_tree());
     }
     match pdf.finish() {
@@ -214,7 +217,10 @@ fn clamp_side(v: f32) -> f32 {
 fn metadata(doc: &Document, opts: &PdfOptions) -> Metadata {
     let c = &doc.core;
     let mut m = Metadata::new().creator("WordCraft".into()).producer("WordCraft".into());
-    let title = opts.title.clone().unwrap_or_else(|| c.title.clone());
+    let title = opts
+        .title
+        .clone()
+        .unwrap_or_else(|| if opts.pdf_a && c.title.trim().is_empty() { "WordCraft Document".to_string() } else { c.title.clone() });
     if !title.trim().is_empty() {
         m = m.title(title);
     }
@@ -233,6 +239,8 @@ fn metadata(doc: &Document, opts: &PdfOptions) -> Metadata {
     }
     if let Some(lang) = doc.styles.default_chr.lang.clone().filter(|l| !l.is_empty() && l.is_ascii()) {
         m = m.language(lang);
+    } else if opts.pdf_a {
+        m = m.language("en-US".to_string());
     }
     let date = parse_iso(&c.created).or_else(|| now_unix().map(civil));
     if let Some((y, mo, d, h, mi, s)) = date {

@@ -42,3 +42,10 @@ description: Comprehensive project memory, architecture guide, and operational r
   - Portable Windows x64 release package at `dist/wordcraft/wordcraft-0.1.0-windows-x64-portable.zip`.
   - Lead Developer & Top Contributor attribution configured: M S Rana (`@rbr48` / Izhaan Intellect).
   - Discord links removed across chrome title bar, Help ribbon, backstage navigation, and About window.
+  - Interactive Track Changes revision markup balloons in side margin with `[✓ Accept]` and `[✗ Reject]` buttons.
+  - Full DOCX Watermark roundtrip fidelity (read and write via ECMA-376 / ISO 29500 VML header shapes).
+  - Native AI Document Intelligence Suite: `ai.rewrite` (5 tone presets), `ai.generateTable` (natural language prompt to native tables), `ai.summarize` (bullets, executive, abstract), `ai.ask` (document structure, telemetry, queries), `ai.autocomplete` (ghost suggestions), and dedicated Copilot pane with "Table" & "Ask" tabs.
+  - OpenType typographic features (`liga`, `kern`, `smcp`) in layout text shaping.
+  - PDF/A archival compliance & metadata tagging in `wordcraft-pdf`.
+  - Native OS printing command (`file.printNative`) and Windows Inno Setup installer script (`packaging/windows/wordcraft.iss`).
+  - Freshly updated portable release archive at `dist/wordcraft/wordcraft-0.1.0-windows-x64-portable.zip`.

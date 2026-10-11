@@ -319,6 +319,63 @@ impl Reader<'_> {
         let mut blocks = Blocks::new();
         self.read_blocks(&mut sc, &root, &rels, &mut blocks, 0);
         self.flush_pending(&mut sc, &mut blocks);
+        if !footer && self.doc.settings.watermark.is_none() {
+            fn find_tp(e: &El) -> Option<&El> {
+                if e.name == "v:textpath" && e.attr("string").is_some() {
+                    return Some(e);
+                }
+                for c in e.els() {
+                    if let Some(f) = find_tp(c) {
+                        return Some(f);
+                    }
+                }
+                None
+            }
+            if let Some(tp) = find_tp(&root)
+                && let Some(s) = tp.attr("string")
+                && !s.is_empty()
+            {
+                let mut font = wordcraft_doc::styles::BODY_FONT.to_string();
+                if let Some(style) = tp.attr("style") {
+                    for part in style.split(';') {
+                        if let Some(f) = part.strip_prefix("font-family:") {
+                            let clean = f.replace("&quot;", "").replace("&quot", "").replace(['"', '\''], "");
+                            let trimmed = clean.trim();
+                            if !trimmed.is_empty() {
+                                font = trimmed.to_string();
+                            }
+                        }
+                    }
+                }
+                let mut color = wordcraft_doc::props::Rgb(0xC0, 0xC0, 0xC0);
+                let mut diagonal = true;
+                let mut semitransparent = true;
+                if let Some(shape) = root.find("v:shape") {
+                    if let Some(fc) = shape.attr("fillcolor")
+                        && let Some(rgb) = wordcraft_doc::props::Rgb::parse(fc)
+                    {
+                        color = rgb;
+                    }
+                    if let Some(style) = shape.attr("style") {
+                        for part in style.split(';') {
+                            if let Some(r) = part.strip_prefix("rotation:")
+                                && let Ok(deg) = r.trim().parse::<f32>()
+                            {
+                                diagonal = (deg - 315.0).abs() < 20.0 || (deg + 45.0).abs() < 20.0 || (deg - 45.0).abs() < 20.0;
+                            }
+                        }
+                    }
+                }
+                if let Some(fill) = root.find("v:fill")
+                    && let Some(op) = fill.attr("opacity")
+                    && let Ok(o) = op.trim().parse::<f32>()
+                {
+                    semitransparent = o < 0.95;
+                }
+                self.doc.settings.watermark = Some(wordcraft_doc::Watermark { text: s.to_string(), font, color, diagonal, semitransparent });
+                blocks.retain(|b| b.as_para().map(|p| !p.text.is_empty() || !p.runs.is_empty()).unwrap_or(true));
+            }
+        }
         if let Some(p) = self.doc.parts.get_mut(&id)
             && !blocks.is_empty()
         {

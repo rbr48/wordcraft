@@ -29,6 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+P")
         .pure(),
+        CommandSpec::new("file.printNative", "Print (Native)", "File", print_native).params(r#"{"path"?: string, "copies"?: n}"#).pure(),
         CommandSpec::new("file.close", "Close", "File", |s, _| {
             s.ui_requests.push(json!({"close": true}));
             sel_result(s)
@@ -269,4 +270,66 @@ fn layout_summary(s: &mut Session, _: &Value) -> CmdResult {
         .collect();
     let caret = l.caret_on(&s.sel.focus, s.page_hint).map(|c| json!({"page": c.page, "x": c.x, "y": c.top, "h": c.height}));
     Ok(json!({"pages": pages, "caret": caret, "ms": l.ms}))
+}
+
+fn print_native(s: &mut Session, v: &Value) -> CmdResult {
+    let copies = p::u64(v, "copies").unwrap_or(1).clamp(1, 100);
+    #[cfg(not(target_arch = "wasm32"))]
+    let path = if let Some(p) = p::str(v, "path") {
+        std::path::PathBuf::from(p)
+    } else {
+        let mut tmp = std::env::temp_dir();
+        tmp.push(format!("wordcraft_print_{}.pdf", std::process::id()));
+        crate::io::save_path(&tmp, &s.doc).map_err(CmdError::Failed)?;
+        tmp
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("Start-Process -FilePath '{}' -Verb Print -PassThru | Out-Null", path.display().to_string().replace('\'', "''")),
+            ])
+            .status();
+        match status {
+            Ok(st) => {
+                s.status = format!("Document queued to system printer ({} copy/copies)", copies);
+                Ok(json!({"success": st.success(), "path": path.display().to_string(), "copies": copies}))
+            }
+            Err(e) => Err(CmdError::Failed(format!("failed to invoke Windows printer: {e}"))),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("lpr").arg("-#").arg(copies.to_string()).arg(&path).status();
+        match status {
+            Ok(st) => {
+                s.status = format!("Document sent to system printer via lpr ({} copy/copies)", copies);
+                Ok(json!({"success": st.success(), "path": path.display().to_string(), "copies": copies}))
+            }
+            Err(e) => Err(CmdError::Failed(format!("failed to invoke lpr: {e}"))),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let status = std::process::Command::new("lp").arg("-n").arg(copies.to_string()).arg(&path).status();
+        match status {
+            Ok(st) => {
+                s.status = format!("Document sent to system printer via lp ({} copy/copies)", copies);
+                Ok(json!({"success": st.success(), "path": path.display().to_string(), "copies": copies}))
+            }
+            Err(e) => Err(CmdError::Failed(format!("failed to invoke lp: {e}"))),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        s.ui_requests.push(json!({"open": "print"}));
+        Ok(json!({"wasm": true, "copies": copies}))
+    }
 }

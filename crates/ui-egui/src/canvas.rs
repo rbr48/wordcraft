@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use egui::{Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Ui, pos2, vec2};
+use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Ui, pos2, vec2};
 use serde_json::json;
 use wordcraft_doc::{Pos, StoryRef};
 use wordcraft_layout::{DocLayout, Page, Placed};
@@ -182,9 +182,11 @@ pub struct Geometry {
 /// Width of the markup area beside each page for comment balloons (points), or 0.
 pub fn markup_width(app: &WordApp) -> f32 {
     let v = &app.session.view;
-    // Word shows comments either in balloons (contextual) or in the Comments pane (list).
+    // Word shows comments and revisions either in balloons (contextual) or in the Reviewing pane.
     let on = v.show_markup && !v.comments_pane && !v.read_mode && !v.multi_page && v.mode == wordcraft_layout::ViewMode::Print;
-    if on && !app.session.doc.comments.is_empty() { 216.0 } else { 0.0 }
+    let has_comments = !app.session.doc.comments.is_empty();
+    let has_revisions = !app.session.doc.revisions.is_empty();
+    if on && (has_comments || has_revisions) { 216.0 } else { 0.0 }
 }
 
 pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
@@ -756,7 +758,20 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
-/// Comment balloons in the markup area right of each page, joined to their anchors.
+#[derive(Clone, Debug)]
+enum BalloonKind {
+    Comment { id: u32, pos: Pos },
+    Change { start: Pos, end: Pos, kind: &'static str, rid: Option<u32> },
+}
+
+enum BalloonAction {
+    SelectPos(Pos),
+    SelectRange(Pos, Pos),
+    AcceptChange(Pos, Pos),
+    RejectChange(Pos, Pos),
+}
+
+/// Comment and track-changes balloons in the markup area right of each page, joined to their anchors.
 fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Rect], layout: &DocLayout, scale: f32) {
     let mw = markup_width(app);
     if mw <= 0.0 {
@@ -764,16 +779,22 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
     }
     let t = Tokens::get(ui.ctx());
     let clip = ui.clip_rect();
-    // (page, anchor x, anchor y, id) for each anchored, unresolved-or-not comment.
-    let mut by_page: HashMap<usize, Vec<(f32, f32, u32, Pos)>> = HashMap::new();
+
+    let mut by_page: HashMap<usize, Vec<(f32, f32, BalloonKind)>> = HashMap::new();
     for (id, pos) in wordcraft_engine::cmd::review::comment_list(&app.session) {
         let Some(pos) = pos else { continue };
         let Some(c) = layout.caret_on(&pos, app.session.page_hint) else { continue };
-        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, id, pos));
+        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, BalloonKind::Comment { id, pos }));
     }
+    for (start, end, kind, rid) in wordcraft_engine::cmd::review::changes(&app.session) {
+        let Some(c) = layout.caret_on(&start, app.session.page_hint) else { continue };
+        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, BalloonKind::Change { start, end, kind, rid }));
+    }
+
     let palette = [t.blue, Color32::from_rgb(0xB0, 0x3A, 0x2E), Color32::from_rgb(0x2E, 0x7D, 0x32), Color32::from_rgb(0x8E, 0x44, 0xAD), t.orange];
     let mut authors: Vec<String> = Vec::new();
-    let mut clicked: Option<Pos> = None;
+    let mut action: Option<BalloonAction> = None;
+
     // The markup area extends each page.
     for pr in rects {
         let area = Rect::from_min_max(pos2(pr.max.x, pr.min.y), pos2(pr.max.x + mw * scale, pr.max.y));
@@ -782,6 +803,7 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
             painter.line_segment([area.left_top(), area.left_bottom()], Stroke::new(1.0, Color32::from_rgb(0xE0, 0xE0, 0xE0)));
         }
     }
+
     for (pi, list) in by_page.iter_mut() {
         let Some(pr) = rects.get(*pi) else { continue };
         if !pr.expand(400.0).intersects(clip) {
@@ -791,49 +813,148 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
         let x0 = pr.max.x + 10.0;
         let w = (mw * scale - 20.0).max(60.0);
         let mut next_y = pr.min.y;
-        for (ax, ay, id, pos) in list.iter() {
-            let Some(c) = app.session.doc.comments.get(id) else { continue };
-            let text = app.session.doc.plain_text(StoryRef::Part(c.part));
-            let author = if c.author.is_empty() { tl!("Author").to_string() } else { c.author.clone() };
-            let ai = authors.iter().position(|a| *a == author).unwrap_or_else(|| {
-                authors.push(author.clone());
-                authors.len() - 1
-            });
-            let color = palette.get(ai % palette.len()).copied().unwrap_or(t.blue);
-            let fs = (11.0 * scale / PX_PER_PT).clamp(8.0, 16.0);
-            let head = painter.layout(author.clone(), semibold(fs), t.text, w - 16.0);
-            let body = painter.layout(text.trim().to_string(), regular(fs), if c.resolved { t.text_dim } else { t.text }, w - 16.0);
-            let h = head.size().y + body.size().y + 16.0;
+
+        for (item_idx, (ax, ay, item)) in list.iter().enumerate() {
             let anchor = pos2(pr.min.x + ax * scale, pr.min.y + ay * scale);
-            let top = (anchor.y - 12.0).max(next_y);
-            let card = Rect::from_min_size(pos2(x0, top), vec2(w, h));
-            next_y = card.max.y + 6.0;
-            if !card.intersects(clip) {
-                continue;
-            }
-            let selected = app.session.sel.focus.path == pos.path && app.session.sel.focus.story == pos.story;
-            // Leader: from the anchor along the text to the page edge, then to the card.
-            let lead = Stroke::new(if selected { 1.5 } else { 1.0 }, color.linear_multiply(if selected { 1.0 } else { 0.7 }));
-            dashed(painter, anchor, pos2(pr.max.x, anchor.y), lead);
-            painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
-            painter.rect_filled(card.translate(vec2(0.0, 1.0)), 4.0, t.page_shadow);
-            painter.rect_filled(card, 4.0, if selected { t.checked } else { Color32::WHITE });
-            painter.rect_stroke(card, 4.0, Stroke::new(if selected { 1.5 } else { 1.0 }, color), egui::StrokeKind::Inside);
-            painter.rect_filled(Rect::from_min_size(card.min, vec2(4.0, h)), egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, color);
-            painter.galley(pos2(card.min.x + 10.0, card.min.y + 6.0), head.clone(), t.text);
-            painter.galley(pos2(card.min.x + 10.0, card.min.y + 10.0 + head.size().y), body, t.text);
-            let r = ui.interact(card, ui.id().with(("balloon", *id)), Sense::click());
-            if r.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if r.clicked() {
-                clicked = Some(pos.clone());
+            let fs = (11.0 * scale / PX_PER_PT).clamp(8.0, 16.0);
+
+            match item {
+                BalloonKind::Comment { id, pos } => {
+                    let Some(c) = app.session.doc.comments.get(id) else { continue };
+                    let text = app.session.doc.plain_text(StoryRef::Part(c.part));
+                    let author = if c.author.is_empty() { tl!("Author").to_string() } else { c.author.clone() };
+                    let ai = authors.iter().position(|a| *a == author).unwrap_or_else(|| {
+                        authors.push(author.clone());
+                        authors.len() - 1
+                    });
+                    let color = palette.get(ai % palette.len()).copied().unwrap_or(t.blue);
+                    let head = painter.layout(author.clone(), semibold(fs), t.text, w - 16.0);
+                    let body = painter.layout(text.trim().to_string(), regular(fs), if c.resolved { t.text_dim } else { t.text }, w - 16.0);
+                    let h = head.size().y + body.size().y + 16.0;
+                    let top = (anchor.y - 12.0).max(next_y);
+                    let card = Rect::from_min_size(pos2(x0, top), vec2(w, h));
+                    next_y = card.max.y + 6.0;
+                    if !card.intersects(clip) {
+                        continue;
+                    }
+
+                    let selected = app.session.sel.focus.path == pos.path && app.session.sel.focus.story == pos.story;
+                    let lead = Stroke::new(if selected { 1.5 } else { 1.0 }, color.linear_multiply(if selected { 1.0 } else { 0.7 }));
+                    dashed(painter, anchor, pos2(pr.max.x, anchor.y), lead);
+                    painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
+                    painter.rect_filled(card.translate(vec2(0.0, 1.0)), 4.0, t.page_shadow);
+                    painter.rect_filled(card, 4.0, if selected { t.checked } else { Color32::WHITE });
+                    painter.rect_stroke(card, 4.0, Stroke::new(if selected { 1.5 } else { 1.0 }, color), egui::StrokeKind::Inside);
+                    painter.rect_filled(Rect::from_min_size(card.min, vec2(4.0, h)), egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, color);
+                    painter.galley(pos2(card.min.x + 10.0, card.min.y + 6.0), head.clone(), t.text);
+                    painter.galley(pos2(card.min.x + 10.0, card.min.y + 10.0 + head.size().y), body, t.text);
+
+                    let r = ui.interact(card, ui.id().with(("balloon_cmt", *id)), Sense::click());
+                    if r.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if r.clicked() {
+                        action = Some(BalloonAction::SelectPos(pos.clone()));
+                    }
+                }
+                BalloonKind::Change { start, end, kind, rid } => {
+                    let author = rid
+                        .and_then(|r| app.session.doc.revisions.get(r as usize))
+                        .map(|r| r.author.clone())
+                        .unwrap_or_else(|| tl!("Author").to_string());
+                    let is_ins = *kind == "insert";
+                    let badge = if is_ins { tl!("Inserted") } else { tl!("Deleted") };
+                    let color = if is_ins { Color32::from_rgb(0x2E, 0x7D, 0x32) } else { Color32::from_rgb(0xC0, 0x39, 0x2B) };
+
+                    let head_text = format!("{author} • {badge}");
+                    let head = painter.layout(head_text, semibold(fs), color, w - 16.0);
+
+                    let raw_text = app.session.doc.copy_range(start, end).plain_text();
+                    let trimmed = raw_text.trim();
+                    let text = if trimmed.chars().count() > 80 {
+                        format!("\"{}…\"", trimmed.chars().take(80).collect::<String>())
+                    } else {
+                        format!("\"{trimmed}\"")
+                    };
+                    let body = painter.layout(text, regular(fs), t.text, w - 16.0);
+
+                    let h = head.size().y + body.size().y + 36.0;
+                    let top = (anchor.y - 12.0).max(next_y);
+                    let card = Rect::from_min_size(pos2(x0, top), vec2(w, h));
+                    next_y = card.max.y + 6.0;
+                    if !card.intersects(clip) {
+                        continue;
+                    }
+
+                    let selected = app.session.sel.anchor == *start && app.session.sel.focus == *end;
+                    let lead = Stroke::new(if selected { 1.5 } else { 1.0 }, color.linear_multiply(if selected { 1.0 } else { 0.7 }));
+                    dashed(painter, anchor, pos2(pr.max.x, anchor.y), lead);
+                    painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
+                    painter.rect_filled(card.translate(vec2(0.0, 1.0)), 4.0, t.page_shadow);
+                    painter.rect_filled(card, 4.0, if selected { t.checked } else { Color32::WHITE });
+                    painter.rect_stroke(card, 4.0, Stroke::new(if selected { 1.5 } else { 1.0 }, color), egui::StrokeKind::Inside);
+                    painter.rect_filled(Rect::from_min_size(card.min, vec2(4.0, h)), egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, color);
+                    painter.galley(pos2(card.min.x + 10.0, card.min.y + 6.0), head.clone(), t.text);
+                    painter.galley(pos2(card.min.x + 10.0, card.min.y + 10.0 + head.size().y), body.clone(), t.text);
+
+                    // Accept and Reject buttons
+                    let btn_y = card.min.y + 10.0 + head.size().y + body.size().y + 4.0;
+                    let acc_rect = Rect::from_min_size(pos2(card.min.x + 10.0, btn_y), vec2(58.0, 18.0));
+                    let rej_rect = Rect::from_min_size(pos2(card.min.x + 76.0, btn_y), vec2(58.0, 18.0));
+
+                    let acc_resp = ui.interact(acc_rect, ui.id().with(("balloon_acc", pi, item_idx)), Sense::click());
+                    let rej_resp = ui.interact(rej_rect, ui.id().with(("balloon_rej", pi, item_idx)), Sense::click());
+                    let card_resp = ui.interact(card, ui.id().with(("balloon_chg", pi, item_idx)), Sense::click());
+
+                    painter.rect_filled(
+                        acc_rect,
+                        3.0,
+                        if acc_resp.hovered() { Color32::from_rgb(0xE8, 0xF5, 0xE9) } else { Color32::from_rgb(0xF1, 0xF8, 0xE9) },
+                    );
+                    painter.rect_stroke(acc_rect, 3.0, Stroke::new(1.0, Color32::from_rgb(0x4C, 0xAF, 0x50)), egui::StrokeKind::Inside);
+                    painter.text(acc_rect.center(), Align2::CENTER_CENTER, tl!("✓ Accept"), regular(10.5), Color32::from_rgb(0x2E, 0x7D, 0x32));
+
+                    painter.rect_filled(
+                        rej_rect,
+                        3.0,
+                        if rej_resp.hovered() { Color32::from_rgb(0xFF, 0xEB, 0xEE) } else { Color32::from_rgb(0xFD, 0xED, 0xEC) },
+                    );
+                    painter.rect_stroke(rej_rect, 3.0, Stroke::new(1.0, Color32::from_rgb(0xE5, 0x73, 0x73)), egui::StrokeKind::Inside);
+                    painter.text(rej_rect.center(), Align2::CENTER_CENTER, tl!("✗ Reject"), regular(10.5), Color32::from_rgb(0xC0, 0x39, 0x2B));
+
+                    if acc_resp.clicked() {
+                        action = Some(BalloonAction::AcceptChange(start.clone(), end.clone()));
+                    } else if rej_resp.clicked() {
+                        action = Some(BalloonAction::RejectChange(start.clone(), end.clone()));
+                    } else if card_resp.clicked() {
+                        action = Some(BalloonAction::SelectRange(start.clone(), end.clone()));
+                    }
+                }
             }
         }
     }
-    if let Some(p) = clicked {
-        app.session.sel = wordcraft_engine::Selection::caret(p);
-        app.canvas.want_focus = true;
+
+    if let Some(act) = action {
+        match act {
+            BalloonAction::SelectPos(p) => {
+                app.session.sel = wordcraft_engine::Selection::caret(p);
+                app.canvas.want_focus = true;
+            }
+            BalloonAction::SelectRange(a, b) => {
+                app.session.sel = wordcraft_engine::Selection { anchor: a, focus: b };
+                app.canvas.want_focus = true;
+            }
+            BalloonAction::AcceptChange(a, b) => {
+                app.session.sel = wordcraft_engine::Selection { anchor: a, focus: b };
+                let _ = app.run("review.accept", json!({}));
+                app.canvas.want_focus = true;
+            }
+            BalloonAction::RejectChange(a, b) => {
+                app.session.sel = wordcraft_engine::Selection { anchor: a, focus: b };
+                let _ = app.run("review.reject", json!({}));
+                app.canvas.want_focus = true;
+            }
+        }
     }
 }
 

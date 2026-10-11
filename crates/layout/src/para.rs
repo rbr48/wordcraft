@@ -312,7 +312,19 @@ impl<'a> Builder<'a> {
             let si = self.style(rc, face, small);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
-            let shaped = wordcraft_fonts::shape(&st.face, sub, &[], |c| if upper { c.to_uppercase().next().unwrap_or(c) } else { c });
+            let mut feats = Vec::new();
+            if let Some(f) = wordcraft_fonts::feature("liga") {
+                feats.push(f);
+            }
+            if let Some(f) = wordcraft_fonts::feature("kern") {
+                feats.push(f);
+            }
+            if rc.small_caps
+                && let Some(f) = wordcraft_fonts::feature("smcp")
+            {
+                feats.push(f);
+            }
+            let shaped = wordcraft_fonts::shape(&st.face, sub, &feats, |c| if upper { c.to_uppercase().next().unwrap_or(c) } else { c });
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
             // Group glyphs by cluster byte offset; graphemes may span several shaper clusters.

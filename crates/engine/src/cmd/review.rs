@@ -309,7 +309,7 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
     sel_result(s)
 }
 
-fn changes(s: &Session) -> Vec<(Pos, Pos, &'static str, Option<u32>)> {
+pub fn changes(s: &Session) -> Vec<(Pos, Pos, &'static str, Option<u32>)> {
     let mut out = Vec::new();
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };

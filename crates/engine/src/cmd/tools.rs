@@ -3,8 +3,8 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::{CharProps, NumRef};
-use wordcraft_doc::{Block, Document, Paragraph, Pos, RevisionKind, StoryRef, para_block};
+use wordcraft_doc::props::{CharProps, NumRef, RowProps, TableProps};
+use wordcraft_doc::{Block, Cell, Document, Paragraph, Pos, RevisionKind, Row, StoryRef, Table, para_block};
 
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -158,9 +158,6 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.compatibility", "Check Compatibility", "File › Info", |s, _| {
             let mut issues = Vec::new();
-            if s.doc.settings.watermark.is_some() {
-                issues.push("Watermarks are kept in WordCraft documents but not yet written to .docx.");
-            }
             if s.doc
                 .para_paths(StoryRef::Body)
                 .iter()
@@ -421,7 +418,22 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("tools.dictate", "Dictate", "Home › Voice", dictate).params(r#"{"text"?: string, "listening"?: bool}"#),
         CommandSpec::new("tools.copilot", "Copilot / AI Assistant", "Home › AI", copilot).params(
-            r#"{"action"?: "toggle|draft|rewrite|summarize|proofread", "prompt"?: string, "tone"?: string, "replace"?: bool, "insert"?: bool}"#,
+            r#"{"action"?: "toggle|draft|rewrite|summarize|proofread|table|ask|autocomplete", "prompt"?: string, "tone"?: string, "replace"?: bool, "insert"?: bool}"#,
+        ),
+        CommandSpec::new("ai.rewrite", "AI Rewrite", "Home › AI", ai_rewrite).params(
+            r#"{"text"?: string, "tone"?: "concise|academic|executive|casual|professional", "replace"?: bool, "insert"?: bool}"#,
+        ),
+        CommandSpec::new("ai.generateTable", "AI Generate Table", "Insert › Tables", ai_generate_table).params(
+            r#"{"prompt": string, "rows"?: n, "cols"?: n, "style"?: string}"#,
+        ),
+        CommandSpec::new("ai.summarize", "AI Summarize", "Home › AI", ai_summarize).params(
+            r#"{"mode"?: "bullets|executive|abstract", "text"?: string, "insert"?: bool, "replace"?: bool}"#,
+        ),
+        CommandSpec::new("ai.ask", "AI Ask Document", "Home › AI", ai_ask).params(
+            r#"{"question": string}"#,
+        ),
+        CommandSpec::new("ai.autocomplete", "AI Autocomplete", "Home › AI", ai_autocomplete).params(
+            r#"{"prefix"?: string, "insert"?: bool}"#,
         ),
         CommandSpec::new("tools.customizeRibbon", "Customize Ribbon", "Tools › Customize", customize_ribbon).params(r#"{"tabs"?: string[]}"#).pure(),
         CommandSpec::new("tools.customizeKeyboard", "Customize Keyboard", "Tools › Customize", customize_keyboard)
@@ -498,6 +510,24 @@ fn copilot(s: &mut Session, v: &Value) -> CmdResult {
         return Ok(json!({"action": "toggle", "pane": "ai"}));
     }
 
+    if action == "table" {
+        return ai_generate_table(s, v);
+    }
+    if action == "ask" {
+        let q = if !prompt.is_empty() { prompt } else { p::str(v, "question").unwrap_or("") };
+        let res = ask_document(s, q);
+        let answer = res.get("answer").and_then(Value::as_str).unwrap_or("").to_string();
+        return Ok(json!({
+            "action": "ask",
+            "title": "Ask Document",
+            "content": answer,
+            "data": res
+        }));
+    }
+    if action == "autocomplete" {
+        return ai_autocomplete(s, v);
+    }
+
     let (title, content) = match action {
         "rewrite" => {
             let src = if !prompt.is_empty() { prompt.to_string() } else { s.selected_text() };
@@ -510,7 +540,7 @@ fn copilot(s: &mut Session, v: &Value) -> CmdResult {
                 let sel = s.selected_text();
                 if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
             };
-            ("Summary".to_string(), summarize_text(&src))
+            ("Summary".to_string(), summarize_text_mode(&src, tone))
         }
         "proofread" => {
             let src = if !prompt.is_empty() {
@@ -541,6 +571,132 @@ fn copilot(s: &mut Session, v: &Value) -> CmdResult {
     }))
 }
 
+fn ai_rewrite(s: &mut Session, v: &Value) -> CmdResult {
+    let tone = p::str(v, "tone").unwrap_or("professional");
+    let src = if let Some(t) = p::str(v, "text") {
+        t.to_string()
+    } else {
+        let sel = s.selected_text();
+        if !sel.trim().is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
+    };
+    let rewritten = rewrite_text(&src, tone);
+    let replace = p::bool(v, "replace").unwrap_or(false);
+    let insert = p::bool(v, "insert").unwrap_or(false);
+
+    if replace && !rewritten.is_empty() {
+        let at = delete_selection(s)?;
+        let end = s.doc.insert_text(&at, &rewritten, &s.typing_props())?;
+        s.sel = Selection::caret(end);
+    } else if insert && !rewritten.is_empty() {
+        let at = s.sel.focus.clone();
+        let end = s.doc.insert_text(&at, &rewritten, &s.typing_props())?;
+        s.sel = Selection::caret(end);
+    }
+
+    Ok(json!({
+        "action": "rewrite",
+        "tone": tone,
+        "original": src,
+        "rewritten": rewritten,
+    }))
+}
+
+fn ai_generate_table(s: &mut Session, v: &Value) -> CmdResult {
+    let prompt = p::str(v, "prompt").unwrap_or("Table");
+    let rows_param = p::u64(v, "rows").map(|r| r.clamp(1, 100) as usize);
+    let cols_param = p::u64(v, "cols").map(|c| c.clamp(1, 20) as usize);
+    let style = p::str(v, "style").unwrap_or("TableGrid");
+
+    let width = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+    let table = parse_or_generate_table(prompt, rows_param, cols_param, width, style)?;
+    let row_count = table.rows.len();
+    let col_count = table.cols();
+
+    let path = super::insert::insert_block_at_caret(s, Block::Table(table))?;
+    let story = s.sel.focus.story;
+    let mut first = path.0.clone();
+    first.extend([0, 0, 0]);
+    s.sel = Selection::caret(Pos { story, path: wordcraft_doc::Path(first), off: 0 });
+
+    Ok(json!({
+        "table": path.0,
+        "rows": row_count,
+        "cols": col_count,
+        "prompt": prompt,
+    }))
+}
+
+fn ai_summarize(s: &mut Session, v: &Value) -> CmdResult {
+    let mode = p::str(v, "mode").unwrap_or("bullets");
+    let src = if let Some(t) = p::str(v, "text") {
+        t.to_string()
+    } else {
+        let sel = s.selected_text();
+        if !sel.trim().is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
+    };
+    let summary = summarize_text_mode(&src, mode);
+    let words = summary.split_whitespace().count();
+    let reading_time_min = (words as f32 / 200.0).ceil() as u32;
+
+    let replace = p::bool(v, "replace").unwrap_or(false);
+    let insert = p::bool(v, "insert").unwrap_or(false);
+
+    if replace && !summary.is_empty() {
+        let at = delete_selection(s)?;
+        let end = s.doc.insert_text(&at, &summary, &s.typing_props())?;
+        s.sel = Selection::caret(end);
+    } else if insert && !summary.is_empty() {
+        let at = s.sel.focus.clone();
+        let end = s.doc.insert_text(&at, &summary, &s.typing_props())?;
+        s.sel = Selection::caret(end);
+    }
+
+    Ok(json!({
+        "action": "summarize",
+        "mode": mode,
+        "summary": summary,
+        "word_count": words,
+        "reading_time_min": reading_time_min,
+    }))
+}
+
+fn ai_ask(s: &mut Session, v: &Value) -> CmdResult {
+    let question = p::str(v, "question").or_else(|| p::str(v, "query")).unwrap_or("");
+    let result = ask_document(s, question);
+    Ok(result)
+}
+
+fn ai_autocomplete(s: &mut Session, v: &Value) -> CmdResult {
+    let prefix = if let Some(p) = p::str(v, "prefix") {
+        p.to_string()
+    } else {
+        let at = &s.sel.focus;
+        if let Some(p) = s.doc.para(at.story, &at.path) {
+            let plain = p.plain_text();
+            let char_idx = at.off.min(plain.len());
+            let floor_idx = plain.floor_char_boundary(char_idx);
+            plain.get(..floor_idx).unwrap_or("").to_string()
+        } else {
+            String::new()
+        }
+    };
+    let insert = p::bool(v, "insert").unwrap_or(false);
+    let (prediction, confidence) = predict_completion(&prefix);
+
+    if insert && !prediction.is_empty() {
+        let at = s.sel.focus.clone();
+        let end = s.doc.insert_text(&at, &prediction, &s.typing_props())?;
+        s.sel = Selection::caret(end);
+    }
+
+    Ok(json!({
+        "action": "autocomplete",
+        "prefix": prefix,
+        "prediction": prediction,
+        "confidence": confidence,
+    }))
+}
+
 pub fn rewrite_text(src: &str, tone: &str) -> String {
     if src.trim().is_empty() {
         return "Please select or enter text to rewrite.".to_string();
@@ -561,6 +717,73 @@ pub fn rewrite_text(src: &str, tone: &str) -> String {
                 ("bring to an end", "conclude"),
                 ("give consideration to", "consider"),
                 ("as a means of", "to"),
+            ];
+            for (from, to) in pairs {
+                text = text.replace(from, to);
+                let mut cap_from = from.to_string();
+                if let Some(first) = cap_from.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                    let mut cap_to = to.to_string();
+                    if let Some(t_first) = cap_to.get_mut(0..1) {
+                        t_first.make_ascii_uppercase();
+                        text = text.replace(&cap_from, &cap_to);
+                    }
+                }
+            }
+        }
+        "academic" => {
+            let pairs = [
+                ("shows that", "demonstrates that"),
+                ("shows", "indicates"),
+                ("proves", "empirically verifies"),
+                ("a lot of", "a substantial body of"),
+                ("big", "statistically significant"),
+                ("look into", "investigate"),
+                ("in order to", "so as to"),
+                ("think", "hypothesize"),
+                ("find out", "ascertain"),
+                ("clear", "evident"),
+                ("about", "approximately"),
+                ("get", "obtain"),
+                ("gives", "yields"),
+                ("build", "construct"),
+                ("test", "evaluate"),
+                ("good", "favorable"),
+                ("bad", "adverse"),
+                ("start", "commence"),
+                ("finish", "conclude"),
+            ];
+            for (from, to) in pairs {
+                text = text.replace(from, to);
+                let mut cap_from = from.to_string();
+                if let Some(first) = cap_from.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                    let mut cap_to = to.to_string();
+                    if let Some(t_first) = cap_to.get_mut(0..1) {
+                        t_first.make_ascii_uppercase();
+                        text = text.replace(&cap_from, &cap_to);
+                    }
+                }
+            }
+        }
+        "executive" => {
+            let pairs = [
+                ("we need to", "our strategic priority is to"),
+                ("help", "accelerate"),
+                ("do", "execute"),
+                ("change", "transform"),
+                ("fix", "remediate"),
+                ("problem", "critical bottleneck"),
+                ("make sure", "ensure rigorous compliance"),
+                ("start", "initiate"),
+                ("talk about", "align on"),
+                ("plan", "strategic roadmap"),
+                ("results", "key outcomes and deliverable impact"),
+                ("good", "high-value"),
+                ("bad", "suboptimal"),
+                ("spend", "allocate capital toward"),
+                ("buy", "procure"),
+                ("work together", "collaborate cross-functionally"),
             ];
             for (from, to) in pairs {
                 text = text.replace(from, to);
@@ -615,25 +838,415 @@ pub fn rewrite_text(src: &str, tone: &str) -> String {
 }
 
 pub fn summarize_text(src: &str) -> String {
+    summarize_text_mode(src, "bullets")
+}
+
+pub fn summarize_text_mode(src: &str, mode: &str) -> String {
     let trimmed = src.trim();
     if trimmed.is_empty() {
         return "Please enter text or select content to summarize.".to_string();
     }
     let sentences: Vec<&str> = trimmed.split(['.', '!', '?', '\n']).map(str::trim).filter(|s| !s.is_empty() && s.len() > 15).collect();
 
-    let mut out = String::from("Key Takeaways:\n");
-    if sentences.is_empty() {
-        out.push_str(&format!("• {trimmed}\n"));
-    } else {
-        for s in sentences.iter().take(4) {
-            out.push_str(&format!("• {s}.\n"));
+    match mode {
+        "executive" => {
+            let lead = sentences.first().copied().unwrap_or(trimmed);
+            let concluding = sentences.last().copied().unwrap_or(lead);
+            let middle = if sentences.len() > 2 { sentences.get(sentences.len() / 2).copied().unwrap_or("") } else { "" };
+            let mut out = String::from("Executive Summary:\n");
+            out.push_str(&format!("{lead}. "));
+            if !middle.is_empty() && middle != lead && middle != concluding {
+                out.push_str(&format!("Specifically, {middle}. "));
+            }
+            out.push_str(&format!("Ultimately, {concluding}."));
+            out
         }
-        out.push_str("\nExecutive Summary:\n");
-        let lead = sentences.first().copied().unwrap_or(trimmed);
-        let concluding = sentences.last().copied().unwrap_or(lead);
-        out.push_str(&format!("{lead}. Ultimately, {concluding}."));
+        "abstract" => {
+            let lead = sentences.first().copied().unwrap_or(trimmed);
+            let second = sentences.get(1).copied().unwrap_or(lead);
+            let concluding = sentences.last().copied().unwrap_or(lead);
+            format!(
+                "Structured Abstract\n\n\
+                 Context & Background:\n{lead}.\n\n\
+                 Objectives & Methodology:\n{second}.\n\n\
+                 Principal Findings & Conclusion:\n{concluding}."
+            )
+        }
+        _ => {
+            let mut out = String::from("Key Takeaways:\n");
+            if sentences.is_empty() {
+                out.push_str(&format!("• {trimmed}\n"));
+            } else {
+                for s in sentences.iter().take(5) {
+                    out.push_str(&format!("• {s}.\n"));
+                }
+            }
+            out
+        }
     }
-    out
+}
+
+pub fn ask_document(s: &Session, question: &str) -> Value {
+    let body_text = s.doc.plain_text(StoryRef::Body);
+    let words: Vec<&str> = body_text.split_whitespace().collect();
+    let word_count = words.len();
+    let sentences: Vec<&str> = body_text.split(['.', '!', '?', '\n']).map(str::trim).filter(|s| !s.is_empty() && s.len() > 10).collect();
+    let sentence_count = sentences.len().max(1);
+    let char_count = body_text.chars().filter(|c| !c.is_whitespace()).count();
+    let reading_time = (word_count as f32 / 200.0).ceil() as u32;
+
+    let mut headings = Vec::new();
+    for path in s.doc.para_paths(StoryRef::Body) {
+        if let Some(p) = s.doc.para(StoryRef::Body, &path) {
+            let plain = p.plain_text();
+            if s.doc.styles.resolve_para(&p.props).outline_level.is_some() && !plain.trim().is_empty() {
+                headings.push(plain.trim().to_string());
+            }
+        }
+    }
+
+    let table_count = s.doc.body.iter().filter(|b| matches!(b.as_ref(), Block::Table(_))).count();
+
+    let total_syllables: usize = words.iter().map(|w| count_syllables(w)).sum();
+    let words_per_sentence = word_count as f64 / sentence_count as f64;
+    let syllables_per_word = if word_count > 0 { total_syllables as f64 / word_count as f64 } else { 1.0 };
+    let flesch_reading_ease =
+        if word_count >= 10 { (206.835 - (1.015 * words_per_sentence) - (84.6 * syllables_per_word)).clamp(0.0, 100.0) } else { 100.0 };
+
+    let q_lower = question.to_lowercase();
+
+    if q_lower.contains("action") || q_lower.contains("todo") || q_lower.contains("task") || q_lower.contains("deadline") {
+        let triggers = ["will", "must", "shall", "todo", "action", "deadline", "by ", "responsible", "assign"];
+        let mut actions = Vec::new();
+        for s in &sentences {
+            let s_lower = s.to_lowercase();
+            if triggers.iter().any(|t| s_lower.contains(t)) {
+                actions.push(*s);
+            }
+        }
+        let answer = if actions.is_empty() {
+            "No explicit action items, deadlines, or pending tasks detected in the document text.".to_string()
+        } else {
+            let mut ans = format!("Detected {} action item(s) in document:\n\n", actions.len());
+            for a in &actions {
+                ans.push_str(&format!("• {a}\n"));
+            }
+            ans
+        };
+        return json!({
+            "question": question,
+            "answer": answer,
+            "sources": actions,
+            "metrics": {
+                "wordCount": word_count,
+                "actionItemsCount": actions.len(),
+            }
+        });
+    }
+
+    if q_lower.contains("stat")
+        || q_lower.contains("metric")
+        || q_lower.contains("length")
+        || q_lower.contains("count")
+        || q_lower.contains("overview")
+        || question.trim().is_empty()
+    {
+        let heading_summary = if headings.is_empty() { "None".to_string() } else { headings.join(", ") };
+        let answer = format!(
+            "Document Telemetry & Structure Overview:\n\n\
+             • Word Count: {word_count} words\n\
+             • Character Count: {char_count} characters\n\
+             • Sentences: {sentence_count}\n\
+             • Headings: {} ({heading_summary})\n\
+             • Tables: {table_count}\n\
+             • Reading Time: ~{reading_time} min\n\
+             • Flesch Reading Ease: {:.1}/100",
+            headings.len(),
+            flesch_reading_ease
+        );
+        return json!({
+            "question": question,
+            "answer": answer,
+            "sources": headings,
+            "metrics": {
+                "wordCount": word_count,
+                "charCount": char_count,
+                "sentenceCount": sentence_count,
+                "headingCount": headings.len(),
+                "tableCount": table_count,
+                "readingTimeMin": reading_time,
+                "fleschReadingEase": flesch_reading_ease
+            }
+        });
+    }
+
+    if q_lower.contains("readability") || q_lower.contains("grade") || q_lower.contains("level") || q_lower.contains("tone") {
+        let grade_level = ((0.39 * words_per_sentence) + (11.8 * syllables_per_word) - 15.59).clamp(0.0, 20.0);
+        let reading_level = if flesch_reading_ease >= 80.0 {
+            "Easy (Elementary / Middle School)"
+        } else if flesch_reading_ease >= 60.0 {
+            "Standard (High School)"
+        } else if flesch_reading_ease >= 40.0 {
+            "Difficult (College Level)"
+        } else {
+            "Very Difficult (Academic / Graduate Level)"
+        };
+        let answer = format!(
+            "Document Readability & Style Analysis:\n\n\
+             • Flesch Reading Ease: {:.1} / 100\n\
+             • Estimated Grade Level: {:.1}\n\
+             • Target Audience: {reading_level}\n\
+             • Average Words per Sentence: {:.1}\n\
+             • Syllables per Word: {:.2}",
+            flesch_reading_ease, grade_level, words_per_sentence, syllables_per_word
+        );
+        return json!({
+            "question": question,
+            "answer": answer,
+            "sources": [],
+            "metrics": {
+                "readingEase": flesch_reading_ease,
+                "gradeLevel": grade_level,
+                "readingLevel": reading_level,
+                "wordsPerSentence": words_per_sentence
+            }
+        });
+    }
+
+    let stop_words = ["what", "is", "are", "the", "in", "how", "a", "an", "of", "and", "or", "for", "to", "on", "with", "about", "does", "do"];
+    let terms: Vec<&str> = q_lower.split_whitespace().filter(|t| !stop_words.contains(t) && t.len() > 2).collect();
+
+    let mut scored_sentences: Vec<(usize, &str)> = Vec::new();
+    for s in &sentences {
+        let s_lower = s.to_lowercase();
+        let mut score = 0;
+        for t in &terms {
+            if s_lower.contains(t) {
+                score += 1;
+            }
+        }
+        if score > 0 {
+            scored_sentences.push((score, *s));
+        }
+    }
+    scored_sentences.sort_by_key(|a| std::cmp::Reverse(a.0));
+
+    let top_matches: Vec<&str> = scored_sentences.iter().take(4).map(|(_, s)| *s).collect();
+    let answer = if top_matches.is_empty() {
+        format!(
+            "No specific matching sections found for \"{question}\" in the document body. Try asking for document statistics, action items, or readability."
+        )
+    } else {
+        let mut ans = format!("Relevant excerpts matching \"{question}\":\n\n");
+        for m in &top_matches {
+            ans.push_str(&format!("• \"{m}.\"\n"));
+        }
+        ans
+    };
+
+    json!({
+        "question": question,
+        "answer": answer,
+        "sources": top_matches,
+        "metrics": {
+            "matchedCount": scored_sentences.len(),
+            "queryTerms": terms
+        }
+    })
+}
+
+pub fn predict_completion(prefix: &str) -> (String, f64) {
+    let trimmed = prefix.trim_end();
+    let lower = trimmed.to_lowercase();
+
+    let patterns = [
+        ("in accordance with", " the established project guidelines and specifications.", 0.96),
+        ("please find attached", " the requested report and analysis for your review.", 0.98),
+        ("if you have any questions", ", please do not hesitate to contact our team.", 0.98),
+        ("the primary objective of this", " document is to outline key deliverables and milestones.", 0.95),
+        ("as discussed in our previous", " meeting, all timeline goals have been approved.", 0.94),
+        ("we are pleased to", " report that all quality criteria have been successfully met.", 0.95),
+        ("in order to achieve", " optimal results, standard operating procedures must be observed.", 0.92),
+        ("it is important to note that", " all changes take effect immediately upon approval.", 0.91),
+        ("based on the results of", " our preliminary assessment, the proposed strategy is sound.", 0.93),
+        ("thank you for your", " continued collaboration and support.", 0.97),
+        ("sincerely,", "\nThe Project Team", 0.95),
+        ("best regards,", "\nManagement", 0.95),
+        ("in conclusion,", " the project is progressing on schedule with zero regressions.", 0.94),
+        ("furthermore,", " all automated verification gates remain green.", 0.90),
+        ("consequently,", " we recommend advancing to the next implementation phase.", 0.90),
+        ("to whom it may concern:", "\n\nThis letter serves to confirm our commitment...", 0.96),
+        ("meeting agenda:", "\n1. Progress Review\n2. Key Dependencies\n3. Action Items", 0.95),
+    ];
+
+    for (pat, compl, conf) in patterns {
+        if lower.ends_with(pat) {
+            return (compl.to_string(), conf);
+        }
+    }
+
+    if lower.ends_with("for example") || lower.ends_with("e.g.") {
+        return (", consider the following implementation details:".to_string(), 0.88);
+    }
+    if lower.ends_with("therefore") {
+        return (", all stakeholders should review the updated schedule.".to_string(), 0.85);
+    }
+    if lower.ends_with("however") {
+        return (", additional verification is recommended before release.".to_string(), 0.85);
+    }
+
+    if trimmed.is_empty() {
+        ("This document describes the architectural overview and specifications.".to_string(), 0.70)
+    } else {
+        (" and will continue according to the scheduled roadmap.".to_string(), 0.75)
+    }
+}
+
+pub fn parse_or_generate_table(
+    prompt: &str,
+    rows_param: Option<usize>,
+    cols_param: Option<usize>,
+    width: f32,
+    style: &str,
+) -> Result<Table, CmdError> {
+    if prompt.contains('|') && prompt.contains('\n') {
+        let mut raw_rows = Vec::new();
+        for line in prompt.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("|-") || line.starts_with("| -") || line.replace(['|', '-', ':', ' '], "").is_empty() {
+                continue;
+            }
+            let cells: Vec<String> = line.split('|').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
+            if !cells.is_empty() {
+                raw_rows.push(cells);
+            }
+        }
+        if !raw_rows.is_empty() {
+            let cols = raw_rows.iter().map(|r| r.len()).max().unwrap_or(2).clamp(1, 63);
+            let w = (width / cols as f32).max(6.0);
+            let mut table =
+                Table { props: TableProps { style: Some(style.to_string()), ..Default::default() }, grid: vec![w; cols], rows: Vec::new() };
+            for (r_idx, r) in raw_rows.into_iter().enumerate() {
+                let is_header = r_idx == 0;
+                let mut cells = Vec::new();
+                for c_idx in 0..cols {
+                    let text = r.get(c_idx).cloned().unwrap_or_default();
+                    let mut cell = Cell::with_text(&text);
+                    cell.props.width = Some(w);
+                    cells.push(cell);
+                }
+                table.rows.push(Row { props: RowProps { header: is_header, ..Default::default() }, cells });
+            }
+            return Ok(table);
+        }
+    }
+
+    let p_lower = prompt.to_lowercase();
+    let (headers, data_rows): (Vec<&str>, Vec<Vec<&str>>) = if p_lower.contains("swot") {
+        (
+            vec!["Category", "Key Factors", "Strategic Implication"],
+            vec![
+                vec!["Strengths", "Core technological capabilities, fast execution", "Leverage for competitive edge"],
+                vec!["Weaknesses", "Resource constraints, brand visibility", "Address via targeted partnerships"],
+                vec!["Opportunities", "Market demand for high-performance offline tools", "Capture enterprise and privacy-conscious users"],
+                vec!["Threats", "Entrenched incumbent ecosystem", "Focus on unmatched performance, open standards, and zero lock-in"],
+            ],
+        )
+    } else if p_lower.contains("feature") || p_lower.contains("comparison") || p_lower.contains("matrix") {
+        (
+            vec!["Feature / Capability", "Starter", "Professional", "Enterprise"],
+            vec![
+                vec!["Core Editing & Word Parity", "Full", "Full", "Full"],
+                vec!["AI Copilot & Intelligence", "Standard", "Advanced", "Unlimited"],
+                vec!["Batch Conversion & CLI", "Limited", "Included", "Dedicated Pipeline"],
+                vec!["Team Collaboration & Markup", "Local only", "Integrated", "Custom Hosted"],
+            ],
+        )
+    } else if p_lower.contains("pricing") || p_lower.contains("tier") || p_lower.contains("plan") {
+        (
+            vec!["Plan Tier", "Monthly", "Annual (Save 20%)", "Included Capabilities"],
+            vec![
+                vec!["Community", "$0", "$0", "Complete editor, open source, local storage"],
+                vec!["Professional", "$12 / mo", "$115 / yr", "Cloud sync, AI intelligence, priority export"],
+                vec!["Enterprise", "$29 / mo", "$279 / yr", "Custom deployment, SLA, compliance reports"],
+            ],
+        )
+    } else if p_lower.contains("project") || p_lower.contains("roadmap") || p_lower.contains("timeline") {
+        (
+            vec!["Phase / Milestone", "Deliverable", "Owner", "Target Date", "Status"],
+            vec![
+                vec!["Phase 1: Architecture", "Core data structures & L0-L4 crates", "Lead Architect", "Month 1", "Completed"],
+                vec!["Phase 2: Feature Parity", "Word catalog commands & layout fidelity", "Engineering Team", "Month 2", "In Progress"],
+                vec!["Phase 3: AI Intelligence", "Copilot suite, rewriting, table generation", "AI / Tools Team", "Month 3", "Active"],
+                vec!["Phase 4: Release & QA", "All CI gates green, installers, documentation", "DevOps & QA", "Month 4", "Planned"],
+            ],
+        )
+    } else if p_lower.contains("kpi")
+        || p_lower.contains("metric")
+        || p_lower.contains("revenue")
+        || p_lower.contains("sales")
+        || p_lower.contains("budget")
+        || p_lower.contains("financial")
+    {
+        (
+            vec!["Metric / Category", "Q1 Actual", "Q2 Target", "Variance (%)", "Trend"],
+            vec![
+                vec!["Active Users", "12,450", "15,000", "+20.5%", "Upward"],
+                vec!["Export Performance (ms)", "42 ms", "< 50 ms", "-16.0%", "Exceeding Target"],
+                vec!["Crash Rate", "0.00%", "0.00%", "0.0%", "Rock Solid"],
+                vec!["User Satisfaction (NPS)", "+68", "+70", "+2.9%", "Strong Positive"],
+            ],
+        )
+    } else if p_lower.contains("team") || p_lower.contains("employee") || p_lower.contains("roster") || p_lower.contains("directory") {
+        (
+            vec!["Name", "Role", "Department", "Email", "Status"],
+            vec![
+                vec!["M S Rana", "Lead Architect", "Engineering", "rana@craft.local", "Active"],
+                vec!["Alex Morgan", "Product Specialist", "Design & UX", "alex@craft.local", "Active"],
+                vec!["Jordan Lee", "Systems Engineer", "Core Infrastructure", "jordan@craft.local", "Active"],
+                vec!["Taylor Quinn", "QA & Reliability", "Quality Assurance", "taylor@craft.local", "Active"],
+            ],
+        )
+    } else {
+        (
+            vec!["Item #", "Title / Component", "Description", "Priority", "Status"],
+            vec![
+                vec!["01", "Core Setup", "Initial specification and environment configuration", "High", "In Review"],
+                vec!["02", "Implementation", "Primary workflow development and testing", "High", "In Progress"],
+                vec!["03", "Verification", "Quality assurance and automated validation", "Medium", "Planned"],
+            ],
+        )
+    };
+
+    let col_count = cols_param.unwrap_or(headers.len()).clamp(1, 63);
+    let row_count = rows_param.unwrap_or(data_rows.len() + 1).clamp(2, 1000);
+    let w = (width / col_count as f32).max(6.0);
+
+    let mut table = Table { props: TableProps { style: Some(style.to_string()), ..Default::default() }, grid: vec![w; col_count], rows: Vec::new() };
+
+    let mut header_cells = Vec::new();
+    for c in 0..col_count {
+        let text = headers.get(c).copied().unwrap_or("Column");
+        let mut cell = Cell::with_text(text);
+        cell.props.width = Some(w);
+        header_cells.push(cell);
+    }
+    table.rows.push(Row { props: RowProps { header: true, ..Default::default() }, cells: header_cells });
+
+    for r in 0..(row_count.saturating_sub(1)) {
+        let mut row_cells = Vec::new();
+        let source_row = data_rows.get(r % data_rows.len().max(1));
+        for c in 0..col_count {
+            let default_text = format!("Data {}.{}", r + 1, c + 1);
+            let text = source_row.and_then(|row| row.get(c)).copied().unwrap_or(&default_text);
+            let mut cell = Cell::with_text(text);
+            cell.props.width = Some(w);
+            row_cells.push(cell);
+        }
+        table.rows.push(Row { props: RowProps::default(), cells: row_cells });
+    }
+
+    Ok(table)
 }
 
 pub fn proofread_text(src: &str) -> String {
@@ -1551,5 +2164,43 @@ mod tests {
         assert!(r["readability"]["wordCount"].as_u64().unwrap() >= 15);
         assert!(r["readability"]["fleschReadingEase"].as_f64().unwrap() > 0.0);
         assert!(!r["readability"]["readingLevel"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ai_intelligence_suite_commands() {
+        let mut s = Session::new(Document::from_text(
+            "We need to fix the problem in order to test the system. The team will complete verification by Friday.",
+        ));
+
+        // ai.rewrite
+        let rw_acad = s.run("ai.rewrite", &json!({"tone": "academic"})).unwrap();
+        assert!(rw_acad["rewritten"].as_str().unwrap().contains("evaluate"));
+
+        let rw_exec = s.run("ai.rewrite", &json!({"tone": "executive"})).unwrap();
+        assert!(rw_exec["rewritten"].as_str().unwrap().contains("strategic priority"));
+
+        // ai.summarize
+        let sm_exec = s.run("ai.summarize", &json!({"mode": "executive"})).unwrap();
+        assert!(sm_exec["summary"].as_str().unwrap().contains("Executive Summary"));
+
+        let sm_abs = s.run("ai.summarize", &json!({"mode": "abstract"})).unwrap();
+        assert!(sm_abs["summary"].as_str().unwrap().contains("Structured Abstract"));
+
+        // ai.ask
+        let ask_acts = s.run("ai.ask", &json!({"question": "What are the action items?"})).unwrap();
+        assert!(ask_acts["answer"].as_str().unwrap().contains("verification by Friday"));
+
+        let ask_stats = s.run("ai.ask", &json!({"question": "document stats and length"})).unwrap();
+        assert!(ask_stats["metrics"]["wordCount"].as_u64().unwrap() > 10);
+
+        // ai.autocomplete
+        let ac = s.run("ai.autocomplete", &json!({"prefix": "Please find attached"})).unwrap();
+        assert!(ac["prediction"].as_str().unwrap().contains("report"));
+
+        // ai.generateTable
+        let tbl_res = s.run("ai.generateTable", &json!({"prompt": "Project Roadmap"})).unwrap();
+        assert!(tbl_res["rows"].as_u64().unwrap() >= 2);
+        assert!(tbl_res["cols"].as_u64().unwrap() >= 3);
+        assert_eq!(s.doc.body.iter().filter(|b| matches!(b.as_ref(), Block::Table(_))).count(), 1);
     }
 }

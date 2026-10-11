@@ -830,7 +830,7 @@ fn ink_equation(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// Insert a block after the caret's paragraph (splitting it if the caret is mid-paragraph).
-fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError> {
+pub(crate) fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError> {
     let at = delete_selection(s)?;
     let len = s.doc.para_at(&at).map(|p| p.len()).unwrap_or(0);
     let insert_at = if at.off == 0 {

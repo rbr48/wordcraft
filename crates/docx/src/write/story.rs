@@ -664,7 +664,12 @@ impl Writer<'_> {
     pub fn sectpr(&mut self, w: &mut W, s: &SectionProps, rels: &mut PartRels) {
         w.open("w:sectPr", &[]);
         for (set, footer) in [(&s.headers, false), (&s.footers, true)] {
-            for (kind, id) in [("default", set.default), ("first", set.first), ("even", set.even)] {
+            let def_id = if !footer && set.default.is_none() && self.doc.settings.watermark.is_some() {
+                Some((self.doc.parts.keys().max().copied().unwrap_or(0) + 1).max(1))
+            } else {
+                set.default
+            };
+            for (kind, id) in [("default", def_id), ("first", set.first), ("even", set.even)] {
                 let Some(id) = id else { continue };
                 if let Some(rid) = self.hf_rel(id, footer, rels) {
                     w.empty(if footer { "w:footerReference" } else { "w:headerReference" }, &[("w:type", kind), ("r:id", &rid)]);
