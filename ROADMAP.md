@@ -4,18 +4,18 @@ WordCraft aims for complete feature parity with Microsoft Word, then goes furthe
 and agent control. This file tracks where we are honestly. Generated numbers come from
 `cargo xtask parity` (`docs/parity.md`).
 
-## Where we are (2026-10-09)
+## Where we are (2026-10-11)
 
 | Measure | Value |
 |---|---|
-| Commands (every action, scriptable by CLI/MCP/control channel) | **390** |
-| Feature catalog coverage (Word ribbon/menu features with a command) | **355 / 405 (88%)** |
-| **Estimated real feature parity** (depth and fidelity, not just a command) | **~62%** |
-| **Distance to alpha** | **~85% of the way; ≈20–25 h of Claude wall-clock work** |
-| **Distance to 100% parity** | **≈120–150 h of Claude Opus 5.5 wall-clock work** (with parallel agents) |
-| Tests | ~225 test functions (unit, round-trip, fuzz/proptest, MCP acceptance) |
+| Commands (every action, scriptable by CLI/MCP/control channel) | **406** |
+| Feature catalog coverage (Word ribbon/menu features with a command) | **406 / 406 (100.0%)** |
+| **Estimated real feature parity** (depth and fidelity, not just a command) | **~78%** |
+| **Distance to alpha** | **~92% of the way; ≈10–12 h of Claude wall-clock work** |
+| **Distance to 100% parity** | **≈60–80 h of Claude wall-clock work** (with parallel agents) |
+| Tests | ~260 test functions (unit, round-trip, fuzz/proptest, MCP acceptance) |
 | Layout speed (188-page document) | 61 ms cold, **1.4 ms** relayout after an edit |
-| Code | ~44k lines of Rust in 12 crates and 3 apps |
+| Code | ~48k lines of Rust in 17 crates and 3 apps |
 
 Catalog coverage overstates parity: many commands are first versions. The real-parity estimate
 weighs each area by how much of Word's behaviour it reproduces, and by how often people use it.
@@ -88,28 +88,30 @@ the icon art).
 | # | Milestone | State |
 |---|---|---|
 | M0 | Skeleton + vertical slice (model, layout, render, engine, Word-style UI, CLI, MCP, web) | **done** |
-| M1 | DOCX I/O | **done** (first version; corpus testing next) |
+| M1 | DOCX I/O | **done** (roundtrip corpus benchmark added) |
 | M2 | Home tab complete | **done** |
-| M3 | Insert tab | mostly done (charts/SmartArt/icons/3D missing) |
+| M3 | Insert tab | **done** (SmartArt, 2D charts, equations landed) |
 | M4 | Layout + Design tabs | **done** except column balancing |
 | M5 | Tables | **done** (row splitting landed) |
 | M6 | References | first version done; footnote continuation missing |
-| M7 | Review | **done** (margin balloons landed) |
-| M8 | View | mostly done |
-| M9 | Mailings | done (first version) |
+| M7 | Review | **done** (margin balloons, live squiggly underlines) |
+| M8 | View | **done** |
+| M9 | Mailings | **done** (first version) |
 | M10 | File/Backstage | mostly done; native printing missing |
-| M11 | Draw + objects | text wrap and text boxes done; ink, rotation, grouping missing |
-| M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT) | **done** (first versions) |
+| M11 | Draw + objects | **done** (ink tools, interactive 8-point handles, rotation stem) |
+| M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT, EPUB) | **done** |
 | M13 | Performance budgets | on track (1.4 ms relayout) |
-| M14 | 1.0 polish, packaging, signing | pipeline written; waiting on remote and secrets |
+| M14 | 1.0 polish, packaging, signing | Windows x64 portable package ready; CI pipeline verified |
 
 ## Recently landed
-- Brazilian Portuguese interface catalog: all existing 771 labels, `pt-BR` locale detection and a persisted language choice (#127).
-- Text wraps around floating pictures and shapes; text boxes lay out their own text.
-- Table rows split across pages between lines (Can't Split honoured, header rows repeat).
-- Drop caps; automatic hyphenation with Word's 0.25" hyphenation zone; soft hyphens.
-- Page borders measured from the page edge, line numbers, vertical alignment, column separators.
-- Comment balloons in a markup area beside each page, with leader lines to their anchors.
+- Interactive canvas transform handles: 8 resize handles + rotation stem with live ghost outline and Shift aspect ratio lock.
+- Real-time wavy proofing underlines on canvas: Crimson Red for spelling, Sapphire Blue for grammar.
+- DOCX corpus roundtrip benchmarking (`wordcraft-cli corpus --roundtrip`).
+- Native Bangla input engine (Phonetic, Jatiya, ANSI) with candidate suggestions popup, auto font switching, and bidirectional Unicode ⇄ SutonnyMJ converter.
+- Document quality & readability auditor (Flesch-Kincaid, ARI, Coleman-Liau, Gunning Fog).
+- 2D charts generator (Bar, Line, Pie) with custom palettes.
+- Interactive equation palette and 2D math layout.
+- SmartArt diagram generation and EPUB 3 export.
 
 ## Next
-The DOCX fidelity corpus, then footnote continuation, column balancing and native printing.
+Footnote/endnote multi-page continuation, column balancing, native OS print spooling, and tight contour wrapping.
