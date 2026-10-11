@@ -49,5 +49,6 @@ description: Comprehensive project memory, architecture guide, and operational r
   - PDF/A archival compliance & metadata tagging in `wordcraft-pdf`.
   - Native OS printing command (`file.printNative`) and Windows Inno Setup installer script (`packaging/windows/wordcraft.iss`).
   - Full Bijoy 52 conjunct parity (যুক্তবর্ণ), 'g' linker key, independent vowels, and Avro phonetic grapheme cluster boundary handling.
+  - Complete Dari (দাঁড়ি / '।'), Bisarga (': ' / 'ঃ'), and middle-of-word independent vowels ('আ', 'ই', etc.) precision support across Jatiya, Phonetic (Avro), and ANSI (Bijoy Classic/SutonnyMJ).
   - Windows x64 Inno Setup installer package at `packaging/windows/Output/wordcraft-0.6.0-windows-x64-setup.exe`.
   - Freshly updated portable release archive at `dist/wordcraft/wordcraft-0.6.0-windows-x64-portable.zip`.
