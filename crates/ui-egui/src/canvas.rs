@@ -75,6 +75,8 @@ pub struct CanvasState {
     pub(crate) table_stroke: Option<crate::table_pen::PenStroke>,
     /// A table column border, row border, or corner resize drag in progress.
     pub(crate) table_drag: Option<crate::table_resize::TableDrag>,
+    /// Origin cell of an active table cell drag selection: (table path, row, col).
+    pub(crate) table_cell_drag: Option<(wordcraft_doc::Path, usize, usize)>,
 }
 
 impl CanvasState {
@@ -128,6 +130,7 @@ impl Default for CanvasState {
             table_tool: None,
             table_stroke: None,
             table_drag: None,
+            table_cell_drag: None,
         }
     }
 }
@@ -403,6 +406,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     let mut scroll_target: Option<Rect> = None;
     if app.canvas.scroll_to_caret
+        && !app.canvas.dragging
         && let Some(c) = caret
         && let Some(pr) = geo.rects.get(c.page)
     {
@@ -565,7 +569,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         // Selection (a selected object shows its frame instead).
-        if !app.session.sel.is_collapsed() && crate::objects::selected(app).is_none() {
+        let has_col_segs = app.session.column_segments().is_some();
+        if (!app.session.sel.is_collapsed() || has_col_segs) && crate::objects::selected(app).is_none() {
             // A column selection highlights each row's piece.
             let pieces: Vec<(Pos, Pos)> = match app.session.column_segments() {
                 Some(segs) => segs.to_vec(),
@@ -573,14 +578,46 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             };
             let mut first: Option<Rect> = None;
             for (a, b) in &pieces {
-                for (pi, r) in layout.selection_rects(&app.session.doc, a, b, app.session.page_hint) {
-                    if let Some(pr) = rects.get(pi) {
-                        let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
-                        let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
-                        painter.rect_filled(sr, 0.0, t.selection);
-                        // Track the topmost rect: the mini toolbar anchors on the selection's first line.
-                        if first.is_none_or(|f| sr.min.y < f.min.y) {
-                            first = Some(sr);
+                let cell_rects: Vec<(usize, wordcraft_geom::Rect)> = if let Some((tp, r, c)) = a.path.cell() {
+                    let mut crs = Vec::new();
+                    for (pi, page) in layout.pages.iter().enumerate() {
+                        for it in &page.items {
+                            if let Placed::Cell { rect, table, row, cell, story } = it
+                                && *table == tp
+                                && *row == r
+                                && *cell == c
+                                && *story == a.story
+                            {
+                                crs.push((pi, *rect));
+                            }
+                        }
+                    }
+                    crs
+                } else {
+                    Vec::new()
+                };
+
+                if !cell_rects.is_empty() {
+                    for (pi, r) in cell_rects {
+                        if let Some(pr) = rects.get(pi) {
+                            let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                            let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                            painter.rect_filled(sr, 0.0, t.selection);
+                            if first.is_none_or(|f| sr.min.y < f.min.y) {
+                                first = Some(sr);
+                            }
+                        }
+                    }
+                } else {
+                    for (pi, r) in layout.selection_rects(&app.session.doc, a, b, app.session.page_hint) {
+                        if let Some(pr) = rects.get(pi) {
+                            let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                            let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                            painter.rect_filled(sr, 0.0, t.selection);
+                            // Track the topmost rect: the mini toolbar anchors on the selection's first line.
+                            if first.is_none_or(|f| sr.min.y < f.min.y) {
+                                first = Some(sr);
+                            }
                         }
                     }
                 }
@@ -1360,6 +1397,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             let _ = app.run("caret.set", json!({"pos": pj}));
             app.session.page_hint = page;
             app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
+            app.canvas.table_cell_drag = None;
             app.canvas.dragging = true;
             return;
         }
@@ -1370,6 +1408,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         }
         app.session.page_hint = page;
         app.canvas.dragging = true;
+        app.canvas.table_cell_drag = layout.cell_at(page, x, y).map(|(_, tp, r, c)| (tp, r, c)).or_else(|| app.session.sel.anchor.path.cell());
         // Format painter applies on mouse up.
     } else if app.canvas.dragging
         && ui.input(|i| i.pointer.primary_down())
@@ -1384,17 +1423,21 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             );
         }
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
-        if let Some(pos) = layout.hit(page, x, y, story)
-            && pos != app.session.sel.focus
-        {
-            let anchor_cell = app.session.sel.anchor.path.cell();
-            let focus_cell = pos.path.cell();
-            if let (Some((tp_a, r_a, c_a)), Some((tp_b, r_b, c_b))) = (anchor_cell, focus_cell)
-                && tp_a == tp_b
+        if let Some((tp_a, r_a, c_a)) = app.canvas.table_cell_drag.clone() {
+            let cell_under_pointer =
+                layout.cell_at(page, x, y).map(|(_, tp, r, c)| (tp, r, c)).or_else(|| layout.hit(page, x, y, story).and_then(|p| p.path.cell()));
+
+            if let Some((tp_b, r_b, c_b)) = cell_under_pointer
+                && tp_b == tp_a
             {
                 if (r_a, c_a) == (r_b, c_b) {
-                    app.session.column = None;
-                    app.session.sel.focus = pos;
+                    if let Some(pos) = layout.hit(page, x, y, story)
+                        && pos != app.session.sel.focus
+                    {
+                        app.session.column = None;
+                        app.session.sel.focus = pos;
+                        app.session.page_hint = page;
+                    }
                 } else {
                     let _ = app.run(
                         "table.selectRange",
@@ -1406,11 +1449,15 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
                             "c1": c_b,
                         }),
                     );
+                    app.session.page_hint = page;
                 }
-            } else {
-                app.session.column = None;
-                app.session.sel.focus = pos;
             }
+            app.canvas.caret_visible_since = crate::now_ms();
+        } else if let Some(pos) = layout.hit(page, x, y, story)
+            && pos != app.session.sel.focus
+        {
+            app.session.column = None;
+            app.session.sel.focus = pos;
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
@@ -1418,6 +1465,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_released()) {
         app.canvas.dragging = false;
         app.canvas.column_drag = None;
+        app.canvas.table_cell_drag = None;
         if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
             let _ = app.run("edit.pasteFormat", json!({}));
         }

@@ -786,8 +786,8 @@ pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: u
     }
     let (min_r, max_r) = (r0.min(r1), r0.max(r1).min(t.rows.len().saturating_sub(1)));
     let (min_c, max_c) = (c0.min(c1), c0.max(c1));
-    let is_single_cell = min_r == max_r && min_c == max_c;
 
+    let all_paths = s.doc.para_paths(story);
     let mut segments = Vec::new();
     for r in min_r..=max_r {
         let Some(row) = t.rows.get(r) else { continue };
@@ -802,7 +802,7 @@ pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: u
             let mut b = tp.0.clone();
             b.extend([r as u32, c as u32]);
             let start_path = Path(a);
-            let end_path = s.doc.para_paths(story).into_iter().rfind(|q| q.0.starts_with(&b)).unwrap_or_else(|| {
+            let end_path = all_paths.iter().rfind(|q| q.0.starts_with(&b)).cloned().unwrap_or_else(|| {
                 let mut x = b.clone();
                 x.push(0);
                 Path(x)
@@ -815,7 +815,7 @@ pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: u
     }
 
     if let (Some((first_a, _)), Some((_, last_b))) = (segments.first(), segments.last()) {
-        s.sel = Selection { anchor: first_a.clone(), focus: if is_single_cell { last_b.clone() } else { first_a.clone() } };
+        s.sel = Selection { anchor: first_a.clone(), focus: last_b.clone() };
         let l = s.layout();
         let xa = l.caret_on(first_a, s.page_hint).map(|k| k.x).unwrap_or(0.0);
         let xb = l.caret_on(last_b, s.page_hint).map(|k| k.x + 50.0).unwrap_or(100.0);

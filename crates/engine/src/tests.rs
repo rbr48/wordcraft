@@ -686,6 +686,43 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+#[test]
+fn table_selection_range_and_headers() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    let tp = s.sel.focus.path.cell().unwrap().0;
+
+    // 1. Select 2x2 range (0,0) to (1,1)
+    run(&mut s, "table.selectRange", json!({"path": tp.to_string(), "r0": 0, "c0": 0, "r1": 1, "c1": 1}));
+    assert!(!s.sel.is_collapsed(), "range selection must not be collapsed");
+    let segs = s.column_segments().expect("column_segments should be Some");
+    assert_eq!(segs.len(), 4, "2x2 block must have 4 cell segments");
+
+    // 2. Backward range (2,2) to (1,1)
+    run(&mut s, "table.selectRange", json!({"path": tp.to_string(), "r0": 2, "c0": 2, "r1": 1, "c1": 1}));
+    assert!(!s.sel.is_collapsed(), "backward range selection must not be collapsed");
+    let segs = s.column_segments().expect("column_segments should be Some");
+    assert_eq!(segs.len(), 4, "backward 2x2 block must have 4 cell segments");
+
+    // 3. Select Row 1
+    run(&mut s, "table.selectRow", json!({"path": tp.to_string(), "row": 1}));
+    assert!(!s.sel.is_collapsed(), "row selection must not be collapsed");
+    let segs = s.column_segments().expect("column_segments should be Some");
+    assert_eq!(segs.len(), 3, "row must have 3 cell segments");
+
+    // 4. Select Column 2
+    run(&mut s, "table.selectColumn", json!({"path": tp.to_string(), "col": 2}));
+    assert!(!s.sel.is_collapsed(), "column selection must not be collapsed");
+    let segs = s.column_segments().expect("column_segments should be Some");
+    assert_eq!(segs.len(), 3, "column must have 3 cell segments");
+
+    // 5. Select entire table
+    run(&mut s, "table.selectTable", json!({"path": tp.to_string()}));
+    assert!(!s.sel.is_collapsed(), "table selection must not be collapsed");
+    let segs = s.column_segments().expect("column_segments should be Some");
+    assert_eq!(segs.len(), 9, "entire 3x3 table must have 9 cell segments");
+}
+
 /// AutoFit Contents (#44) measures the text: a column of short words narrows, a column with a
 /// long sentence widens (wrapping within the page), and the widths are written to the grid.
 #[test]
