@@ -824,7 +824,7 @@ impl Dialog {
             "checkUpdates" => Dialog::CheckUpdates {
                 checking: false,
                 latest_version: env!("CARGO_PKG_VERSION").to_string(),
-                release_notes: tl!("You are currently running WordCraft v0.5.1 (Latest Stable Release).").to_string(),
+                release_notes: format!("You are currently running WordCraft v{} (Latest Stable Release).", env!("CARGO_PKG_VERSION")),
                 download_url: "https://github.com/rbr48/wordcraft/releases/latest".into(),
                 status_msg: tl!("Checking for updates from GitHub...").to_string(),
             },
@@ -2215,7 +2215,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(download_url.as_str()));
                 }
                 if ui.button(tl!("Download Windows Setup")).clicked() {
-                    let setup_url = "https://github.com/rbr48/wordcraft/releases/latest/download/wordcraft-0.5.1-windows-x64-setup.exe";
+                    let setup_url = format!(
+                        "https://github.com/rbr48/wordcraft/releases/latest/download/wordcraft-{}-windows-x64-setup.exe",
+                        env!("CARGO_PKG_VERSION")
+                    );
                     ui.ctx().open_url(egui::OpenUrl::new_tab(setup_url));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
