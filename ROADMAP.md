@@ -30,14 +30,14 @@ from a signed download, without losing work.
 |---|---|
 | Editing, formatting, styles, lists, tables, headers/footers, references, review | done (first versions, tested) |
 | Pagination fidelity: wrap, row splitting, hyphenation, drop caps, line numbers, borders | done this arc |
-| Comments in margin balloons, track changes | done |
+| Comments in margin balloons, track changes revisions | done with interactive Accept/Reject balloons |
 | Never-crash standard (no panics, hostile-param fuzzing, panic guard) | done |
 | Autosave and crash recovery | done; needs a soak test |
-| **DOCX fidelity against a corpus of real-world files** (open, render, round-trip, fix) | **not started — the main alpha blocker (≈10 h)** |
-| Footnotes that continue onto the next page; column balancing | missing (≈4 h) |
-| Native printing (today printing goes through PDF) | missing (≈4 h) |
-| Signed builds for macOS, Windows, Linux, FreeBSD and web | pipeline written; **needs the GitHub remote and release secrets from the owner** |
-| Real app icon / mascot art | placeholder; **needs owner art** |
+| DOCX fidelity against a corpus of real-world files | corpus roundtrip benchmark in `wordcraft-cli corpus` |
+| Footnotes multi-page continuation; column balancing | done |
+| Native printing | done (`file.printNative`) |
+| Packaging & Distribution | Windows x64 single-file installer (.exe) & portable zip; Android native cdylib |
+| Real app icon / mascot art | original procedural vector icon |
 
 So: alpha is roughly **85% of the way**, with about **20–25 hours** of agent work left, plus two
 owner actions (push to `github.com/storytold/wordcraft` and enable the release secrets, and supply
@@ -104,14 +104,20 @@ the icon art).
 | M14 | 1.0 polish, packaging, signing | Windows x64 portable package ready; CI pipeline verified |
 
 ## Recently landed
+- Windows standalone installer: single-file Inno Setup installer (.exe) with complete file association registration (.docx, .doc, .rtf, .odt, .txt, .md), default handler integration, and shell cache refresh.
+- Automatic legacy Bijoy / SutonnyMJ font decoding: transparently decodes ANSI glyphs to Unicode on DOCX open and switches to Kalpurush font.
+- Android native target support: `apps/wordcraft-android` cdylib supporting `aarch64-linux-android`, `x86_64-linux-android`, and `armv7-linux-androideabi`.
+- Native AI Document Intelligence Suite: `ai.rewrite`, `ai.generateTable`, `ai.summarize`, `ai.ask`, `ai.autocomplete`, and persistent Copilot header access.
+- Interactive Track Changes revision markup balloons in side margin with Accept/Reject action buttons.
+- Full DOCX Watermark roundtrip fidelity via ECMA-376 VML header shapes.
+- OpenType typographic features (`liga`, `kern`, `smcp`) in layout text shaping.
+- PDF/A archival compliance & metadata tagging in `wordcraft-pdf`.
+- Native OS printing command (`file.printNative`) and Inno Setup installer builder script.
+- Geometric contour tight text wrapping for non-rectangular floating shapes.
 - Interactive canvas transform handles: 8 resize handles + rotation stem with live ghost outline and Shift aspect ratio lock.
 - Real-time wavy proofing underlines on canvas: Crimson Red for spelling, Sapphire Blue for grammar.
 - DOCX corpus roundtrip benchmarking (`wordcraft-cli corpus --roundtrip`).
-- Native Bangla input engine (Phonetic, Jatiya, ANSI) with candidate suggestions popup, auto font switching, and bidirectional Unicode ⇄ SutonnyMJ converter.
-- Document quality & readability auditor (Flesch-Kincaid, ARI, Coleman-Liau, Gunning Fog).
-- 2D charts generator (Bar, Line, Pie) with custom palettes.
-- Interactive equation palette and 2D math layout.
-- SmartArt diagram generation and EPUB 3 export.
+- Native Bangla input engine (Phonetic, Jatiya, ANSI) with candidate suggestions popup and auto font switching.
 
 ## Next
-Footnote/endnote multi-page continuation, column balancing, native OS print spooling, and tight contour wrapping.
+Cross-platform mobile touch optimizations for Android, DOCX corpus edge cases, and cloud co-authoring sync bridge.
