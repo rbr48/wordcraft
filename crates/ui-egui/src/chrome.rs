@@ -4,7 +4,7 @@ use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 use wordcraft_doc::StoryRef;
 
-use crate::theme::{Tokens, TypeRung, medium, paint_text, regular, semibold, text_width};
+use crate::theme::{Tokens, TypeRung, paint_text, regular, semibold, text_width};
 use crate::{WordApp, icons};
 
 fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, enabled: bool) {

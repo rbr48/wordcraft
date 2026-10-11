@@ -867,10 +867,15 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
         let text = if what.is_empty() { tl!("Formatted").to_string() } else { format!("{}: {what}", tl!("Formatted")) };
         by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Format(author, text), pos));
     }
-    for (start, end, kind, rid) in wordcraft_engine::cmd::review::changes(&app.session) {
-        let Some(c) = layout.caret_on(&start, app.session.page_hint) else { continue };
-        let anchor_pos = start.clone();
-        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Change { start, end, kind, rid }, anchor_pos));
+    for ch in wordcraft_engine::cmd::review::changes(&app.session) {
+        let Some(c) = layout.caret_on(&ch.a, app.session.page_hint) else { continue };
+        let anchor_pos = ch.a.clone();
+        by_page.entry(c.page).or_default().push((
+            c.x,
+            c.top + c.height,
+            Balloon::Change { start: ch.a, end: ch.b, kind: ch.kind, rid: ch.rev },
+            anchor_pos,
+        ));
     }
 
     let palette = [t.blue, Color32::from_rgb(0xB0, 0x3A, 0x2E), Color32::from_rgb(0x2E, 0x7D, 0x32), Color32::from_rgb(0x8E, 0x44, 0xAD), t.orange];
