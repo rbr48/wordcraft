@@ -90,6 +90,7 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>) -> Resu
     let ext = ext_of(name);
     if matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "dot") && wordcraft_docx::is_encrypted(bytes) {
         let mut doc = wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string())?;
+        normalize_bijoy_fonts(&mut doc);
         doc.ensure_nonempty();
         return Ok((doc, true));
     }
@@ -298,58 +299,216 @@ pub fn decode_text(b: &[u8]) -> String {
 
 /// Known legacy Bijoy / ANSI Bengali font names that store glyph-encoded ASCII.
 fn is_bijoy_font(font_name: &str) -> bool {
-    let lower = font_name.to_ascii_lowercase();
+    let lower = font_name.trim().to_ascii_lowercase();
     lower.contains("sutonnymj")
         || lower.contains("sutonny")
         || lower.contains("siyam rupali ansi")
         || lower.contains("bijoy")
         || lower == "classic bangla"
+        || lower.ends_with("mj")
 }
 
-fn normalize_blocks_bijoy(blocks: &mut Vec<std::sync::Arc<wordcraft_doc::Block>>, doc_has_bijoy: bool) {
+fn char_props_has_bijoy(c: &wordcraft_doc::CharProps) -> bool {
+    c.font.as_deref().is_some_and(is_bijoy_font) || c.font_cs.as_deref().is_some_and(is_bijoy_font)
+}
+
+fn normalize_bijoy_char_props(props: &mut wordcraft_doc::CharProps) {
+    props.font = Some("Kalpurush".into());
+    props.font_cs = Some("Kalpurush".into());
+    if props.size.is_some() {
+        props.size_cs = props.size;
+    }
+    if props.bold.is_some() {
+        props.bold_cs = props.bold;
+    }
+    if props.italic.is_some() {
+        props.italic_cs = props.italic;
+    }
+}
+
+fn is_sutonny_glyph(c: char) -> bool {
+    matches!(
+        c,
+        '†' | '‡' | 'ˆ' | '‰' | 'Š' | '‹' | 'Œ' | '‚' | '„' | '•' | '›' | 'œ' | 'š' | 'Ÿ' | 'ƒ'
+    ) || ('\u{00A1}'..='\u{00FF}').contains(&c)
+}
+
+/// Detects paragraphs that were partially converted in an earlier session (containing Bengali Unicode
+/// mixed with leftover SutonnyMJ glyphs or unconverted `w`/`z` adjacent to Bengali characters).
+fn has_leftover_bijoy(text: &str) -> bool {
+    let has_bn = text.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c));
+    if !has_bn {
+        return false;
+    }
+    if text.chars().any(is_sutonny_glyph) || text.contains("šত্ন") || text.contains("¯ত্ন") || text.contains("চঁাদ") {
+        return true;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    for (i, ch) in chars.iter().enumerate() {
+        if matches!(ch, 'w' | 'z') {
+            let prev_bn = i > 0 && chars.get(i - 1).is_some_and(|c| ('\u{0980}'..='\u{09FF}').contains(c));
+            let next_bn = chars.get(i + 1).is_some_and(|c| ('\u{0980}'..='\u{09FF}').contains(c));
+            if prev_bn || next_bn {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Repairs a partially converted Bengali string without altering pure English words or numbers.
+fn repair_partial_bijoy(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut token = String::new();
+    let mut in_space = false;
+
+    for ch in text.chars() {
+        let is_ws = ch.is_whitespace();
+        if is_ws != in_space && !token.is_empty() {
+            if !in_space && (token.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c)) || token.chars().any(is_sutonny_glyph)) {
+                out.push_str(&crate::cmd::bangla::ansi_to_unicode(&token));
+            } else {
+                out.push_str(&token);
+            }
+            token.clear();
+        }
+        in_space = is_ws;
+        token.push(ch);
+    }
+    if !token.is_empty() {
+        if !in_space && (token.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c)) || token.chars().any(is_sutonny_glyph)) {
+            out.push_str(&crate::cmd::bangla::ansi_to_unicode(&token));
+        } else {
+            out.push_str(&token);
+        }
+    }
+    out
+}
+
+fn blocks_have_bijoy(blocks: &[std::sync::Arc<wordcraft_doc::Block>]) -> bool {
+    for b in blocks {
+        match &**b {
+            wordcraft_doc::Block::Para(p) => {
+                if char_props_has_bijoy(&p.mark)
+                    || p.runs.iter().any(|r| char_props_has_bijoy(&r.props))
+                    || has_leftover_bijoy(&p.text)
+                {
+                    return true;
+                }
+            }
+            wordcraft_doc::Block::Table(t) => {
+                for row in &t.rows {
+                    for cell in &row.cells {
+                        if blocks_have_bijoy(&cell.blocks) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn slice_safe(s: &str, start: usize, end: usize) -> &str {
+    let end = end.min(s.len());
+    let start = start.min(end);
+    s.get(start..end).unwrap_or("")
+}
+
+fn normalize_blocks_bijoy(blocks: &mut Vec<std::sync::Arc<wordcraft_doc::Block>>, default_is_bijoy: bool) {
     for b in blocks {
         let block = std::sync::Arc::make_mut(b);
         match block {
             wordcraft_doc::Block::Para(p) => {
-                let mut para_has_bijoy = doc_has_bijoy;
+                let mut para_has_bijoy = default_is_bijoy || char_props_has_bijoy(&p.mark);
                 for r in &p.runs {
-                    if let Some(f) = &r.props.font
-                        && is_bijoy_font(f)
-                    {
+                    if char_props_has_bijoy(&r.props) {
                         para_has_bijoy = true;
                         break;
                     }
                 }
-                if (para_has_bijoy || p.runs.is_empty()) && !p.text.is_empty() {
+                let para_is_partial = !para_has_bijoy && has_leftover_bijoy(&p.text);
+
+                if para_has_bijoy || para_is_partial {
+                    normalize_bijoy_char_props(&mut p.mark);
+                }
+
+                if (para_has_bijoy || para_is_partial || (p.runs.is_empty() && default_is_bijoy)) && !p.text.is_empty() {
+                    // 1. Extract slices and classify each run
+                    struct PendingRun {
+                        slice: String,
+                        props: wordcraft_doc::CharProps,
+                        is_bijoy: bool,
+                        is_partial: bool,
+                    }
+
                     let mut offset = 0;
-                    let mut new_text = String::new();
-                    let mut new_runs = Vec::new();
+                    let mut staged: Vec<PendingRun> = Vec::with_capacity(p.runs.len().max(1));
 
                     for r in &p.runs {
                         let end = (offset + r.len).min(p.text.len());
-                        let run_slice = if offset < p.text.len() && offset <= end { &p.text[offset..end] } else { "" };
+                        let run_slice = slice_safe(&p.text, offset, end);
                         offset = end;
 
-                        let is_bijoy = r.props.font.as_deref().is_some_and(is_bijoy_font) || (r.props.font.is_none() && para_has_bijoy);
+                        let is_bijoy = char_props_has_bijoy(&r.props) || (r.props.font.is_none() && para_has_bijoy);
+                        let is_partial = !is_bijoy && has_leftover_bijoy(run_slice);
 
-                        if is_bijoy {
-                            let converted = crate::cmd::bangla::ansi_to_unicode(run_slice);
-                            let mut props = r.props.clone();
-                            props.font = Some("Kalpurush".into());
-                            new_runs.push(wordcraft_doc::Run { len: converted.len(), props });
+                        let mut props = r.props.clone();
+                        if is_bijoy || is_partial {
+                            normalize_bijoy_char_props(&mut props);
+                        }
+
+                        // Coalesce consecutive Bijoy runs that share identical formatting OR split a single word
+                        // across an XML `<w:r>` boundary so pre-base vowels (`w`, `†`, `‰`), conjuncts (`¯Í`),
+                        // and reph (`©`) reorder cleanly across the entire word.
+                        if let Some(last) = staged.last_mut()
+                            && last.is_bijoy
+                            && is_bijoy
+                        {
+                            let same_props = last.props == props;
+                            let splits_word = !last.slice.ends_with(char::is_whitespace) && !run_slice.starts_with(char::is_whitespace);
+                            if same_props || splits_word {
+                                last.slice.push_str(run_slice);
+                                continue;
+                            }
+                        }
+
+                        staged.push(PendingRun {
+                            slice: run_slice.to_string(),
+                            props,
+                            is_bijoy,
+                            is_partial,
+                        });
+                    }
+
+                    let mut new_text = String::new();
+                    let mut new_runs = Vec::with_capacity(staged.len().max(1));
+
+                    for item in staged {
+                        if item.is_bijoy {
+                            let converted = crate::cmd::bangla::ansi_to_unicode(&item.slice);
+                            new_runs.push(wordcraft_doc::Run { len: converted.len(), props: item.props });
+                            new_text.push_str(&converted);
+                        } else if item.is_partial {
+                            let converted = repair_partial_bijoy(&item.slice);
+                            new_runs.push(wordcraft_doc::Run { len: converted.len(), props: item.props });
                             new_text.push_str(&converted);
                         } else {
-                            new_runs.push(r.clone());
-                            new_text.push_str(run_slice);
+                            new_runs.push(wordcraft_doc::Run { len: item.slice.len(), props: item.props });
+                            new_text.push_str(&item.slice);
                         }
                     }
 
                     if new_runs.is_empty() {
-                        let converted = crate::cmd::bangla::ansi_to_unicode(&p.text);
-                        new_runs.push(wordcraft_doc::Run {
-                            len: converted.len(),
-                            props: wordcraft_doc::CharProps { font: Some("Kalpurush".into()), ..Default::default() },
-                        });
+                        let converted = if para_is_partial {
+                            repair_partial_bijoy(&p.text)
+                        } else {
+                            crate::cmd::bangla::ansi_to_unicode(&p.text)
+                        };
+                        let mut props = wordcraft_doc::CharProps::default();
+                        normalize_bijoy_char_props(&mut props);
+                        new_runs.push(wordcraft_doc::Run { len: converted.len(), props });
                         new_text = converted;
                     }
 
@@ -360,7 +519,7 @@ fn normalize_blocks_bijoy(blocks: &mut Vec<std::sync::Arc<wordcraft_doc::Block>>
             wordcraft_doc::Block::Table(t) => {
                 for row in &mut t.rows {
                     for cell in &mut row.cells {
-                        normalize_blocks_bijoy(&mut cell.blocks, doc_has_bijoy);
+                        normalize_blocks_bijoy(&mut cell.blocks, default_is_bijoy);
                     }
                 }
             }
@@ -373,89 +532,59 @@ fn normalize_blocks_bijoy(blocks: &mut Vec<std::sync::Arc<wordcraft_doc::Block>>
 /// a clean OpenType Unicode font ("Kalpurush") while strictly preserving character
 /// sizing, bold styling, and document colors.
 pub fn normalize_bijoy_fonts(doc: &mut Document) {
-    let mut has_bijoy = false;
+    let default_is_bijoy = char_props_has_bijoy(&doc.styles.default_chr)
+        || doc.styles.styles.iter().any(|s| char_props_has_bijoy(&s.chr));
 
-    // Check style sheet default font
-    if let Some(f) = &doc.styles.default_chr.font
-        && is_bijoy_font(f)
-    {
-        has_bijoy = true;
-    }
-
-    // Check paragraphs in body
-    if !has_bijoy {
-        for b in &doc.body {
-            if let wordcraft_doc::Block::Para(p) = &**b {
-                for r in &p.runs {
-                    if let Some(f) = &r.props.font
-                        && is_bijoy_font(f)
-                    {
-                        has_bijoy = true;
-                        break;
-                    }
-                }
-            }
-            if has_bijoy {
-                break;
-            }
-        }
-    }
-
-    // Check parts (headers, footers, text boxes)
-    if !has_bijoy {
-        for part in doc.parts.values() {
-            for b in &part.blocks {
-                if let wordcraft_doc::Block::Para(p) = &**b {
-                    for r in &p.runs {
-                        if let Some(f) = &r.props.font
-                            && is_bijoy_font(f)
-                        {
-                            has_bijoy = true;
-                            break;
-                        }
-                    }
-                }
-                if has_bijoy {
-                    break;
-                }
-            }
-            if has_bijoy {
-                break;
-            }
-        }
-    }
+    let has_bijoy = default_is_bijoy
+        || blocks_have_bijoy(&doc.body)
+        || doc.parts.values().any(|part| blocks_have_bijoy(&part.blocks));
 
     if !has_bijoy {
         return;
     }
 
-    // Decode all body blocks recursively
-    normalize_blocks_bijoy(&mut doc.body, has_bijoy);
+    // Decode all body blocks recursively (including tables)
+    normalize_blocks_bijoy(&mut doc.body, default_is_bijoy);
 
     // Decode all secondary parts (headers, footers, text boxes)
     for part in doc.parts.values_mut() {
-        normalize_blocks_bijoy(&mut part.blocks, has_bijoy);
+        normalize_blocks_bijoy(&mut part.blocks, default_is_bijoy);
     }
 
-    // Update style sheet default font if it was Bijoy
-    if let Some(f) = &doc.styles.default_chr.font
-        && is_bijoy_font(f)
-    {
-        doc.styles.default_chr.font = Some("Kalpurush".into());
+    // Update style sheet default font and any named styles that referenced Bijoy
+    if char_props_has_bijoy(&doc.styles.default_chr) {
+        normalize_bijoy_char_props(&mut doc.styles.default_chr);
+    }
+    for st in &mut doc.styles.styles {
+        if char_props_has_bijoy(&st.chr) {
+            normalize_bijoy_char_props(&mut st.chr);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wordcraft_doc::{Block, CharProps, Document, Paragraph, Rgb, Run, TextColor};
+    use wordcraft_doc::{Block, Cell, CharProps, Document, Paragraph, Rgb, Row, Run, Table, TextColor};
 
     #[test]
     fn normalize_bijoy_fonts_preserves_formatting_properties() {
         let text = "evsjv‡`k K…wl e¨vsK".to_string();
         let green = TextColor::Rgb(Rgb(0, 102, 0));
-        let props = CharProps { font: Some("SutonnyMJ".into()), size: Some(26.0), bold: Some(true), color: Some(green), ..Default::default() };
-        let p = Paragraph { text: text.clone(), runs: vec![Run { len: text.len(), props }], ..Default::default() };
+        let props = CharProps {
+            font: Some("SutonnyMJ".into()),
+            font_cs: Some("Calibri".into()),
+            size: Some(26.0),
+            bold: Some(true),
+            color: Some(green),
+            ..Default::default()
+        };
+        let p = Paragraph {
+            text: text.clone(),
+            runs: vec![Run { len: text.len(), props }],
+            mark: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        };
         let mut doc = Document { body: vec![std::sync::Arc::new(Block::Para(p))], ..Default::default() };
 
         normalize_bijoy_fonts(&mut doc);
@@ -464,8 +593,35 @@ mod tests {
         assert_eq!(p_out.text, "বাংলাদেশ কৃষি ব্যাংক");
         assert_eq!(p_out.runs.len(), 1);
         assert_eq!(p_out.runs[0].props.font.as_deref(), Some("Kalpurush"));
+        assert_eq!(p_out.runs[0].props.font_cs.as_deref(), Some("Kalpurush"));
         assert_eq!(p_out.runs[0].props.size, Some(26.0));
+        assert_eq!(p_out.runs[0].props.size_cs, Some(26.0));
         assert_eq!(p_out.runs[0].props.bold, Some(true));
+        assert_eq!(p_out.runs[0].props.bold_cs, Some(true));
         assert_eq!(p_out.runs[0].props.color, Some(green));
+        assert_eq!(p_out.mark.font.as_deref(), Some("Kalpurush"));
+        assert_eq!(p_out.mark.font_cs.as_deref(), Some("Kalpurush"));
+    }
+
+    #[test]
+    fn normalize_bijoy_coalesces_split_runs_and_tables() {
+        // Word splits "BZ¨vw`" across two runs ("BZ¨vw" and "`") inside a table cell
+        let r1 = Run { len: "BZ¨vw".len(), props: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() } };
+        let r2 = Run { len: "`".len(), props: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() } };
+        let cell_para = Paragraph { text: "BZ¨vw`".into(), runs: vec![r1, r2], ..Default::default() };
+        let table = Table {
+            rows: vec![Row {
+                cells: vec![Cell { blocks: vec![std::sync::Arc::new(Block::Para(cell_para))], ..Default::default() }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut doc = Document { body: vec![std::sync::Arc::new(Block::Table(table))], ..Default::default() };
+
+        normalize_bijoy_fonts(&mut doc);
+
+        let Block::Table(t) = &*doc.body[0] else { panic!("expected table") };
+        let p_out = t.rows[0].cells[0].blocks[0].as_para().unwrap();
+        assert_eq!(p_out.text, "ইত্যাদি");
     }
 }

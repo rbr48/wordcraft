@@ -439,8 +439,13 @@ pub fn unicode_to_ansi(text: &str) -> String {
         ("জ্ঞ", "Á"),
         ("ত্র", "Î"),
         ("ক্ত", "³"),
+        ("ক্ক", "°"),
+        ("ক্ট", "±"),
+        ("ক্স", "·"),
+        ("গ্ধ", "»"),
         ("ঙ্ক", "¼"),
         ("ঙ্গ", "½"),
+        ("জ্জ", "¾"),
         ("ঞ্চ", "Â"),
         ("ঞ্ছ", "Ã"),
         ("ঞ্জ", "Ä"),
@@ -451,37 +456,65 @@ pub fn unicode_to_ansi(text: &str) -> String {
         ("ণ্ড", "Ê"),
         ("ত্ত", "Ë"),
         ("ত্থ", "Ì"),
-        ("ত্ন", "Í"),
-        ("ত্ম", "Î"),
-        ("ন্দ", "›"),
+        ("ত্ন", "Zœ"),
+        ("ত্ম", "Z¥"),
+        ("ন্দ", "›`"),
+        ("ন্ট", "›U"),
+        ("ন্ড", "Û"),
         ("ন্ধ", "Ü"),
         ("ন্ন", "bœ"),
+        ("ন্স", "Ý"),
+        ("ন্তু", "š‘"),
+        ("ন্ত্র", "š¿"),
+        ("ন্ত", "šÍ"),
+        ("প্ট", "Þ"),
+        ("প্ত", "ß"),
+        ("প্প", "à"),
+        ("ব্দ", "ã"),
+        ("ব্ধ", "ä"),
         ("ম্প", "¤ú"),
         ("ম্ব", "¤^"),
         ("ম্ভ", "¤¢"),
         ("ম্ম", "¤§"),
+        ("ম্ন", "¤œ"),
+        ("দ্ভ", "™¢"),
         ("ষ্ট", "ó"),
         ("ষ্ঠ", "ô"),
         ("ষ্ণ", "õ"),
         ("ষ্প", "ö"),
-        ("ষ্ফ", "÷"),
+        ("স্তু", "¯‘"),
+        ("স্ত্র", "¯¿"),
         ("স্ত", "¯Í"),
         ("স্থ", "¯’"),
+        ("স্ট", "÷"),
+        ("স্ক", "¯‹"),
         ("স্ন", "mœ"),
         ("স্প", "¯ú"),
         ("স্ফ", "ù"),
         ("স্ব", "¯^"),
         ("স্ম", "¯§"),
+        ("শ্চ", "ð"),
+        ("ল্প", "í"),
+        ("ল্ট", "ë"),
+        ("ল্ড", "ì"),
+        ("ল্ক", "é"),
+        ("ল্ল", "jø"),
         ("ক্র", "µ"),
         ("প্র", "cÖ"),
         ("গ্র", "MÖ"),
         ("ভ্র", "å"),
+        ("দ্দ", "Ï"),
         ("দ্ধ", "×"),
         ("দ্ব", "Ø"),
         ("দ্ম", "Ù"),
-        ("হ্ন", "þ"),
-        ("হ্ম", "ÿ"),
+        ("হ্ন", "ý"),
         ("হৃ", "ü"),
+        ("্র", "Ö"),
+        ("্য", "¨"),
+        ("্ল", "ø"),
+        ("্ন", "œ"),
+        ("্ম", "¥"),
+        ("্ব", "^"),
     ];
 
     for &(u, a) in conjuncts {
@@ -665,12 +698,12 @@ fn is_bn_vowel_sign(c: char) -> bool {
 }
 
 fn parse_bn_cluster(chars: &[char], start: usize) -> Option<usize> {
-    if start >= chars.len() || !is_bn_consonant(chars[start]) {
+    if !chars.get(start).copied().is_some_and(is_bn_consonant) {
         return None;
     }
     let mut end = start + 1;
     while end < chars.len() {
-        if chars[end] == '্' && end + 1 < chars.len() && is_bn_consonant(chars[end + 1]) {
+        if chars.get(end) == Some(&'্') && chars.get(end + 1).copied().is_some_and(is_bn_consonant) {
             end += 2;
         } else {
             break;
@@ -682,8 +715,10 @@ fn parse_bn_cluster(chars: &[char], start: usize) -> Option<usize> {
 /// Converts ANSI (SutonnyMJ encoding) text to Unicode Bengali with full ligature,
 /// diacritic reordering, and cluster-aware vowel shaping.
 pub fn ansi_to_unicode(text: &str) -> String {
-    // 1. Pre-normalize special symbols and Bijoy shortcuts
+    // 1. Pre-normalize special symbols, Bijoy shortcuts, and previously corrupted partial conversions
     let mut s = text
+        .replace("šত্ন", "ন্ত")
+        .replace("¯ত্ন", "স্ত")
         .replace("...", "„")
         .replace('…', "„")
         .replace("K…", "কৃ")
@@ -701,10 +736,12 @@ pub fn ansi_to_unicode(text: &str) -> String {
         .replace("k…", "শৃ")
         .replace("m…", "সৃ")
         .replace("n…", "হৃ")
-        .replace('™', "ঃ")
         .replace('|', "।")
         .replace('‡', "†")
-        .replace('‹', "w")
+        .replace("††", "†")
+        .replace('ˆ', "‰")
+        .replace("‰‰", "‰")
+        .replace("©©", "©")
         .replace("f‚", "ভূ")
         .replace("f~", "ভূ")
         .replace("f„", "ভূ")
@@ -712,9 +749,14 @@ pub fn ansi_to_unicode(text: &str) -> String {
         .replace("Tv", "ঞা")
         .replace("wLª™", "খ্রিঃ")
         .replace("wLªt", "খ্রিঃ")
-        .replace("wLª", "খ্রি");
+        .replace("wLª", "খ্রি")
+        .replace("iæ", "রু")
+        .replace("i“", "রু")
+        .replace('û', "হু")
+        .replace('¸', "গু")
+        .replace('ï', "শু");
 
-    // 2. Replace Conjunct Glyphs (longest matches first)
+    // 2. Replace Conjunct Glyphs and Phalas (longest matches first)
     let conjuncts: &[(&str, &str)] = &[
         ("w¯’", "স্থি"),
         ("†cÖ", "প্রে"),
@@ -726,8 +768,12 @@ pub fn ansi_to_unicode(text: &str) -> String {
         ("w¯Í", "স্তি"),
         ("wÎ", "ত্রি"),
         ("w¶", "ক্ষি"),
+        ("wÿ", "ক্ষি"),
         ("wÁ", "জ্ঞি"),
         ("wó", "ষ্টি"),
+        ("w›`", "ন্দি"),
+        ("w›U", "ন্টি"),
+        ("w›W", "ন্ডি"),
         ("w›", "ন্দি"),
         ("wšÍ", "ন্তি"),
         ("wš", "ন্তি"),
@@ -736,59 +782,125 @@ pub fn ansi_to_unicode(text: &str) -> String {
         ("MÖ", "গ্র"),
         ("eª", "ব্র"),
         ("eÖ", "ব্র"),
+        ("¤ª", "শ্র"),
+        ("¯Œ", "স্ক্র"),
+        ("¯‹", "স্ক"),
+        ("¯•", "স্প"),
         ("¯Í", "স্ত"),
+        ("¯—", "স্ত"),
+        ("¯‘", "স্তু"),
+        ("¯¿", "স্ত্র"),
         ("¯’", "স্থ"),
         ("¯ú", "স্প"),
         ("¯^", "স্ব"),
         ("¯§", "স্ম"),
         ("mœ", "স্ন"),
         ("bœ", "ন্ন"),
+        ("¤œ", "ম্ন"),
         ("¤ú", "ম্প"),
         ("¤^", "ম্ব"),
         ("¤¢", "ম্ভ"),
         ("¤§", "ম্ম"),
+        ("™¢", "দ্ভ"),
         ("šÍ", "ন্ত"),
+        ("š—", "ন্ত"),
         ("š‘", "ন্তু"),
+        ("š¿", "ন্ত্র"),
+        ("š^", "ন্ব"),
+        ("š’", "ন্থ"),
+        ("š§", "ন্ম"),
         ("š", "ন্ত"),
+        ("›`", "ন্দ"),
+        ("›U", "ন্ট"),
+        ("›V", "ন্ঠ"),
+        ("›W", "ন্ড"),
+        ("›a", "ন্ধ"),
+        ("›m", "ন্স"),
+        ("›", "ন্দ"),
+        ("®‹", "ষ্ক"),
+        ("®ú", "ষ্প"),
+        ("®§", "ষ্ম"),
+        ("•ÿ", "ঙ্ক্ষ"),
+        ("•¶", "ঙ্ক্ষ"),
+        ("”P", "চ্চ"),
+        ("”Q", "চ্ছ"),
         ("¶", "ক্ষ"),
+        ("ÿ", "ক্ষ"),
         ("Á", "জ্ঞ"),
         ("Î", "ত্র"),
+        ("°", "ক্ক"),
+        ("±", "ক্ট"),
         ("³", "ক্ত"),
+        ("·", "ক্স"),
+        ("»", "গ্ধ"),
         ("¼", "ঙ্ক"),
         ("½", "ঙ্গ"),
+        ("¾", "জ্জ"),
         ("Â", "ঞ্চ"),
         ("Ã", "ঞ্ছ"),
         ("Ä", "ঞ্জ"),
         ("Æ", "ট্ট"),
         ("Ç", "ড্ড"),
         ("È", "ণ্ট"),
+        ("Ú", "ণ্ট"),
         ("É", "ণ্ঠ"),
         ("Ê", "ণ্ড"),
+        ("Ð", "ণ্ড"),
+        ("Û", "ন্ড"),
         ("Ë", "ত্ত"),
         ("Ì", "ত্থ"),
-        ("Í", "ত্ন"),
-        ("›", "ন্দ"),
+        ("Í", "্ত"),
+        ("—", "্ত"),
+        ("‘", "্তু"),
+        ("¿", "্ত্র"),
+        ("Ï", "দ্দ"),
+        ("×", "দ্ধ"),
+        ("Ø", "দ্ব"),
+        ("Ù", "দ্ম"),
         ("Ü", "ন্ধ"),
+        ("Ý", "ন্স"),
+        ("Þ", "প্ট"),
+        ("ß", "প্ত"),
+        ("à", "প্প"),
+        ("ã", "ব্দ"),
+        ("ä", "ব্ধ"),
+        ("å", "ভ্র"),
+        ("é", "ল্ক"),
+        ("î", "ল্গ"),
+        ("ë", "ল্ট"),
+        ("ì", "ল্ড"),
+        ("í", "ল্প"),
+        ("ñ", "ল্প"),
+        ("ð", "শ্চ"),
+        ("ò", "ষ্ণ"),
         ("ó", "ষ্ট"),
         ("ô", "ষ্ঠ"),
         ("õ", "ষ্ণ"),
         ("ö", "ষ্প"),
-        ("÷", "ষ্ফ"),
+        ("÷", "স্ট"),
+        ("ø", "্ল"),
+        ("¬", "্ল"),
         ("ù", "স্ফ"),
+        ("ú", "্প"),
+        ("¢", "্ভ"),
         ("µ", "ক্র"),
-        ("å", "ভ্র"),
-        ("×", "দ্ধ"),
-        ("Ø", "দ্ব"),
-        ("Ù", "দ্ম"),
+        ("Œ", "্ক্র"),
+        ("‹", "্ক"),
         ("þ", "হ্ন"),
-        ("ÿ", "হ্ম"),
+        ("ý", "হ্ন"),
         ("ü", "হৃ"),
-        ("í", "ল্ক"),
-        ("î", "ল্গ"),
-        ("ï", "ল্ট"),
-        ("ð", "ল্ড"),
-        ("ñ", "ল্প"),
-        ("ò", "ল্ফ"),
+        ("œ", "্ন"),
+        ("¥", "্ম"),
+        ("§", "্ম"),
+        ("¡", "্ব"),
+        ("¦", "্ব"),
+        ("Ÿ", "্ব"),
+        ("^", "্ব"),
+        ("¯", "স্"),
+        ("¤", "ম্"),
+        ("®", "ষ্"),
+        ("”", "চ্"),
+        ("™", "ঃ"),
     ];
 
     for &(a, u) in conjuncts {
@@ -847,7 +959,12 @@ pub fn ansi_to_unicode(text: &str) -> String {
             'q' => "য়",
             'r' => "ৎ",
             '¨' => "্য",
-            'Ö' | 'ª' => "্র",
+            'Ö' | 'ª' | '«' => "্র",
+            'Ñ' => "–",
+            'Ò' => "“",
+            'Ó' => "”",
+            'Ô' => "‘",
+            'Õ' => "’",
             _ => "",
         };
         if !m.is_empty() {
@@ -862,12 +979,13 @@ pub fn ansi_to_unicode(text: &str) -> String {
     let mut out = String::with_capacity(in_chars.len());
     let mut i = 0;
 
-    while i < in_chars.len() {
-        let ch = in_chars[i];
+    while let Some(&ch) = in_chars.get(i) {
         match ch {
             'w' => {
-                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1) {
-                    for &c in &in_chars[i + 1..c_end] {
+                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1)
+                    && let Some(cluster) = in_chars.get(i + 1..c_end)
+                {
+                    for &c in cluster {
                         out.push(c);
                     }
                     out.push('ি');
@@ -876,16 +994,17 @@ pub fn ansi_to_unicode(text: &str) -> String {
                 }
             }
             '†' => {
-                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1) {
-                    let cluster = &in_chars[i + 1..c_end];
-                    if c_end < in_chars.len() && (in_chars[c_end] == 'v' || in_chars[c_end] == 'া') {
+                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1)
+                    && let Some(cluster) = in_chars.get(i + 1..c_end)
+                {
+                    if matches!(in_chars.get(c_end), Some('v' | 'া')) {
                         for &c in cluster {
                             out.push(c);
                         }
                         out.push('ো');
                         i = c_end + 1;
                         continue;
-                    } else if c_end < in_chars.len() && (in_chars[c_end] == 'Š' || in_chars[c_end] == 'ৌ') {
+                    } else if matches!(in_chars.get(c_end), Some('Š' | 'ৌ')) {
                         for &c in cluster {
                             out.push(c);
                         }
@@ -903,8 +1022,10 @@ pub fn ansi_to_unicode(text: &str) -> String {
                 }
             }
             '‰' => {
-                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1) {
-                    for &c in &in_chars[i + 1..c_end] {
+                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1)
+                    && let Some(cluster) = in_chars.get(i + 1..c_end)
+                {
+                    for &c in cluster {
                         out.push(c);
                     }
                     out.push('ৈ');
@@ -919,39 +1040,17 @@ pub fn ansi_to_unicode(text: &str) -> String {
         i += 1;
     }
 
-    // 5. Reph (©) Reordering: C + © -> র্ + C
-    let rchars: Vec<char> = out.chars().collect();
-    let mut reph_out = String::with_capacity(rchars.len());
-    let mut j = 0;
-
-    while j < rchars.len() {
-        if let Some(c_end) = parse_bn_cluster(&rchars, j) {
-            let mut v_end = c_end;
-            if v_end < rchars.len() && is_bn_vowel_sign(rchars[v_end]) {
-                v_end += 1;
-            }
-            if v_end < rchars.len() && rchars[v_end] == '©' {
-                reph_out.push_str("র্");
-                for &c in &rchars[j..v_end] {
-                    reph_out.push(c);
-                }
-                j = v_end + 1;
-                continue;
-            }
-        }
-        reph_out.push(rchars[j]);
-        j += 1;
-    }
-
-    // 6. Map Post-Diacritics, Punctuation, and Digits
-    let mut final_out = String::with_capacity(reph_out.len());
-    for ch in reph_out.chars() {
+    // 5. Map Post-Diacritics, Punctuation, and Digits BEFORE Reph Reordering
+    // so that C + vowel + © (e.g. KZ…©K -> কর্তৃক, mvKz©jvi -> সার্কুলার, m‡ev©”P -> সর্বোচ্চ) is recognized.
+    let mut post_out = String::with_capacity(out.len());
+    for ch in out.chars() {
         let mapped = match ch {
             'v' => "া",
             'x' => "ী",
-            'y' => "ু",
-            '~' => "ূ",
+            'y' | 'z' | 'æ' | '“' => "ু",
+            '~' | '‚' | 'ƒ' => "ূ",
             '„' => "ৃ",
+            'Š' => "ৌ",
             '&' => "্",
             's' => "ং",
             't' => "ঃ",
@@ -969,9 +1068,54 @@ pub fn ansi_to_unicode(text: &str) -> String {
             _ => "",
         };
         if !mapped.is_empty() {
-            final_out.push_str(mapped);
+            post_out.push_str(mapped);
         } else {
-            final_out.push(ch);
+            post_out.push(ch);
+        }
+    }
+
+    // 6. Reph (©) Reordering: C (+ vowel signs) + © -> র্ + C (+ vowel signs)
+    let rchars: Vec<char> = post_out.chars().collect();
+    let mut reph_out = String::with_capacity(rchars.len());
+    let mut j = 0;
+
+    while let Some(&rch) = rchars.get(j) {
+        if let Some(c_end) = parse_bn_cluster(&rchars, j) {
+            let mut v_end = c_end;
+            while rchars.get(v_end).copied().is_some_and(is_bn_vowel_sign) {
+                v_end += 1;
+            }
+            if rchars.get(v_end) == Some(&'©')
+                && let Some(slice) = rchars.get(j..v_end)
+            {
+                reph_out.push_str("র্");
+                for &c in slice {
+                    reph_out.push(c);
+                }
+                j = v_end + 1;
+                continue;
+            }
+        }
+        reph_out.push(rch);
+        j += 1;
+    }
+
+    // 7. Normalize Chandrabindu (ঁ) after vowel signs (e.g. চঁাদ -> চাঁদ)
+    let mut final_out = reph_out;
+    for (bad, good) in [
+        ("ঁা", "াঁ"),
+        ("ঁি", "িঁ"),
+        ("ঁী", "ীঁ"),
+        ("ঁু", "ুঁ"),
+        ("ঁূ", "ূঁ"),
+        ("ঁৃ", "ৃঁ"),
+        ("ঁে", "েঁ"),
+        ("ঁৈ", "ৈঁ"),
+        ("ঁো", "োঁ"),
+        ("ঁৌ", "ৌঁ"),
+    ] {
+        if final_out.contains(bad) {
+            final_out = final_out.replace(bad, good);
         }
     }
 
@@ -1202,6 +1346,45 @@ fn cmd_bangla_transliterate(_s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"result": result, "mode": mode}))
 }
 
+fn convert_blocks_recursive(blocks: &mut Vec<Arc<wordcraft_doc::Block>>, is_to_ansi: bool, target_font: &str) -> usize {
+    let mut count = 0;
+    for b in blocks {
+        let block = Arc::make_mut(b);
+        match block {
+            wordcraft_doc::Block::Para(p) => {
+                p.mark.font = Some(target_font.into());
+                p.mark.font_cs = Some(target_font.into());
+                if !p.text.is_empty() {
+                    let converted = if is_to_ansi { unicode_to_ansi(&p.text) } else { ansi_to_unicode(&p.text) };
+                    let mut props = p.runs.first().map(|r| r.props.clone()).unwrap_or_default();
+                    props.font = Some(target_font.into());
+                    props.font_cs = Some(target_font.into());
+                    if props.size.is_some() {
+                        props.size_cs = props.size;
+                    }
+                    if props.bold.is_some() {
+                        props.bold_cs = props.bold;
+                    }
+                    if props.italic.is_some() {
+                        props.italic_cs = props.italic;
+                    }
+                    p.text = converted.clone();
+                    p.runs = vec![wordcraft_doc::Run { len: converted.len(), props }];
+                    count += 1;
+                }
+            }
+            wordcraft_doc::Block::Table(t) => {
+                for row in &mut t.rows {
+                    for cell in &mut row.cells {
+                        count += convert_blocks_recursive(&mut cell.blocks, is_to_ansi, target_font);
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
 /// `tools.banglaConvert` — converts selected text or entire document between Unicode and ANSI.
 fn cmd_bangla_convert(s: &mut Session, v: &Value) -> CmdResult {
     let dir = p::str(v, "direction").unwrap_or("unicodeToAnsi");
@@ -1209,6 +1392,7 @@ fn cmd_bangla_convert(s: &mut Session, v: &Value) -> CmdResult {
     let font = p::str(v, "font");
 
     let is_to_ansi = dir.eq_ignore_ascii_case("unicodeToAnsi");
+    let target_font = font.unwrap_or(if is_to_ansi { "SutonnyMJ" } else { "Kalpurush" });
 
     if target == "selection" && !s.sel.is_collapsed() {
         let (a, b) = s.sel.ordered();
@@ -1216,30 +1400,15 @@ fn cmd_bangla_convert(s: &mut Session, v: &Value) -> CmdResult {
         if !current_text.is_empty() {
             let converted = if is_to_ansi { unicode_to_ansi(&current_text) } else { ansi_to_unicode(&current_text) };
             s.run("text.insert", &json!({"text": converted}))?;
-
-            // Optionally apply the appropriate font
-            let target_font = font.unwrap_or(if is_to_ansi { "SutonnyMJ" } else { "Kalpurush" });
             s.run("format.font", &json!({"name": target_font}))?;
             return Ok(json!({"converted": true, "count": 1, "target": "selection"}));
         }
     }
 
-    // Convert entire document
-    let mut converted_count = 0;
-    for b in &mut s.doc.body {
-        let block = Arc::make_mut(b);
-        if let wordcraft_doc::Block::Para(p) = block
-            && !p.text.is_empty()
-        {
-            let converted = if is_to_ansi { unicode_to_ansi(&p.text) } else { ansi_to_unicode(&p.text) };
-            let target_font = if is_to_ansi { "SutonnyMJ" } else { "Kalpurush" };
-            p.text = converted.clone();
-            p.runs = vec![wordcraft_doc::Run {
-                len: converted.len(),
-                props: wordcraft_doc::CharProps { font: Some(target_font.into()), ..Default::default() },
-            }];
-            converted_count += 1;
-        }
+    // Convert entire document (including tables, headers, footers, text boxes)
+    let mut converted_count = convert_blocks_recursive(&mut s.doc.body, is_to_ansi, target_font);
+    for part in s.doc.parts.values_mut() {
+        converted_count += convert_blocks_recursive(&mut part.blocks, is_to_ansi, target_font);
     }
 
     Ok(json!({"converted": true, "count": converted_count, "target": "document"}))
@@ -1420,5 +1589,31 @@ mod tests {
         // 7. Shironame
         let shiro_ansi = unicode_to_ansi("শিরোনামে");
         assert_eq!(ansi_to_unicode(&shiro_ansi), "শিরোনামে");
+
+        // 8. Real-world BKB Mobile Monitoring Format strings (all previously failing cases)
+        assert_eq!(
+            ansi_to_unicode("(RyjvB-‡m‡Þ¤^i)/2026 ˆÎgvwm‡K weZiYK…Z K…wl FY MÖnxZvi ZvwjKv"),
+            "(জুলাই-সেপ্টেম্বর)/২০২৬ ত্রৈমাসিকে বিতরণকৃত কৃষি ঋণ গ্রহীতার তালিকা"
+        );
+        assert_eq!(ansi_to_unicode("Gbv‡qZbMi, BqvKzecyi, `vMbf‚Tv"), "এনায়েতনগর, ইয়াকুবপুর, দাগনভূঞা");
+        assert_eq!(ansi_to_unicode("K…wl/cjøx, 12.5%"), "কৃষি/পল্লী, ১২.৫%");
+        assert_eq!(ansi_to_unicode("DËi PÐxcyi, BqvKzecyi, `vMbf‚Tv"), "উত্তর চণ্ডীপুর, ইয়াকুবপুর, দাগনভূঞা");
+        assert_eq!(ansi_to_unicode("cwðg PÐxcyi, BqvKzecyi, `vMbf‚Tv"), "পশ্চিম চণ্ডীপুর, ইয়াকুবপুর, দাগনভূঞা");
+        assert_eq!(ansi_to_unicode("`w¶Y Puv`cyi, BqvKzecyi, `vMbf‚Tv"), "দক্ষিণ চাঁদপুর, ইয়াকুবপুর, দাগনভূঞা");
+        assert_eq!(ansi_to_unicode("‡bRvg DwÏb 339/65"), "নেজাম উদ্দিন ৩৩৯/৬৫");
+        assert_eq!(ansi_to_unicode("Avãyj gwZb 216/65"), "আব্দুল মতিন ২১৬/৬৫");
+        assert_eq!(ansi_to_unicode("Av‡bvqviæj Kwig ‡gv‡k©` 06/66"), "আনোয়ারুল করিম মোর্শেদ ০৬/৬৬");
+        assert_eq!(ansi_to_unicode("‡gvt wmivR Djøvn 206/65"), "মোঃ সিরাজ উল্লাহ ২০৬/৬৫");
+        assert_eq!(ansi_to_unicode("‡gvt kvgmy‡Ïvnv"), "মোঃ শামসুদ্দোহা");
+        assert_eq!(ansi_to_unicode("RvbœvZzj ‡di‡`Šm"), "জান্নাতুল ফেরদৌস");
+        assert_eq!(ansi_to_unicode("nvwjgv LvZzb"), "হালিমা খাতুন");
+        assert_eq!(ansi_to_unicode("iæûj Avwgb"), "রুহুল আমিন");
+        assert_eq!(ansi_to_unicode("‡gvt ûgvqyb Kwei"), "মোঃ হুমায়ুন কবির");
+        assert_eq!(ansi_to_unicode("‡gvt ‡Mvjvg ‡gvZ©zRv"), "মোঃ গোলাম মোর্তুজা");
+        assert_eq!(ansi_to_unicode("gšÍe¨"), "মন্তব্য");
+        assert_eq!(ansi_to_unicode("KZ…©K"), "কর্তৃক");
+        assert_eq!(ansi_to_unicode("mvKz©jvi"), "সার্কুলার");
+        assert_eq!(ansi_to_unicode("m‡ev©”P"), "সর্বোচ্চ");
+        assert_eq!(ansi_to_unicode("wb¤œ¯^vÿiKvix"), "নিম্নস্বাক্ষরকারী");
     }
 }
