@@ -11,6 +11,11 @@ fn in_table(s: &Session) -> Option<&'static str> {
     if s.sel.focus.path.cell().is_some() { None } else { Some("the cursor isn't in a table") }
 }
 
+fn parse_path(p_str: &str) -> Result<Path, CmdError> {
+    let parts: Result<Vec<u32>, _> = p_str.split(['.', '/']).map(str::parse).collect();
+    parts.map(Path).map_err(|_| CmdError::Params("invalid table path".into()))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     let t = |c: CommandSpec| c.when(in_table);
     vec![
@@ -118,8 +123,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let adjust_next = p::bool(v, "adjustNext").unwrap_or(false);
             let story = s.sel.focus.story;
             let (tp, r, c) = if let Some(p_str) = p::str(v, "path") {
-                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
-                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let path = parse_path(p_str)?;
                 let row_idx = p::u64(v, "row").unwrap_or(0) as usize;
                 let col_idx = p::u64(v, "col").unwrap_or(0) as usize;
                 (path, row_idx, col_idx)
@@ -141,8 +145,7 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             let story = s.sel.focus.story;
             let (tp, r, _) = if let Some(p_str) = p::str(v, "path") {
-                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
-                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let path = parse_path(p_str)?;
                 let row_idx = p::u64(v, "row").unwrap_or(0) as usize;
                 (path, row_idx, 0)
             } else {
@@ -160,8 +163,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("table.resizeTable", "Resize Whole Table", "Table Layout › Table", |s, v| {
             let story = s.sel.focus.story;
             let tp = if let Some(p_str) = p::str(v, "path") {
-                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
-                Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?)
+                parse_path(p_str)?
             } else {
                 cell(s)?.0
             };
@@ -217,8 +219,7 @@ pub fn specs() -> Vec<CommandSpec> {
         t(CommandSpec::new("table.formula", "Formula", "Table Layout › Data", formula).params(r#"{"formula"?: "=SUM(ABOVE)"}"#)),
         CommandSpec::new("table.selectTable", "Select Table", "Table Layout › Table › Select", |s, v| {
             let tp = if let Some(p_str) = p::str(v, "path") {
-                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
-                Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?)
+                parse_path(p_str)?
             } else {
                 cell(s)?.0
             };
@@ -228,8 +229,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("table.selectRow", "Select Row", "Table Layout › Table › Select", |s, v| {
             let (tp, r) = if let Some(p_str) = p::str(v, "path") {
-                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
-                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let path = parse_path(p_str)?;
                 let row_idx = p::u64(v, "row").unwrap_or(0) as usize;
                 (path, row_idx)
             } else {
@@ -242,8 +242,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("table.selectColumn", "Select Column", "Table Layout › Table › Select", |s, v| {
             let (tp, c) = if let Some(p_str) = p::str(v, "path") {
-                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
-                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let path = parse_path(p_str)?;
                 let col_idx = p::u64(v, "col").unwrap_or(0) as usize;
                 (path, col_idx)
             } else {
@@ -261,8 +260,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure()),
         CommandSpec::new("table.selectRange", "Select Cell Range", "Table Layout › Table › Select", |s, v| {
             let (tp, r0, c0) = if let Some(p_str) = p::str(v, "path") {
-                let parts: Result<Vec<u32>, _> = p_str.split('.').map(str::parse).collect();
-                let path = Path(parts.map_err(|_| CmdError::Params("invalid table path".into()))?);
+                let path = parse_path(p_str)?;
                 let r = p::u64(v, "r0").unwrap_or(0) as usize;
                 let c = p::u64(v, "c0").unwrap_or(0) as usize;
                 (path, r, c)
@@ -815,7 +813,7 @@ pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: u
     }
 
     if let (Some((first_a, _)), Some((_, last_b))) = (segments.first(), segments.last()) {
-        s.sel = Selection { anchor: first_a.clone(), focus: last_b.clone() };
+        s.sel = Selection { anchor: last_b.clone(), focus: first_a.clone() };
         let l = s.layout();
         let xa = l.caret_on(first_a, s.page_hint).map(|k| k.x).unwrap_or(0.0);
         let xb = l.caret_on(last_b, s.page_hint).map(|k| k.x + 50.0).unwrap_or(100.0);

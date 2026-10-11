@@ -830,8 +830,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         && let Some((page, x, y)) = page_at(&rects, &layout, geo.scale, p)
         && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story)
     {
+        let in_column_block = app.session.column_segments().is_some_and(|segs| {
+            segs.iter().any(|(sa, sb)| {
+                if let (Some((t_a, ra, ca)), Some((t_b, rb, cb)), Some((t_pos, rp, cp))) = (sa.path.cell(), sb.path.cell(), pos.path.cell()) {
+                    t_a == t_pos && t_b == t_pos && ra == rp && rb == rp && ca <= cp && cp <= cb
+                } else {
+                    *sa <= pos && pos <= *sb
+                }
+            })
+        });
+
         let (a, b) = app.session.sel.ordered();
-        if !(a <= pos && pos <= b) || app.session.sel.is_collapsed() {
+        let in_span = !app.session.sel.is_collapsed() && (a <= pos && pos <= b);
+
+        if !in_column_block && !in_span {
+            app.session.column = None;
             app.session.sel = wordcraft_engine::Selection::caret(pos);
         }
         app.canvas.context_issue = app.session.run("review.suggestions", &json!({})).ok().filter(|v| !v.is_null());
@@ -1424,8 +1437,29 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         }
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
         if let Some((tp_a, r_a, c_a)) = app.canvas.table_cell_drag.clone() {
-            let cell_under_pointer =
-                layout.cell_at(page, x, y).map(|(_, tp, r, c)| (tp, r, c)).or_else(|| layout.hit(page, x, y, story).and_then(|p| p.path.cell()));
+            let cell_under_pointer = layout
+                .cell_at(page, x, y)
+                .map(|(_, tp, r, c)| (tp, r, c))
+                .or_else(|| layout.hit(page, x, y, story).and_then(|p| p.path.cell()))
+                .or_else(|| {
+                    // If pointer is slightly outside a cell rect (e.g. on border), find the cell in table `tp_a` whose rect is closest
+                    let p = layout.pages.get(page)?;
+                    let mut best: Option<(usize, usize, f32)> = None;
+                    for it in &p.items {
+                        if let Placed::Cell { rect, table, row, cell, story: cs } = it
+                            && *table == tp_a
+                            && *cs == story
+                        {
+                            let dx = (rect.x - x).max(0.0).max(x - rect.right());
+                            let dy = (rect.y - y).max(0.0).max(y - rect.bottom());
+                            let d = dx * dx + dy * dy;
+                            if best.as_ref().is_none_or(|(_, _, bd)| d < *bd) {
+                                best = Some((*row, *cell, d));
+                            }
+                        }
+                    }
+                    best.filter(|(_, _, d)| *d <= 400.0).map(|(r, c, _)| (tp_a.clone(), r, c))
+                });
 
             if let Some((tp_b, r_b, c_b)) = cell_under_pointer
                 && tp_b == tp_a
