@@ -40,3 +40,5 @@ description: Comprehensive project memory, architecture guide, and operational r
   - DOCX corpus roundtrip benchmarking via `wordcraft-cli corpus --roundtrip`.
   - Geometric contour tight text wrapping for non-rectangular floating shapes (Ellipses, Diamonds, Triangles).
   - Portable Windows x64 release package at `dist/wordcraft/wordcraft-0.1.0-windows-x64-portable.zip`.
+  - Lead Developer & Top Contributor attribution configured: M S Rana (`@rbr48` / Izhaan Intellect).
+  - Discord links removed across chrome title bar, Help ribbon, backstage navigation, and About window.
