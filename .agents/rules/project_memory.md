@@ -48,4 +48,6 @@ description: Comprehensive project memory, architecture guide, and operational r
   - OpenType typographic features (`liga`, `kern`, `smcp`) in layout text shaping.
   - PDF/A archival compliance & metadata tagging in `wordcraft-pdf`.
   - Native OS printing command (`file.printNative`) and Windows Inno Setup installer script (`packaging/windows/wordcraft.iss`).
-  - Freshly updated portable release archive at `dist/wordcraft/wordcraft-0.1.0-windows-x64-portable.zip`.
+  - Full Bijoy 52 conjunct parity (যুক্তবর্ণ), 'g' linker key, independent vowels, and Avro phonetic grapheme cluster boundary handling.
+  - Windows x64 Inno Setup installer package at `packaging/windows/Output/wordcraft-0.6.0-windows-x64-setup.exe`.
+  - Freshly updated portable release archive at `dist/wordcraft/wordcraft-0.6.0-windows-x64-portable.zip`.
