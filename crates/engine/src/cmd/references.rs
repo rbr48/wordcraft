@@ -282,6 +282,20 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
         let mut updates: Vec<(usize, String)> = Vec::new();
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            if instr.trim_start().starts_with('=') {
+                // A table formula: evaluated again against the cells it reads. Outside a table
+                // there are no cells to read, so the field keeps its result.
+                if let Some((tp, r, c)) = path.cell()
+                    && let Some(t) = s.doc.table(StoryRef::Body, &tp)
+                {
+                    let text = match super::table_formula::evaluate(t, r, c, instr) {
+                        Ok(v) => super::table_formula::format_result(v),
+                        Err(e) => format!("!{e}"),
+                    };
+                    updates.push((k, text));
+                }
+                continue;
+            }
             let name = wordcraft_layout::fields::field_name(instr);
             match name.as_str() {
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {

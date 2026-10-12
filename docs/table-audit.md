@@ -254,3 +254,33 @@ target/release/wordcraft-cli.exe run --cmd 'table.quick={"kind":"matrix"}' --cmd
 4. **D, H, I and J.** Split width, the nested Backspace, Border Painter, Borders and Shading from the table menu, and Cell Margins as an options dialog.
 5. **L and Q.** Wire the dialogs through `input_dialog`, then the missing features.
 6. **R.** Make parity behavioural: a test that runs each command on a range and checks the result.
+
+---
+
+## Re-check at HEAD (7ba49e3, 2026-10-12)
+
+Rebuilt `wordcraft-cli` from HEAD and re-ran the reproductions above. `cargo test -p wordcraft-engine table`: 21 passed. Status by section:
+
+| Section | Status at HEAD | Notes |
+|---|---|---|
+| A. Range selection ignored | Fixed | Merge, Shading, Delete Rows, Delete Columns and Insert Above now act on the range. `column.rs` passes `table.*` through. |
+| A. Insert Below position | **Still open** | `row()` inserts after the focus row (`r + 1`). With rows 1–2 selected it places two blank rows between Row 1 and Row 2, not after Row 2. The insert should follow the last selected row. |
+| B. Orphaned vertical merges | Fixed (structure) | `repair_vmerge` removes orphan continuations after Insert Below and Delete Rows. Deleting the restart row still loses its merged text. |
+| C. Leading empty paragraph | Fixed | Restart cell now holds only the merged text. |
+| D. Split Cells widens table | Fixed | Grid stays at 468 pt after a split. |
+| E. Convert to Text loses bold | **Still open** | Acknowledged as a limitation in the memory note; not fixed. |
+| E. Convert Text to Table drops fields past 63 | **Still open** | Fields 64–70 are still dropped silently, and the source paragraphs are still deleted. Not mentioned in the memory note. |
+| F. Formula unknown functions | Fixed | `=MEDIAN(ABOVE)` now returns an error. |
+| F. Formula stale after F9 | **Still open** | Edited a source cell, then ran Update Field: the formula still showed 12. |
+| G. Sort total order and currency | Fixed | Comparator is a tiered total order; `$9`, `$10`, `$100`, `1,200` sort numerically. **New issue:** the key keeps only digits, dots and minus signs, so `x9` sorts as 9 and `1a` as 1. |
+| G. Sort with merged cells | Still open | Still compares the cell index, not the grid column (acknowledged in a code comment). |
+| H. Backspace after nested table | Fixed | Caret stays inside the nested table's last cell. |
+| I. Border Painter | **Still open** | Still applies all six table borders at once. |
+| I. Borders and Shading from the table menu | **Still open** | `canvas.rs` is unchanged, so it still opens the paragraph dialog. |
+| J. Cell Margins | Partly fixed | The ribbon button now opens a dialog. A command with some sides omitted still resets those sides. |
+| K. Repeat Header Rows | Fixed | Toggling row 2 marks rows 0–2. |
+| L. Commands that should ask | **Still open** | Only Cell Margins gained a dialog. Sort, Formula, Convert, Split and Delete Cells still run with defaults. |
+| N. Invalid path is a silent no-op | **Still open** | `selectRange` with a non-table path still reports no error. |
+| O. Distribute Rows | Not re-probed | Commit states rows now average the total height and a test was added. |
+| S. Split-table bounds guard | Not re-probed | Commit states a bounds guard was added. |
+| Q. Missing features | Unchanged | Floating tables, cell spacing, table alt text, pen style and weight. |

@@ -579,30 +579,56 @@ fn fix_caret(s: &mut Session, tp: &Path, r: usize, c: usize) -> CmdResult {
     sel_result(s)
 }
 
+/// Insert Above / Below: one new row per selected row, above the first selected row or below
+/// the last one (Word's rule, whichever cell the selection's focus is in).
 fn row(s: &mut Session, below: bool) -> CmdResult {
     let (tp, r, c) = cell(s)?;
-    let cells = selected_cells(s);
-    let n = cells.iter().map(|x| x.0).collect::<std::collections::BTreeSet<_>>().len().max(1);
-    let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
-    for _ in 0..n {
-        t.insert_row(if below { r + 1 } else { r }, r);
+    let rows: std::collections::BTreeSet<usize> = selected_cells(s).into_iter().map(|x| x.0).collect();
+    let first = rows.first().copied().unwrap_or(r);
+    let last = rows.last().copied().unwrap_or(r);
+    let n = rows.len().max(1);
+    let (at, like) = if below { (last + 1, last) } else { (first, first) };
+    let story = s.sel.focus.story;
+    let t = s.doc.table_mut(story, &tp)?;
+    if t.rows.len() + n > wordcraft_doc::table::MAX_ROWS {
+        return Err(CmdError::Failed(format!("a table can't have more than {} rows", wordcraft_doc::table::MAX_ROWS)));
     }
-    fix_caret(s, &tp, if below { r + 1 } else { r }, c)
+    for _ in 0..n {
+        t.insert_row(at, like);
+    }
+    fix_caret(s, &tp, at, c)
 }
 
+/// Insert Left / Right: one new column per selected grid column, beside the selection's outer
+/// edge. The table keeps its total width, so the other columns give up the room.
 fn col(s: &mut Session, right: bool) -> CmdResult {
     let (tp, r, c) = cell(s)?;
-    let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
-    let g = t.grid_col(r, c);
-    let span = t.rows.get(r).and_then(|x| x.cells.get(c)).map(|x| x.span()).unwrap_or(1);
-    t.insert_col(if right { g + span } else { g });
-    // Keep the table within its width: shrink all columns proportionally.
-    let total: f32 = t.grid.iter().sum();
-    let before: f32 = total - t.grid.get(if right { g + span } else { g }).copied().unwrap_or(0.0);
-    if before > 0.0 {
-        let k = before / total;
+    let story = s.sel.focus.story;
+    let spots = selected_cells(s);
+    let spots = if spots.is_empty() { vec![(r, c)] } else { spots };
+    let t = s.doc.table_mut(story, &tp)?;
+    let (lo, hi) = spots.iter().fold((usize::MAX, 0usize), |(lo, hi), &(ri, ci)| {
+        let g = t.grid_col(ri, ci);
+        let span = t.rows.get(ri).and_then(|x| x.cells.get(ci)).map(|x| x.span()).unwrap_or(1);
+        (lo.min(g), hi.max(g + span))
+    });
+    let (lo, hi) = if lo == usize::MAX { (0, 0) } else { (lo, hi) };
+    let n = hi.saturating_sub(lo).max(1);
+    if t.grid.len() + n > wordcraft_doc::table::MAX_COLS {
+        return Err(CmdError::Failed(format!("a table can't have more than {} columns", wordcraft_doc::table::MAX_COLS)));
+    }
+    let at = if right { hi } else { lo };
+    let before: f32 = t.grid.iter().sum();
+    for _ in 0..n {
+        t.insert_col(at);
+    }
+    // Keep the table within its width: the columns share the room the new ones take.
+    let after: f32 = t.grid.iter().sum();
+    if before > 0.0 && after > 0.0 {
+        let k = before / after;
         t.grid.iter_mut().for_each(|w| *w *= k);
     }
+    sync_cell_widths(t);
     fix_caret(s, &tp, r, if right { c + 1 } else { c })
 }
 
@@ -738,7 +764,7 @@ fn borders(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
-fn cell_text(c: &wordcraft_doc::Cell) -> String {
+pub(crate) fn cell_text(c: &wordcraft_doc::Cell) -> String {
     c.blocks.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join("\n")
 }
 
@@ -774,94 +800,126 @@ fn sort_table(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
+/// What separates the cells' text when a table becomes text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Separator {
+    /// Cells are joined with this character.
+    Text(char),
+    /// Each cell becomes its own paragraph.
+    Paragraphs,
+}
+
+/// The separator a `separator` parameter names: `Some(char)` for a character, `None` for
+/// paragraph marks.
+fn separator_param(v: &Value, default: &str) -> Result<Option<char>, CmdError> {
+    match p::str(v, "separator").unwrap_or(default) {
+        "tab" => Ok(Some('\t')),
+        "comma" => Ok(Some(',')),
+        "paragraph" | "paragraphs" => Ok(None),
+        "other" => match p::str(v, "char").and_then(|c| c.chars().next()) {
+            Some(c) => Ok(Some(c)),
+            None => Err(CmdError::Params("separator `other` needs a `char`".into())),
+        },
+        x => Err(CmdError::Params(format!("unknown separator `{x}`"))),
+    }
+}
+
+/// Table Layout › Data › Convert to Text: each row becomes a paragraph, its cells joined by the
+/// separator. Runs, fields and the paragraphs' formatting survive the conversion.
 fn to_text(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, _, _) = cell(s)?;
-    let sep = match p::str(v, "separator").unwrap_or("tab") {
-        "comma" => ",",
-        "paragraph" => "\n",
-        _ => "\t",
+    let sep = match separator_param(v, "tab")? {
+        Some(c) => Separator::Text(c),
+        None => Separator::Paragraphs,
     };
     let story = s.sel.focus.story;
     let t = s.doc.table(story, &tp).cloned().ok_or_else(|| CmdError::Failed("no table".into()))?;
+    let mut lines = table_lines(&t, sep);
+    if lines.is_empty() {
+        lines.push(Paragraph::new());
+    }
     s.doc.remove_block(story, &tp)?;
-    let mut i = tp.last();
-    for row in &t.rows {
-        let text: Vec<String> = row.cells.iter().map(cell_text).collect();
-        for line in text.join(sep).split('\n') {
-            s.doc.insert_block(story, &tp.with_last(i), Block::Para(Paragraph::with_text(line, Default::default())))?;
-            i += 1;
-        }
+    for (k, line) in lines.into_iter().enumerate() {
+        s.doc.insert_block(story, &tp.with_last(tp.last() + k), Block::Para(line))?;
     }
     s.sel = Selection::caret(Pos { story, path: tp, off: 0 });
     sel_result(s)
 }
 
+/// The table's rows as paragraphs (see [`to_text`]). A nested table's rows follow the text of
+/// the cell that holds it, as paragraphs of their own.
+fn table_lines(t: &Table, sep: Separator) -> Vec<Paragraph> {
+    let mut lines = Vec::new();
+    for row in &t.rows {
+        let mut line = Paragraph::new();
+        let mut fresh = true;
+        for (ci, cl) in row.cells.iter().enumerate() {
+            if ci > 0 {
+                match sep {
+                    Separator::Text(c) => line.append(Paragraph::with_text(&c.to_string(), Default::default())),
+                    Separator::Paragraphs => {
+                        if !fresh {
+                            lines.push(std::mem::replace(&mut line, Paragraph::new()));
+                        }
+                        fresh = true;
+                    }
+                }
+            }
+            for (bi, block) in cl.blocks.iter().enumerate() {
+                match &**block {
+                    Block::Para(p) => {
+                        if bi > 0 && !fresh && matches!(sep, Separator::Text(_)) {
+                            // A cell's second paragraph starts a line of its own.
+                            lines.push(std::mem::replace(&mut line, Paragraph::new()));
+                            fresh = true;
+                        }
+                        if fresh {
+                            line.props = p.props.clone();
+                            fresh = false;
+                        }
+                        line.append(p.clone());
+                        line.mark = p.mark.clone();
+                    }
+                    Block::Table(inner) => {
+                        if !fresh {
+                            lines.push(std::mem::replace(&mut line, Paragraph::new()));
+                        }
+                        lines.extend(table_lines(inner, sep));
+                        line = Paragraph::new();
+                        fresh = true;
+                    }
+                }
+            }
+        }
+        if !fresh {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
 /// `=SUM(ABOVE)`, `=SUM(LEFT)`, `=SUM(RIGHT)`, `=SUM(BELOW)`, `=AVERAGE(...)`, `=COUNT(...)`, `=MAX`, `=MIN`, `=PRODUCT`.
+/// Table Layout › Data › Formula: inserts a formula field at the caret, evaluated now and again
+/// by Update Field. What a formula can use is described in [`super::table_formula`].
 fn formula(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
-    let f = p::str(v, "formula").unwrap_or("=SUM(ABOVE)").to_ascii_uppercase();
-    let t = s.doc.table(s.sel.focus.story, &tp).cloned().ok_or_else(|| CmdError::Failed("no table".into()))?;
-    let parse_num = |x: &wordcraft_doc::table::Cell| cell_text(x).trim().replace([',', '$', '€', '£', '৳', '¥', '%'], "").parse::<f64>().ok();
-    let above: Vec<f64> = t.rows.iter().take(r).filter_map(|row| row.cells.get(c)).filter_map(parse_num).collect();
-    let left: Vec<f64> = t.rows.get(r).map(|row| row.cells.iter().take(c).filter_map(parse_num).collect()).unwrap_or_default();
-    let right: Vec<f64> = t.rows.get(r).map(|row| row.cells.iter().skip(c + 1).filter_map(parse_num).collect()).unwrap_or_default();
-    let below: Vec<f64> = t.rows.iter().skip(r + 1).filter_map(|row| row.cells.get(c)).filter_map(parse_num).collect();
-
-    let nums = if f.contains("LEFT") {
-        left
-    } else if f.contains("RIGHT") {
-        right
-    } else if f.contains("BELOW") {
-        below
-    } else if f.contains("ABOVE") || !above.is_empty() {
-        above
-    } else if !left.is_empty() {
-        left
-    } else if !right.is_empty() {
-        right
-    } else {
-        below
-    };
-    let func_name = f.trim_start_matches('=').trim().split(['(', ' ']).next().unwrap_or("UNKNOWN");
-    let val = match func_name {
-        "AVERAGE" => {
-            if nums.is_empty() {
-                0.0
-            } else {
-                nums.iter().sum::<f64>() / nums.len() as f64
-            }
-        }
-        "COUNT" => nums.len() as f64,
-        "MAX" => {
-            if nums.is_empty() {
-                0.0
-            } else {
-                nums.iter().copied().fold(f64::NEG_INFINITY, f64::max)
-            }
-        }
-        "MIN" => {
-            if nums.is_empty() {
-                0.0
-            } else {
-                nums.iter().copied().fold(f64::INFINITY, f64::min)
-            }
-        }
-        "PRODUCT" => {
-            if nums.is_empty() {
-                1.0
-            } else {
-                nums.iter().product()
-            }
-        }
-        "SUM" => nums.iter().sum(),
-        _ => return Err(CmdError::Failed(format!("unknown formula function `{func_name}`"))),
-    };
-    let text = if val.fract() == 0.0 && val.abs() < 1e15 { format!("{}", val as i64) } else { format!("{val:.2}") };
+    let instr = formula_instr(p::str(v, "formula").unwrap_or("=SUM(ABOVE)"));
+    let story = s.sel.focus.story;
+    let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
+    let value = super::table_formula::evaluate(t, r, c, &instr)?;
+    let text = super::table_formula::format_result(value);
     let props = s.typing_props();
     let at = super::delete_selection(s)?;
-    let end = s.doc.insert_object(&at, wordcraft_doc::InlineObject::Field { instr: f.clone(), result: text.clone(), locked: false }, &props)?;
+    let end = s.doc.insert_object(&at, wordcraft_doc::InlineObject::Field { instr: instr.clone(), result: text.clone(), locked: false }, &props)?;
     s.sel = Selection::caret(end);
-    Ok(json!({"result": text}))
+    Ok(json!({"result": text, "formula": instr}))
+}
+
+/// A formula as a field stores it: upper case, with one leading `=`.
+pub(crate) fn formula_instr(raw: &str) -> String {
+    let body = raw.trim();
+    let body = body.strip_prefix('=').unwrap_or(body);
+    format!("={}", body.trim().to_ascii_uppercase())
 }
 
 pub fn select_grid_range(s: &mut Session, tp: &Path, min_r: usize, min_g: usize, max_r: usize, max_g: usize) -> CmdResult {
@@ -962,32 +1020,86 @@ fn select_column_cells(s: &mut Session, tp: &Path, col: usize) -> CmdResult {
     select_grid_range(s, tp, 0, g, t.rows.len().saturating_sub(1), g)
 }
 
+/// Table Layout › Insert › Convert Text to Table: each selected paragraph becomes a row, and the
+/// separator splits it into cells. Formatting carries over. Text beyond the table's limits is
+/// refused, not dropped.
 fn from_text(s: &mut Session, v: &Value) -> CmdResult {
-    let sep = if p::str(v, "separator") == Some("comma") { ',' } else { '\t' };
+    let sep = separator_param(v, "tab")?;
     let (a, b) = s.sel.ordered();
     if a.path.parent() != b.path.parent() || a.story != b.story {
         return Err(CmdError::Failed("select paragraphs to convert".into()));
     }
-    let lines: Vec<String> =
-        (a.path.last()..=b.path.last()).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i)).map(|p| p.plain_text())).collect();
-    let cols = lines.iter().map(|l| l.split(sep).count()).max().unwrap_or(1).clamp(1, 63);
+    let story = a.story;
+    let mut source = Vec::new();
+    for i in a.path.last()..=b.path.last() {
+        let para = s.doc.para(story, &a.path.with_last(i)).cloned().ok_or_else(|| CmdError::Failed("select paragraphs to convert".into()))?;
+        source.push(para);
+    }
+    let mut rows: Vec<Vec<Paragraph>> = Vec::with_capacity(source.len());
+    for para in source {
+        rows.push(split_cells(para, sep)?);
+    }
+    let cols = rows.iter().map(Vec::len).max().unwrap_or(1);
+    if cols > wordcraft_doc::table::MAX_COLS {
+        return Err(CmdError::Failed(format!(
+            "the text has {cols} columns, but a table can have at most {}; use fewer separators",
+            wordcraft_doc::table::MAX_COLS
+        )));
+    }
+    if rows.len() > wordcraft_doc::table::MAX_ROWS {
+        return Err(CmdError::Failed(format!("the text has {} rows, but a table can have at most {}", rows.len(), wordcraft_doc::table::MAX_ROWS)));
+    }
     let width = super::page::sect(s).text_width();
-    let mut t = Table::new(lines.len().max(1), cols, width);
-    for (r, l) in lines.iter().enumerate() {
-        for (c, txt) in l.split(sep).enumerate() {
+    let mut t = Table::new(rows.len().max(1), cols.max(1), width);
+    for (r, cells) in rows.into_iter().enumerate() {
+        for (c, para) in cells.into_iter().enumerate() {
             if let Some(cl) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) {
-                cl.blocks = vec![para_block(Paragraph::with_text(txt.trim(), Default::default()))];
+                cl.blocks = vec![para_block(para)];
             }
         }
     }
     for i in (a.path.last()..=b.path.last()).rev() {
-        s.doc.remove_block(a.story, &a.path.with_last(i))?;
+        s.doc.remove_block(story, &a.path.with_last(i))?;
     }
-    s.doc.insert_block(a.story, &a.path, Block::Table(t))?;
+    s.doc.insert_block(story, &a.path, Block::Table(t))?;
     let mut first = a.path.0.clone();
     first.extend([0, 0, 0]);
-    s.sel = Selection::caret(Pos { story: a.story, path: Path(first), off: 0 });
+    s.sel = Selection::caret(Pos { story, path: Path(first), off: 0 });
     sel_result(s)
+}
+
+/// Split one paragraph at each separator into cell paragraphs. Each part keeps the formatting of
+/// its characters, and the spaces and tabs at its ends are trimmed. With no separator (`None`)
+/// the paragraph is a single cell.
+fn split_cells(mut rest: Paragraph, sep: Option<char>) -> Result<Vec<Paragraph>, CmdError> {
+    let Some(sep) = sep else {
+        trim_paragraph(&mut rest)?;
+        return Ok(vec![rest]);
+    };
+    let mut out = Vec::new();
+    while let Some(i) = rest.text.find(sep) {
+        let mut tail = rest.split_off(i)?;
+        tail.delete(0, sep.len_utf8())?;
+        trim_paragraph(&mut rest)?;
+        out.push(std::mem::replace(&mut rest, tail));
+    }
+    trim_paragraph(&mut rest)?;
+    out.push(rest);
+    Ok(out)
+}
+
+/// Remove the spaces and tabs at either end of a paragraph's text.
+fn trim_paragraph(p: &mut Paragraph) -> Result<(), CmdError> {
+    let trailing = p.text.len() - p.text.trim_end_matches([' ', '\t']).len();
+    if trailing > 0 {
+        let end = p.text.len();
+        p.delete(end - trailing, end)?;
+    }
+    let leading = p.text.len() - p.text.trim_start_matches([' ', '\t']).len();
+    if leading > 0 {
+        p.delete(0, leading)?;
+    }
+    Ok(())
 }
 
 fn quick_table(s: &mut Session, v: &Value) -> CmdResult {

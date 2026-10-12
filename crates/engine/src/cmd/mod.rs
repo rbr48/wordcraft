@@ -25,6 +25,7 @@ pub mod review;
 pub mod speech;
 pub mod table;
 pub mod table_draw;
+pub mod table_formula;
 pub mod table_style;
 pub mod text;
 pub mod tools;

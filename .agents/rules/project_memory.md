@@ -85,4 +85,9 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **O** — `table.distributeRows` now averages total row height (`total / count`) instead of taking the max height.
     - **S** — `split_table` has a bounds guard (`if r <= t.rows.len()`) preventing panic on out-of-range row index.
     - Regression tests added for: `vmerge_repair_removes_orphan_continues`, `split_cell_does_not_widen_table`, `distribute_rows_averages_height`, `table_sort_total_order_and_currency`, `table_formula_unknown_function_errors`, `del_col_multi_column_selection`, `backspace_after_nested_table_scoped_to_parent_cell`.
-
+  - **Version 0.6.1 Upgrade & Release**:
+    - Bumped workspace version to `0.6.1` in `Cargo.toml`.
+    - Updated Windows Inno Setup script (`packaging/windows/wordcraft.iss`), `build-installer.ps1`, `packaging/android/AndroidManifest.xml`, and `packaging/android/build-apk.ps1`.
+    - Recompiled optimized release binaries `wordcraft.exe` and `wordcraft-cli.exe`.
+    - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.1-windows-x64-setup.exe`.
+    - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.1-windows-x64-portable.zip`.

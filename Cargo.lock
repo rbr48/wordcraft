@@ -5138,7 +5138,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "wordcraft"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "arboard",
  "eframe",
@@ -5159,7 +5159,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-android"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -5174,7 +5174,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-cli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "serde_json",
  "wordcraft-doc",
@@ -5186,11 +5186,11 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-control-key"
-version = "0.6.0"
+version = "0.6.1"
 
 [[package]]
 name = "wordcraft-doc"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "proptest",
  "serde",
@@ -5202,7 +5202,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docbin"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "cfb",
  "log",
@@ -5215,7 +5215,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docx"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "aes",
  "base64",
@@ -5237,7 +5237,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-engine"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "image",
  "js-sys",
@@ -5264,7 +5264,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-fonts"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "harfrust 0.13.3",
  "kurbo",
@@ -5275,7 +5275,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-formats"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "image",
  "log",
@@ -5288,14 +5288,14 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-geom"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "wordcraft-layout"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "js-sys",
  "log",
@@ -5312,7 +5312,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-mcp"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "log",
  "serde_json",
@@ -5324,7 +5324,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-metafile"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "kurbo",
  "thiserror 2.0.21",
@@ -5332,7 +5332,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-pdf"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "hayro-cmap",
  "hayro-interpret",
@@ -5352,7 +5352,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-proof"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "log",
  "miniz_oxide 0.8.9",
@@ -5361,7 +5361,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-render"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "image",
  "log",
@@ -5375,7 +5375,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-ui-egui"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "egui",
  "egui_kittest",
@@ -5398,7 +5398,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-web"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "eframe",
  "egui",
@@ -5416,7 +5416,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-zotero"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "log",
  "proptest",
@@ -5518,7 +5518,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "serde_json",
 ]

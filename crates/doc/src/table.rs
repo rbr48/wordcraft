@@ -41,6 +41,28 @@ pub struct Table {
     pub rows: Vec<Row>,
 }
 
+/// A vertical merge open in one grid column while [`Table::repair_vmerge`] walks the rows.
+#[derive(Clone, Copy, Debug)]
+struct OpenMerge {
+    row: usize,
+    cell: usize,
+    start: usize,
+    span: usize,
+    last_row: usize,
+    continues: usize,
+}
+
+/// Ends the merge open in grid column `g`. A restart that never got a continuation becomes an
+/// ordinary cell.
+fn end_merge(rows: &mut [Row], open: &mut [Option<OpenMerge>], g: usize) {
+    let Some(m) = open.get_mut(g).and_then(Option::take) else { return };
+    if m.continues == 0
+        && let Some(c) = rows.get_mut(m.row).and_then(|row| row.cells.get_mut(m.cell))
+    {
+        c.props.vmerge = VMerge::None;
+    }
+}
+
 /// Hard limits that keep hostile input from exhausting memory.
 pub const MAX_ROWS: usize = 32_767;
 pub const MAX_COLS: usize = 63;
@@ -100,22 +122,68 @@ impl Table {
         let mut row = Row { props: src.props.clone(), cells: Vec::with_capacity(src.cells.len()) };
         row.props.header = false;
         for c in &src.cells {
+            // A new row never continues a merge: one inserted inside a merge splits it.
             let mut nc = Cell::empty();
             nc.props = c.props.clone();
-            if nc.props.vmerge == VMerge::Restart {
-                nc.props.vmerge = VMerge::None;
-            }
+            nc.props.vmerge = VMerge::None;
             row.cells.push(nc);
         }
         self.rows.insert(at.min(self.rows.len()), row);
         self.repair_vmerge();
     }
 
+    /// Delete row `r`. A merged cell that starts in the row keeps its text: the continuation
+    /// below it becomes the merge's restart and takes the text over.
     pub fn delete_row(&mut self, r: usize) {
-        if r < self.rows.len() {
-            self.rows.remove(r);
+        if r >= self.rows.len() {
+            return;
         }
+        let starts = self.row_cells(r);
+        for (ci, start, span, vmerge) in starts {
+            if vmerge != VMerge::Restart {
+                continue;
+            }
+            let Some(bi) = self.cell_starting_at(r + 1, start) else { continue };
+            let continues =
+                self.rows.get(r + 1).and_then(|row| row.cells.get(bi)).is_some_and(|c| c.props.vmerge == VMerge::Continue && c.span() == span);
+            if !continues {
+                continue;
+            }
+            let mut moved: Blocks =
+                self.rows.get_mut(r).and_then(|row| row.cells.get_mut(ci)).map(|c| std::mem::take(&mut c.blocks)).unwrap_or_default();
+            moved.retain(|b| b.as_para().is_none_or(|p| !p.is_empty()));
+            if moved.is_empty() {
+                continue;
+            }
+            let Some(below) = self.rows.get_mut(r + 1).and_then(|row| row.cells.get_mut(bi)) else { continue };
+            let mut blocks = moved;
+            blocks.extend(std::mem::take(&mut below.blocks).into_iter().filter(|b| b.as_para().is_none_or(|p| !p.is_empty())));
+            below.blocks = blocks;
+            below.props.vmerge = VMerge::Restart;
+        }
+        self.rows.remove(r);
         self.repair_vmerge();
+    }
+
+    /// The cells of row `r` as (index, first grid column, span, vertical merge).
+    fn row_cells(&self, r: usize) -> Vec<(usize, usize, usize, VMerge)> {
+        let mut x = 0usize;
+        let Some(row) = self.rows.get(r) else { return Vec::new() };
+        row.cells
+            .iter()
+            .enumerate()
+            .map(|(ci, cell)| {
+                let span = cell.span();
+                let out = (ci, x, span, cell.props.vmerge);
+                x += span;
+                out
+            })
+            .collect()
+    }
+
+    /// Index of the cell in row `r` that starts at grid column `g`.
+    fn cell_starting_at(&self, r: usize, g: usize) -> Option<usize> {
+        self.row_cells(r).into_iter().find(|(_, start, _, _)| *start == g).map(|(ci, _, _, _)| ci)
     }
 
     /// Insert a grid column at grid index `g` (cells spanning it widen instead).
@@ -333,78 +401,61 @@ impl Table {
         }
     }
 
-    /// Repair vertical merge chains across all grid columns.
-    /// Ensures every Continue has a preceding Restart with the same span, and that
-    /// single-row Restart cells (with no following Continue) are demoted to None.
+    /// Repair the vertical merge chains of every grid column in one pass over the rows. A
+    /// `Continue` cell needs a `Restart` with the same start and span in the row above; a restart
+    /// that gets no continuation becomes an ordinary cell, and an orphaned continuation does too.
+    /// Linear in the table's cells.
     pub fn repair_vmerge(&mut self) {
-        for g in 0..self.grid.len() {
-            let mut active_restart: Option<(usize, usize, usize)> = None;
-            let mut prev_ci: Option<usize> = None;
-            let mut continue_count = 0usize;
-
-            for r in 0..self.rows.len() {
-                let Some(ci) = self.cell_at_grid(r, g) else {
-                    if let Some((restart_r, restart_ci, _)) = active_restart.take()
-                        && continue_count == 0
-                        && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
-                    {
-                        c.props.vmerge = VMerge::None;
-                    }
-                    prev_ci = None;
-                    continue;
-                };
-
-                let cell_vmerge = self.rows.get(r).and_then(|row| row.cells.get(ci)).map(|c| c.props.vmerge).unwrap_or(VMerge::None);
-                let cell_span = self.rows.get(r).and_then(|row| row.cells.get(ci)).map(|c| c.span()).unwrap_or(1);
-
-                match cell_vmerge {
+        let ncols = self.cols();
+        let mut open: Vec<Option<OpenMerge>> = vec![None; ncols];
+        for r in 0..self.rows.len() {
+            let cells = self.row_cells(r);
+            let mut covered = vec![false; ncols];
+            for (ci, start, span, vmerge) in cells {
+                let end = (start + span).min(ncols);
+                for flag in covered.get_mut(start..end).into_iter().flatten() {
+                    *flag = true;
+                }
+                match vmerge {
                     VMerge::Restart => {
-                        if let Some((restart_r, restart_ci, _)) = active_restart.take()
-                            && continue_count == 0
-                            && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
-                        {
-                            c.props.vmerge = VMerge::None;
+                        for g in start..end {
+                            end_merge(&mut self.rows, &mut open, g);
+                            if let Some(slot) = open.get_mut(g) {
+                                *slot = Some(OpenMerge { row: r, cell: ci, start, span, last_row: r, continues: 0 });
+                            }
                         }
-                        active_restart = Some((r, ci, cell_span));
-                        prev_ci = Some(ci);
-                        continue_count = 0;
                     }
                     VMerge::Continue => {
-                        let is_valid = active_restart.is_some_and(|(_, _, restart_span)| prev_ci == Some(ci) && cell_span == restart_span);
-                        if is_valid {
-                            continue_count += 1;
-                            prev_ci = Some(ci);
+                        let valid = open.get(start).copied().flatten().is_some_and(|m| m.start == start && m.span == span && m.last_row + 1 == r);
+                        if valid {
+                            for m in open.get_mut(start..end).into_iter().flatten().flatten() {
+                                m.last_row = r;
+                                m.continues += 1;
+                            }
                         } else {
-                            if let Some((restart_r, restart_ci, _)) = active_restart.take()
-                                && continue_count == 0
-                                && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
-                            {
-                                c.props.vmerge = VMerge::None;
+                            for g in start..end {
+                                end_merge(&mut self.rows, &mut open, g);
                             }
                             if let Some(c) = self.rows.get_mut(r).and_then(|row| row.cells.get_mut(ci)) {
                                 c.props.vmerge = VMerge::None;
                             }
-                            prev_ci = Some(ci);
                         }
                     }
                     VMerge::None => {
-                        if let Some((restart_r, restart_ci, _)) = active_restart.take()
-                            && continue_count == 0
-                            && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
-                        {
-                            c.props.vmerge = VMerge::None;
+                        for g in start..end {
+                            end_merge(&mut self.rows, &mut open, g);
                         }
-                        prev_ci = Some(ci);
                     }
                 }
             }
-
-            if let Some((restart_r, restart_ci, _)) = active_restart.take()
-                && continue_count == 0
-                && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
-            {
-                c.props.vmerge = VMerge::None;
+            for (g, seen) in covered.iter().enumerate() {
+                if !seen {
+                    end_merge(&mut self.rows, &mut open, g);
+                }
             }
+        }
+        for g in 0..ncols {
+            end_merge(&mut self.rows, &mut open, g);
         }
     }
     pub fn distribute_rows(&mut self) {
