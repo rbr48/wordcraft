@@ -1494,12 +1494,7 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
         return Ok(());
     }
     // TWo INitial CApitals and cAPS LOCK come first, so "TEh" is still a replacement's typo.
-    if let Some((at, reps)) = case_fix(
-        s.autocorrect_two_initial_caps,
-        s.autocorrect_caps_lock,
-        &s.autocorrect_initial_caps_exceptions,
-        &word,
-    ) {
+    if let Some((at, reps)) = case_fix(s.autocorrect_two_initial_caps, s.autocorrect_caps_lock, &s.autocorrect_initial_caps_exceptions, &word) {
         let para = s.doc.para_mut(f.story, &f.path)?;
         let letters = word.get(at..).unwrap_or("").chars().take(reps.len()).collect::<String>();
         let mut end = start + at + letters.len();
@@ -1573,11 +1568,7 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
         return Ok(());
     }
     let before_word = text.get(..start).unwrap_or("");
-    let sentence_on = if before_word.trim().is_empty() && f.path.cell().is_some() {
-        s.autocorrect_cap_cells
-    } else {
-        s.autocorrect_cap_sentences
-    };
+    let sentence_on = if before_word.trim().is_empty() && f.path.cell().is_some() { s.autocorrect_cap_cells } else { s.autocorrect_cap_sentences };
     if sentence_on && starts_sentence(before_word) && should_capitalize(&word, if on_enter { '\n' } else { last }) {
         let para = s.doc.para_mut(f.story, &f.path)?;
         if let Some(c) = word.chars().next() {
@@ -1601,12 +1592,7 @@ const CAPS_LOCK_EXCEPTIONS: &[&str] = &["iOS", "mRNA", "tRNA", "rRNA", "cDNA", "
 /// The capitalisation fix for a finished word: TWo INitial CApitals ("WOrd" → "Word") or cAPS
 /// LOCK ("wORD" → "Word"). Returns the byte offset of the word's letters and each letter's
 /// replacement. Only words of three or more letters, optionally in quotes or brackets.
-fn case_fix(
-    two_initial_caps: bool,
-    caps_lock: bool,
-    initial_caps_exceptions: &[String],
-    word: &str,
-) -> Option<(usize, Vec<String>)> {
+fn case_fix(two_initial_caps: bool, caps_lock: bool, initial_caps_exceptions: &[String], word: &str) -> Option<(usize, Vec<String>)> {
     if !two_initial_caps && !caps_lock {
         return None;
     }
@@ -1633,12 +1619,7 @@ fn case_fix(
     {
         return Some((at, std::iter::once(one(a)).chain(std::iter::once(lower(b))).chain(more.iter().map(|&c| one(c))).collect()));
     }
-    if caps_lock
-        && a.is_lowercase()
-        && b.is_uppercase()
-        && more.iter().all(|c| c.is_uppercase())
-        && !CAPS_LOCK_EXCEPTIONS.contains(&letters)
-    {
+    if caps_lock && a.is_lowercase() && b.is_uppercase() && more.iter().all(|c| c.is_uppercase()) && !CAPS_LOCK_EXCEPTIONS.contains(&letters) {
         let up = a.to_uppercase().collect::<String>();
         return Some((at, std::iter::once(up).chain(std::iter::once(lower(b))).chain(more.iter().map(|&c| lower(c))).collect()));
     }

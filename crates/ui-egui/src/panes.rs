@@ -1003,4 +1003,3 @@ mod navigation_tests {
         }
     }
 }
-

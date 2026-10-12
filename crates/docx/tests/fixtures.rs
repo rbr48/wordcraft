@@ -1156,4 +1156,3 @@ fn theme_font_wins_over_the_fixed_font() {
     // An explicit ascii font still beats a theme font given only for hAnsi.
     assert_eq!(p[1].props_of_char(2).font.as_deref(), Some("Arial"));
 }
-

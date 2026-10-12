@@ -71,10 +71,10 @@ pub fn custom_word(w: &str) -> Option<String> {
 
 /// Add a word to the user dictionary ("Add to Dictionary").
 pub fn add_word(w: &str) {
-    if let Some(w) = custom_word(w) {
-        if user_words().write().unwrap_or_else(|e| e.into_inner()).insert(w) {
-            DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
-        }
+    if let Some(w) = custom_word(w)
+        && user_words().write().unwrap_or_else(|e| e.into_inner()).insert(w)
+    {
+        DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
     }
 }
 

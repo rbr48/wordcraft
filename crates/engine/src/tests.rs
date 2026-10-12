@@ -3022,4 +3022,3 @@ fn imported_pictures_fit_the_text_width() {
     let got = sizes(&s.doc);
     assert!(got.iter().any(|(w, _)| (w - max_w).abs() < 0.01), "pasted picture fits: {got:?}");
 }
-

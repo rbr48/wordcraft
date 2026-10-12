@@ -79,4 +79,3 @@ fn headless_sessions_keep_the_dictionary_in_memory() {
     h.session.run("review.addToDictionary", &json!({"word": "zxqmcpword2"})).expect("added");
     assert!(h.session.user_dict_path.is_none());
 }
-
