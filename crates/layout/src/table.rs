@@ -86,9 +86,9 @@ fn default_margins(t: &Table, style: Option<&TableStyleProps>) -> [f32; 4] {
     t.props.cell_margins.or(style.and_then(|s| s.parts.cell_margins)).unwrap_or(DEFAULT_MARGINS)
 }
 
-/// The most paragraphs [`measure_table_columns`] lays out: a huge table is measured by its first
-/// rows only, so AutoFit stays quick.
-const MEASURE_BUDGET: usize = 4000;
+/// The most paragraphs [`measure_table_columns`] lays out. A bigger table is refused, not fitted
+/// from part of its text.
+const MEASURE_LIMIT: usize = 200_000;
 /// The line length paragraphs are measured at: wide enough that nothing real wraps.
 const MEASURE_WIDE: f32 = 15_840.0;
 /// What an empty cell's text needs (about a paragraph mark), points.
@@ -140,8 +140,8 @@ fn measure_para(p: &wordcraft_doc::Paragraph, env: &crate::para::ParaEnv) -> (f3
 /// with cell margins included: the narrowest fits each cell's longest word (text that can't
 /// wrap), the widest fits every paragraph on one line. A cell spanning several columns spreads
 /// what its columns lack over them. Paragraphs are laid out with the table style's formatting;
-/// after [`MEASURE_BUDGET`] paragraphs the remaining rows are skipped.
-pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f32, f32)> {
+/// A table with more than [`MEASURE_LIMIT`] paragraphs gives `None`.
+pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Option<Vec<(f32, f32)>> {
     use wordcraft_doc::Block;
     let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
     let margins_def = default_margins(t, style.as_ref());
@@ -150,8 +150,8 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
     let mut cols = vec![(0.0f32, 0.0f32); ncols];
     // Cells spanning several columns: (first column, span, min, max), applied after the others.
     let mut spanned: Vec<(usize, usize, f32, f32)> = Vec::new();
-    let mut budget = MEASURE_BUDGET;
-    'rows: for (ri, row) in t.rows.iter().enumerate() {
+    let mut budget = MEASURE_LIMIT;
+    for (ri, row) in t.rows.iter().enumerate() {
         let mut g = 0usize;
         for cell in &row.cells {
             let span = cell.span();
@@ -176,7 +176,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                     match &**b {
                         Block::Para(p) => {
                             if budget == 0 {
-                                break 'rows;
+                                return None;
                             }
                             budget -= 1;
                             let (a, b) = measure_para(p, &env);
@@ -223,7 +223,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
         c.0 = c.0.max(floor);
         c.1 = c.1.max(c.0);
     });
-    cols
+    Some(cols)
 }
 
 /// Column widths for AutoFit to Contents, the way Word shares the room: every column gets its
@@ -303,6 +303,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     // Cell text formatting per region, built once per table.
     let mut cell_text: Vec<(Region, CellText)> = Vec::new();
     let ncols = t.cols().max(1);
+    // Cell spacing: a gap before every grid column, after the last one, and between rows.
+    let gap = t.props.cell_spacing.filter(|g| g.is_finite() && *g > 0.0).map_or(0.0, |g| g.min(1584.0));
     // Column widths.
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
         t.grid.iter().map(|w| if w.is_finite() { w.max(4.0) } else { 72.0 }).collect()
@@ -358,9 +360,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         tborders.overlay(&own);
     }
     let first_cell = t.rows.first().and_then(|r| r.cells.first());
+    // The table's full width, gaps included.
+    let outer = total + gap * (ncols + 1) as f32;
     let x = match t.props.align {
-        Some(Align::Center) => (avail - total) / 2.0,
-        Some(Align::Right) => avail - total,
+        Some(Align::Center) => (avail - outer) / 2.0,
+        Some(Align::Right) => avail - outer,
         _ if ctx.doc.settings.compat_mode >= 15 => {
             // The border is centred on the edge, so half of it sits outside: Word moves the
             // table in by that half.
@@ -400,8 +404,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let band = banded(t, style.as_ref(), ri);
         for (ci, cell) in row.cells.iter().enumerate() {
             let span = cell.span();
-            let x0 = colx.get(g).copied().unwrap_or(acc);
-            let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc);
+            let x0 = colx.get(g).copied().unwrap_or(acc) + gap * (g + 1) as f32;
+            let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc) + gap * (g + span) as f32;
             let margins = cell.props.margins.unwrap_or(margins_def);
             let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             let mut fill = cell.props.shading;
@@ -644,9 +648,16 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             }
             items.push(Placed::Cell { rect: Rect::new(c.x, 0.0, c.w, rh), table: wordcraft_doc::Path(path.to_vec()), row: ri, cell: ci, story });
         }
-        out.push(RowLayout { height: rh, items });
+        // Each row carries the gap below it; the first row also carries the gap above the table.
+        let top = if ri == 0 { gap } else { 0.0 };
+        if top > 0.0 {
+            for it in &mut items {
+                it.translate(0.0, top);
+            }
+        }
+        out.push(RowLayout { height: rh + gap + top, items });
     }
-    TableLayout { x, width: total, rows: out }
+    TableLayout { x, width: outer, rows: out }
 }
 
 /// Split a row at `cut` (points below the row's top) so the part above fits on this page.

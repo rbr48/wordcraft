@@ -370,6 +370,9 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     if let Some(a) = t.align {
         w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
     }
+    if let Some(sp) = t.cell_spacing.filter(|x| x.is_finite() && *x > 0.0) {
+        w.empty("w:tblCellSpacing", &[("w:w", &twips(sp)), ("w:type", "dxa")]);
+    }
     if let Some(i) = t.indent {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
     }

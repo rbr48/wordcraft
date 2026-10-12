@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::props::CharProps;
-use wordcraft_doc::{Block, Paragraph, Pos};
+use wordcraft_doc::{Block, Paragraph, Path, Pos, StoryRef, para_block};
 
 use super::{parse_pos, pos_json};
 use crate::{CmdError, CmdResult, ColumnBlock, CommandSpec, Selection, Session, p};
@@ -146,6 +146,8 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         }
         "format.changeCase" | "format.clear" => per_row(s, run, v, &segs),
         _ if id.starts_with("format.") || id.starts_with("para.") || id.starts_with("table.") || id == "select.column" => run(s, v),
+        // A copied table is pasted over the block's cells (see `paste`), which keeps the block.
+        "edit.paste" if v.get("text").is_none() && clipboard_is_table(s) => run(s, v),
         _ if mutates && (id.starts_with("text.") || id.starts_with("edit.paste")) => {
             delete(s, &segs)?;
             run(s, v)
@@ -161,7 +163,40 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
 }
 
 /// Copy: one paragraph per block row (formatting kept); the plain text joins rows with newlines.
+/// Whether the clipboard holds a copied table (one table block).
+fn clipboard_is_table(s: &Session) -> bool {
+    matches!(s.clipboard.as_ref().map(|f| f.blocks.as_slice()), Some([Block::Table(_)]))
+}
+
+/// The table cells a block covers, when every piece of it is a cell of one table: (story, table
+/// path, (row, cell) pairs).
+fn cell_targets(segs: &[(Pos, Pos)]) -> Option<(StoryRef, Path, Vec<(usize, usize)>)> {
+    let (first, _) = segs.first()?;
+    let (tp0, _, _) = first.path.cell()?;
+    let story = first.story;
+    let mut cells = Vec::with_capacity(segs.len());
+    for (a, _) in segs {
+        let (tp, r, c) = a.path.cell()?;
+        if tp != tp0 || a.story != story {
+            return None;
+        }
+        cells.push((r, c));
+    }
+    Some((story, tp0, cells))
+}
+
 fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
+    // Cells copy as a table, with their rows, columns, formatting and every paragraph in them.
+    if let Some((story, tp, cells)) = cell_targets(segs) {
+        let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("the table isn't there any more".into()))?;
+        let table = super::table::selection_table(t, &cells).ok_or_else(|| CmdError::Failed("no cells to copy".into()))?;
+        let text = super::table::table_text(&table);
+        let frag = s.doc.fragment_from_blocks(vec![Block::Table(table)]);
+        s.clipboard_text = text.clone();
+        s.clip_history.push(&frag, &text);
+        s.clipboard = Some(frag);
+        return Ok(json!({"text": text}));
+    }
     let mut blocks = Vec::new();
     let mut parts = std::collections::BTreeMap::new();
     let mut rows = Vec::new();
@@ -187,18 +222,31 @@ fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
     Ok(json!({"text": s.clipboard_text}))
 }
 
-/// Delete each row's piece (bottom up, so earlier positions stay valid) and leave the caret at
+/// Delete: a block of table cells empties those cells (every paragraph and nested table in them).
+/// Otherwise each row's piece goes, bottom up, so earlier positions stay valid. The caret goes to
 /// the block's top-left corner.
 fn delete(s: &mut Session, segs: &[(Pos, Pos)]) -> Result<(), CmdError> {
-    for (a, b) in segs.iter().rev() {
-        let (a, b) = (s.doc.clamp(a), s.doc.clamp(b));
-        if a == b || a.path != b.path || a.story != b.story {
-            continue;
+    match cell_targets(segs) {
+        Some((story, tp, cells)) if !s.doc.settings.track_changes => {
+            for (r, c) in cells {
+                let t = s.doc.table_mut(story, &tp)?;
+                if let Some(cl) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) {
+                    cl.blocks = vec![para_block(Paragraph::new())];
+                }
+            }
         }
-        if s.doc.settings.track_changes {
-            super::track_delete(s, &a, &b)?;
-        } else {
-            s.doc.delete_range(&a, &b)?;
+        _ => {
+            for (a, b) in segs.iter().rev() {
+                let (a, b) = (s.doc.clamp(a), s.doc.clamp(b));
+                if a == b || a.path != b.path || a.story != b.story {
+                    continue;
+                }
+                if s.doc.settings.track_changes {
+                    super::track_delete(s, &a, &b)?;
+                } else {
+                    s.doc.delete_range(&a, &b)?;
+                }
+            }
         }
     }
     let at = segs.first().map(|(a, _)| s.doc.clamp(a)).unwrap_or_else(|| s.sel.focus.clone());

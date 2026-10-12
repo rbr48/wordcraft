@@ -1728,6 +1728,7 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Borders", None, app, |ui, app| {
+        let pen = app.canvas.table_pen.clone();
         menu_button(ui, app, "borders", Some("Borders"), "Borders", true, |ui, app| {
             for (l, k) in [
                 ("All Borders", "all"),
@@ -1736,12 +1737,52 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
                 ("No Border", "none"),
                 ("Top Border", "top"),
                 ("Bottom Border", "bottom"),
+                ("Left Border", "left"),
+                ("Right Border", "right"),
             ] {
-                mi(ui, app, l, "table.borders", json!({"kind": k}));
+                mi(ui, app, l, "table.borders", pen_kind_params(k, &pen));
             }
+            ui.separator();
+            mi(ui, app, "Borders and Shading…", "ui.dialog", json!({"name": "tableBorders"}));
         });
-        big(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", json!({}), false);
+        stack(ui, |ui| {
+            let style = app.canvas.table_pen.style.clone();
+            let style_label = PEN_STYLES.iter().find(|(v, _)| *v == style).map_or("Solid", |(_, l)| l);
+            egui::ComboBox::from_id_salt("pen_style").width(96.0).selected_text(tl!(style_label)).show_ui(ui, |ui| {
+                for (value, label) in PEN_STYLES {
+                    ui.selectable_value(&mut app.canvas.table_pen.style, value.to_string(), tl!(label));
+                }
+            });
+            let width = app.canvas.table_pen.width;
+            egui::ComboBox::from_id_salt("pen_width").width(96.0).selected_text(format!("{width} pt")).show_ui(ui, |ui| {
+                for w in PEN_WIDTHS {
+                    ui.selectable_value(&mut app.canvas.table_pen.width, w, format!("{w} pt"));
+                }
+            });
+            let colour = app.canvas.table_pen.color.clone();
+            let colour_label = if colour.is_empty() { tl!("Automatic").to_string() } else { format!("#{colour}") };
+            egui::ComboBox::from_id_salt("pen_colour").width(96.0).selected_text(colour_label).show_ui(ui, |ui| {
+                for value in PEN_COLOURS {
+                    let label = if value.is_empty() { tl!("Automatic").to_string() } else { format!("#{value}") };
+                    ui.selectable_value(&mut app.canvas.table_pen.color, value.to_string(), label);
+                }
+            });
+        });
+        let tool = app.canvas.table_tool;
+        big_toggle(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", tool == Some(crate::table_pen::TableTool::Paint));
     });
+}
+
+/// The Border Painter's line styles, widths and colours (Table Design › Borders).
+const PEN_STYLES: [(&str, &str); 5] = [("single", "Solid"), ("double", "Double"), ("dotted", "Dotted"), ("dashed", "Dashed"), ("thick", "Thick")];
+const PEN_WIDTHS: [f32; 6] = [0.25, 0.5, 0.75, 1.0, 1.5, 3.0];
+const PEN_COLOURS: [&str; 7] = ["", "000000", "C00000", "FF0000", "2F5597", "00B050", "7030A0"];
+
+/// The parameters of `table.borders` for one border kind, drawn with the pen.
+fn pen_kind_params(kind: &str, pen: &crate::table_pen::PenSettings) -> Value {
+    let mut v = pen.params();
+    v["kind"] = json!(kind);
+    v
 }
 
 /// Table Layout › Cell Size: the caret cell's row height and column width, in inches. They show
@@ -1800,11 +1841,13 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             menu_button(ui, app, "selectTable", Some("Select"), "Select", false, |ui, app| {
                 mi(ui, app, "Select Cell", "table.selectCell", json!({}));
                 mi(ui, app, "Select Row", "table.selectRow", json!({}));
+                mi(ui, app, "Select Column", "table.selectColumn", json!({}));
                 mi(ui, app, "Select Table", "table.selectTable", json!({}));
             });
             let g = app.session.view.table_gridlines;
             small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
+            small(ui, app, "positioning", Some("Positioning"), "Table Positioning", "table.position", json!({}), false);
         });
     });
     group(ui, "Draw", None, app, |ui, app| {

@@ -300,6 +300,7 @@ impl PropCtx {
                     }
                 }
                 "w:jc" => t.align = k.attr("w:val").map(align),
+                "w:tblCellSpacing" => t.cell_spacing = tw(k, "w:w"),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
                 "w:tblBorders" => t.borders = Some(borders(k)),
                 "w:shd" => t.shading = shd_fill(k),

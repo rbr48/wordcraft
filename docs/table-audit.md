@@ -284,3 +284,44 @@ Rebuilt `wordcraft-cli` from HEAD and re-ran the reproductions above. `cargo tes
 | O. Distribute Rows | Not re-probed | Commit states rows now average the total height and a test was added. |
 | S. Split-table bounds guard | Not re-probed | Commit states a bounds guard was added. |
 | Q. Missing features | Unchanged | Floating tables, cell spacing, table alt text, pen style and weight. |
+
+---
+
+## Final status (fix pass, 2026-10-12)
+
+Every item above is addressed in the working tree (not committed). Tests: 72 table tests in `crates/engine/src/tests_table.rs`, plus the formula evaluator's unit tests in `crates/engine/src/cmd/table_formula.rs`. The full workspace passes (`cargo test --workspace`), `cargo clippy --workspace --all-targets -- -D warnings` is clean, and `cargo fmt --check`, `cargo xtask layers`, `cargo xtask assets` and `cargo xtask wasm` pass.
+
+| Item | Result |
+|---|---|
+| A. Commands ignore a cell range | Fixed. Table commands act on the range; Insert Below goes after the last selected row; Insert Left/Right and Delete Rows/Columns handle every selected row or column. |
+| B. Vertical merges orphaned | Fixed. One-pass `repair_vmerge`; Delete Rows hands the merged text to the row below; a new row never extends a merge. |
+| C. Empty paragraph in merged cell | Fixed. |
+| D. Split Cells widens the table | Fixed. Splits across and down, keeps the width, and has a merge-first option. |
+| E. Convert to Text loses formatting | Fixed. Runs, fields and paragraph formatting are kept. |
+| E. Convert Text to Table drops text | Fixed. Formatting is kept; more than 63 columns or 32,767 rows is refused with an error and the text is left alone. |
+| F. Formula: unknown functions summed | Fixed. Unknown functions are errors. |
+| F. Formula: no cell references | Added: A1 references, ranges, + - * / ^, parentheses, SUM, AVERAGE, COUNT, MAX, MIN, PRODUCT, ABS, INT, ROUND, MOD, SIGN. |
+| F. Formula: F9 does not recalculate | Fixed. Update Field re-evaluates formula fields from the cells they read. |
+| F. ABOVE rule | Checked against Word (synthetic documents, black-box). Word skips empty or text cells until the first number, then sums the run of numbers up to the next empty or text cell. `=SUM()` is a syntax error in Word. The evaluator follows both. |
+| G. Sort is not a total order | Fixed. Numbers sort first by value, then text. The numeric key reads currency, separators, `%` and accounting negatives, and no longer strips letters. |
+| G. Sort with merged cells | Sorts by grid column. Rows with a vertically merged cell are refused with a message. Word's behaviour here is not checked. |
+| H. Backspace after a nested table | Fixed. |
+| I. Border Painter applies all borders | Fixed. A real painter: the nearest cell edge takes the pen (style, width, colour). |
+| I. Borders and Shading from the table menu | Fixed. Opens a table dialog (Borders and Shading tabs). |
+| I. Borders on a range | Cell-scope borders: shared edges are set in both cells. The whole table is still set when the caret is in the table or the whole table is selected. |
+| J. Cell Margins reset | Fixed. Sides not named keep their values; the ribbon opens the dialog. |
+| K. Repeat Header on a lower row | Fixed. Toggling a row marks the rows above it too, so the header is contiguous from the top. |
+| L. Commands run blind | Fixed. Sort, Formula, Convert to Text, Convert Text to Table, Split Cells, Delete Cells, Borders and Shading, and Table Positioning open dialogs when called without settings. |
+| M. Delete Cells | Shift left and shift up are supported. Shift up is refused where the bottom cell is not at the end of its row, with a message. |
+| N. Silent no-op on bad paths | Fixed. A path that isn't a table, or a row or column outside it, is an error. |
+| O. Preferred widths, distribute, resize, AutoFit | Fixed. A cell's preferred width sets its columns; a table width scales the grid; Distribute acts on the selection and keeps totals; Resize keeps grid and stated width equal; AutoFit Window keeps proportions; AutoFit Contents refuses tables above 200,000 paragraphs instead of truncating. |
+| P. Merge, split and erase disagree | Fixed. |
+| Q. Missing features | Added: floating positioning (command and dialog), alt text in Table Properties, cell spacing (model, .docx, layout), Select Column in the ribbon, pen controls, a real month calendar for Quick Tables. |
+| Copy and paste of cells, rows, columns and tables | Fixed. A copied range, row, column or whole table is a table, not loose paragraphs. Pasting over selected cells replaces them from the top-left cell and adds rows if needed; with the caret in a table and the same column count it inserts rows above the caret; otherwise it inserts a table, or a nested table in a cell. A copied single cell pastes its text. Cut and Delete empty every paragraph of the selected cells, not only the first. |
+
+### Limits and checks still open
+
+- The dialogs, the Border Painter and the pen controls are compiled and covered at the command level, but nothing has exercised them in the window.
+- New strings use the English text. Only "Table Positioning" is in the nine catalogs; the other new labels fall back to English.
+- Not checked against Word: the paste rules above (rows versus nested, and overwrite), the sort refusal for merged cells, and Distribute Rows' averaging.
+- The cell-spacing gap is applied between rows. Vertical merges draw across the gap.

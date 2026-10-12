@@ -154,6 +154,9 @@ pub enum Dialog {
     },
     /// Columns, Symbol and Field ([`crate::dialogs_insert`], #321).
     Insert(Box<crate::dialogs_insert::InsertDialog>),
+    /// Table dialogs: Sort, Formula, Convert to Text and Text to Table, Split and Delete Cells,
+    /// Borders and Shading for a table, Table Positioning ([`crate::dialogs_table`]).
+    Table(Box<crate::dialogs_table::TableDialog>),
     /// Paste Special: the clipboard's formats and the chosen one. The clipboard payload stays out
     /// of the serialized dialog state (it can be megabytes).
     PasteSpecial {
@@ -283,6 +286,9 @@ pub enum Dialog {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableForm {
+    pub cell_spacing_on: bool,
+    pub cell_spacing: f32,
+    pub alt_text: String,
     pub width_on: bool,
     pub width: f32,
     /// `left`, `center` or `right`.
@@ -314,6 +320,9 @@ impl TableForm {
         let width = t.props.width_pct.filter(|p| *p > 0.0).map(|p| tw * p.min(100.0) / 100.0).or(t.props.width.filter(|w| *w > 0.0));
         let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
         Some(TableForm {
+            cell_spacing_on: t.props.cell_spacing.is_some_and(|x| x > 0.0),
+            cell_spacing: fin(t.props.cell_spacing.unwrap_or(0.0)) / k,
+            alt_text: t.props.caption.clone().unwrap_or_default(),
             width_on: width.is_some(),
             width: fin(width.unwrap_or(tw)) / k,
             align: match t.props.align {
@@ -345,6 +354,12 @@ impl TableForm {
         let k = wordcraft_geom::Unit::default().pt_per_unit();
         let moved = |a: f32, b: f32| (a - b).abs() > 1e-4;
         let mut v = serde_json::Map::new();
+        if self.cell_spacing_on != basis.cell_spacing_on || (self.cell_spacing_on && moved(self.cell_spacing, basis.cell_spacing)) {
+            v.insert("cellSpacing".into(), if self.cell_spacing_on { json!(self.cell_spacing * k) } else { Value::Null });
+        }
+        if self.alt_text != basis.alt_text {
+            v.insert("altText".into(), json!(self.alt_text));
+        }
         if self.width_on != basis.width_on || (self.width_on && moved(self.width, basis.width)) {
             v.insert("width".into(), if self.width_on { json!(self.width * k) } else { Value::Null });
         }
@@ -664,6 +679,7 @@ impl Dialog {
             Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
             Dialog::Insert(d) => d.name(),
+            Dialog::Table(d) => d.name(),
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::Accessibility { .. } => "accessibility",
@@ -706,6 +722,9 @@ impl Dialog {
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
         if let Some(d) = crate::dialogs_insert::open(name, app) {
             return Some(Dialog::Insert(Box::new(d)));
+        }
+        if let Some(d) = crate::dialogs_table::open(name, app) {
+            return Some(Dialog::Table(Box::new(d)));
         }
         let st = app.session.run("format.state", &json!({})).unwrap_or_default();
         let s = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
@@ -989,6 +1008,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::TableStyle { .. } => "Modify Table Style",
         Dialog::Commands { .. } => "Search Commands",
         Dialog::Insert(d) => d.title(),
+        Dialog::Table(d) => d.title(),
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
         Dialog::Accessibility { .. } => "Accessibility Checker",
@@ -1717,6 +1737,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ok || cancel
         }
         Dialog::Insert(f) => crate::dialogs_insert::body(app, ui, f),
+        Dialog::Table(f) => crate::dialogs_table::body(app, ui, f),
         Dialog::Commands { query } => {
             let r = ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Type a command, e.g. \"insert table\"")).desired_width(380.0));
             r.request_focus();
@@ -2415,6 +2436,13 @@ fn table_properties(ui: &mut Ui, f: &mut TableForm) {
         ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).suffix(unit.suffix()).max_decimals(2));
         ui.end_row();
     });
+    egui::Grid::new("tp_spacing").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.checkbox(&mut f.cell_spacing_on, tl!("Allow spacing between cells:"));
+        ui.add_enabled(f.cell_spacing_on, len(&mut f.cell_spacing, 0.0, unit));
+        ui.end_row();
+    });
+    heading(ui, "Alternative text");
+    ui.add(egui::TextEdit::singleline(&mut f.alt_text).hint_text(tl!("Describes the table for screen readers")).desired_width(320.0));
     heading(ui, "Row");
     egui::Grid::new("tp_row").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
         ui.checkbox(&mut f.row_height_on, tl!("Specify height:"));

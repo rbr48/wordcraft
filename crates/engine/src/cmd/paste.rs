@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Block, Document, Paragraph};
+use wordcraft_doc::props::VMerge;
+use wordcraft_doc::table::MAX_ROWS;
+use wordcraft_doc::{Block, Document, Paragraph, Path, Pos, Row, Table};
 
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -128,6 +130,19 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Replace the selection with `frag`, marking it as an insertion under Track Changes.
 pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+    // A copied table has its own rules for where it goes (see `paste_table`). A copy of one cell
+    // pastes that cell's text, unless it is pasted over selected cells.
+    if let [Block::Table(src)] = frag.blocks.as_slice() {
+        let single = src.rows.len() == 1 && src.rows.first().is_some_and(|row| row.cells.len() == 1);
+        let over_cells = s.column_segments().is_some();
+        if !single || over_cells {
+            if paste_table(s, src)? {
+                return Ok(());
+            }
+        } else if let Some(cell) = src.rows.first().and_then(|row| row.cells.first()) {
+            frag.blocks = cell.blocks.iter().map(|b| (**b).clone()).collect();
+        }
+    }
     let at = delete_selection(s)?;
     if s.doc.settings.track_changes {
         let rid = super::new_revision(s, wordcraft_doc::RevisionKind::Insert);
@@ -144,6 +159,88 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
     let end = s.doc.insert_fragment(&at, &frag)?;
     s.sel = Selection::caret(end);
     Ok(())
+}
+
+/// Pastes a copied table. Over a selection of cells, the copy's cells replace the selected cells
+/// from the top-left one, and rows are added at the foot of the table when the copy is taller.
+/// With the caret in a table cell (and nothing selected), a copy with the table's column count
+/// becomes rows above the caret's row; any other copy is left to the normal path, which nests it
+/// in the cell. Outside a table it is inserted as a table of its own. Returns whether it was pasted.
+fn paste_table(s: &mut Session, src: &Table) -> Result<bool, CmdError> {
+    let story = s.sel.focus.story;
+    let cells: Vec<(Path, usize, usize)> =
+        s.column_segments().map(|segs| segs.iter().filter_map(|(a, _)| a.path.cell()).collect()).unwrap_or_default();
+    if let Some((tp, _, _)) = cells.first().cloned() {
+        let dest: Vec<(usize, usize)> = cells.iter().filter(|x| x.0 == tp).map(|x| (x.1, x.2)).collect();
+        let Some((r0, g0)) = dest.iter().try_fold((usize::MAX, usize::MAX), |(r, g), &(row, cell)| {
+            let t = s.doc.table(story, &tp)?;
+            Some((r.min(row), g.min(t.grid_col(row, cell))))
+        }) else {
+            return Ok(false);
+        };
+        let t = s.doc.table_mut(story, &tp)?;
+        overwrite_cells(t, r0, g0, src);
+        let ci = super::table::starting_at(t, r0, g0).unwrap_or(0);
+        let mut path = tp.0.clone();
+        path.extend([r0 as u32, ci as u32, 0]);
+        s.sel = Selection::caret(Pos { story, path: Path(path), off: 0 });
+        return Ok(true);
+    }
+    let Some((tp, r, c)) = s.sel.focus.path.cell() else { return Ok(false) };
+    if !s.sel.is_collapsed() {
+        return Ok(false);
+    }
+    let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("the table isn't there any more".into()))?;
+    if src.cols() != t.cols() {
+        return Ok(false);
+    }
+    let t = s.doc.table_mut(story, &tp)?;
+    for (k, row) in src.rows.iter().enumerate() {
+        if t.rows.len() >= MAX_ROWS {
+            break;
+        }
+        let mut props = row.props.clone();
+        props.header = false;
+        let cells: Vec<wordcraft_doc::Cell> = row
+            .cells
+            .iter()
+            .map(|cl| {
+                let mut nc = cl.clone();
+                nc.props.vmerge = VMerge::None;
+                nc
+            })
+            .collect();
+        t.rows.insert((r + k).min(t.rows.len()), Row { props, cells });
+    }
+    t.repair_vmerge();
+    super::table::sync_cell_widths(t);
+    let caret_cell = c.min(t.rows.get(r).map_or(0, |row| row.cells.len().saturating_sub(1)));
+    let mut path = tp.0.clone();
+    path.extend([r as u32, caret_cell as u32, 0]);
+    s.sel = Selection::caret(Pos { story, path: Path(path), off: 0 });
+    Ok(true)
+}
+
+/// Writes the copy's cells into the table from grid column `g0` of row `r0`, replacing the text of
+/// each cell they land on. Rows are added below the table when the copy is taller than the rest.
+fn overwrite_cells(t: &mut Table, r0: usize, g0: usize, src: &Table) {
+    for (i, row) in src.rows.iter().enumerate() {
+        while r0 + i >= t.rows.len() && t.rows.len() < MAX_ROWS {
+            let last = t.rows.len().saturating_sub(1);
+            t.insert_row(t.rows.len(), last);
+        }
+        let dest = r0 + i;
+        if dest >= t.rows.len() {
+            break;
+        }
+        for (j, cell) in row.cells.iter().enumerate() {
+            let g = g0 + src.grid_col(i, j);
+            let Some(ci) = super::table::starting_at(t, dest, g) else { continue };
+            if let Some(d) = t.rows.get_mut(dest).and_then(|x| x.cells.get_mut(ci)) {
+                d.blocks = cell.blocks.clone();
+            }
+        }
+    }
 }
 
 /// Every paragraph in a block, tables included (bounded depth).

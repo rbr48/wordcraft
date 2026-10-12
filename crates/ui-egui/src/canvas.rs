@@ -71,6 +71,8 @@ pub struct CanvasState {
     pub(crate) pasted: bool,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
     pub table_tool: Option<crate::table_pen::TableTool>,
+    /// The Border Painter's pen (line style, width, colour).
+    pub table_pen: crate::table_pen::PenSettings,
     /// The Draw Table stroke (or eraser press) in progress.
     pub(crate) table_stroke: Option<crate::table_pen::PenStroke>,
     /// A table column border, row border, or corner resize drag in progress.
@@ -128,6 +130,7 @@ impl Default for CanvasState {
             balloon_h: 0.0,
             balloon_rects: Vec::new(),
             table_tool: None,
+            table_pen: crate::table_pen::PenSettings::default(),
             table_stroke: None,
             table_drag: None,
             table_cell_drag: None,
@@ -1954,7 +1957,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));
         });
         item(ui, app, "Merge Cells", "table.merge", json!({}));
-        item(ui, app, "Split Cells…", "table.split", json!({"columns": 2}));
+        item(ui, app, "Split Cells…", "table.split", json!({}));
         ui.menu_button(tl!("Cell Alignment"), |ui| {
             item(ui, app, "Top Left", "table.cellAlign", json!({"value": "topLeft"}));
             item(ui, app, "Top Center", "table.cellAlign", json!({"value": "topCenter"}));
@@ -1968,7 +1971,13 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         });
         item(ui, app, "Distribute Rows Evenly", "table.distributeRows", json!({}));
         item(ui, app, "Distribute Columns Evenly", "table.distributeColumns", json!({}));
-        item(ui, app, "Borders and Shading…", "ui.dialog", json!({"name": "borders"}));
+        item(ui, app, "Text Direction", "table.textDirection", json!({}));
+        ui.menu_button(tl!("AutoFit"), |ui| {
+            item(ui, app, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
+            item(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
+            item(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
+        });
+        item(ui, app, "Borders and Shading…", "ui.dialog", json!({"name": "tableBorders"}));
         item(ui, app, "Table Properties…", "ui.dialog", json!({"name": "tableProperties"}));
     }
 }

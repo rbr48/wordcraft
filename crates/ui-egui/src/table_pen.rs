@@ -17,6 +17,8 @@ use crate::theme::Tokens;
 pub enum TableTool {
     Draw,
     Erase,
+    /// Border Painter: a click paints the cell border nearest the pointer with the pen.
+    Paint,
 }
 
 impl TableTool {
@@ -24,7 +26,34 @@ impl TableTool {
         match self {
             TableTool::Draw => "table.draw",
             TableTool::Erase => "table.eraser",
+            TableTool::Paint => "table.borderPainter",
         }
+    }
+}
+
+/// The Border Painter's pen (Table Design › Borders): line style, width in points, and colour
+/// (`RRGGBB`, or empty for automatic). The Borders menu uses it too.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PenSettings {
+    pub style: String,
+    pub width: f32,
+    pub color: String,
+}
+
+impl Default for PenSettings {
+    fn default() -> Self {
+        PenSettings { style: "single".into(), width: 0.5, color: String::new() }
+    }
+}
+
+impl PenSettings {
+    /// The pen as command parameters (`style`, `width`, and `color` when it has one).
+    pub fn params(&self) -> serde_json::Value {
+        let mut v = json!({"style": self.style, "width": self.width});
+        if !self.color.is_empty() {
+            v["color"] = json!(self.color);
+        }
+        v
     }
 }
 
@@ -42,6 +71,7 @@ pub fn toggle(app: &mut WordApp, id: &str, p: &Value) -> Option<Result<Value, St
     let tool = match id {
         "table.draw" => TableTool::Draw,
         "table.eraser" => TableTool::Erase,
+        "table.borderPainter" => TableTool::Paint,
         _ => return None,
     };
     if p.get("page").is_some() {
@@ -55,6 +85,7 @@ pub fn toggle(app: &mut WordApp, id: &str, p: &Value) -> Option<Result<Value, St
         app.status(match tool {
             TableTool::Draw => tl!("Drag a rectangle to draw a table, or a line across cells to split them. Esc stops."),
             TableTool::Erase => tl!("Click a border between two cells to merge them. Esc stops."),
+            TableTool::Paint => tl!("Click a cell border to paint it with the pen. Esc stops."),
         });
     }
     Some(Ok(json!({"tool": app.canvas.table_tool.map(TableTool::id)})))
@@ -111,6 +142,13 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             json!({"page": st.page, "x0": st.from.0, "y0": st.from.1, "x1": st.to.0, "y1": st.to.1})
         }
         TableTool::Erase => json!({"page": st.page, "x": st.to.0, "y": st.to.1}),
+        TableTool::Paint => {
+            let mut params = app.canvas.table_pen.params();
+            params["page"] = json!(st.page);
+            params["x"] = json!(st.to.0);
+            params["y"] = json!(st.to.1);
+            params
+        }
     };
     if let Err(e) = app.run(tool.id(), params) {
         app.status(e);

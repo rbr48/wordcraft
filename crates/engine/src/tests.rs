@@ -833,8 +833,10 @@ fn table_properties_apply_in_one_step() {
     assert_eq!((t.props.align, t.props.indent, t.props.width), (Some(Align::Center), Some(18.0), Some(300.0)));
     let row = &t.rows[0];
     assert_eq!((row.props.height, row.props.height_rule, row.props.cant_split, row.props.header), (Some(40.0), HeightRule::Exact, true, true));
-    assert_eq!(t.grid[0], 120.0);
-    assert_eq!((row.cells[0].props.width, row.cells[0].props.valign), (Some(110.0), VAlign::Bottom));
+    // The cell's preferred width is its column's width, applied after the column width.
+    assert!((t.grid[0] - 110.0).abs() < 0.01, "cellWidth sets the column the cell spans: {}", t.grid[0]);
+    assert!(row.cells[0].props.width.is_some_and(|w| (w - 110.0).abs() < 0.01));
+    assert_eq!(row.cells[0].props.valign, VAlign::Bottom);
     let applied = t.clone();
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap(), &t0, "one undo step per apply");
@@ -843,7 +845,7 @@ fn table_properties_apply_in_one_step() {
     let state = run(&mut s, "table.properties", json!({}));
     assert_eq!(state["align"], "center");
     assert_eq!(state["row"]["heightRule"], "exact");
-    assert_eq!(state["columnWidth"], 120.0);
+    assert!(state["columnWidth"].as_f64().is_some_and(|w| (w - 110.0).abs() < 0.01), "{}", state["columnWidth"]);
     assert_eq!(state["cell"]["valign"], "bottom");
     // Clearing the row height makes it automatic again; bad values are refused.
     run(&mut s, "table.properties", json!({"rowHeight": null}));
@@ -2006,7 +2008,7 @@ fn styles_apply_rejected_on_protected_document() {
 }
 
 #[test]
-fn table_formula_supports_all_directions_and_auto() {
+fn table_formula_supports_all_directions() {
     let mut s = s();
     run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
     let tp = wordcraft_doc::Path::top(0);
@@ -2025,10 +2027,10 @@ fn table_formula_supports_all_directions_and_auto() {
     let r_left = run(&mut s, "table.formula", json!({"formula": "=SUM(LEFT)"}));
     assert_eq!(r_left["result"], "15");
 
-    // Set caret in empty cell (2, 1) and auto-detect: numbers above is 5
+    // A function without arguments is a syntax error, as in Word: nothing is inserted.
     s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 2, 1, 0]), off: 0 });
-    let r_auto = run(&mut s, "table.formula", json!({"formula": "=SUM"}));
-    assert_eq!(r_auto["result"], "5");
+    assert!(s.run("table.formula", &json!({"formula": "=SUM"})).is_err());
+    assert!(s.run("table.formula", &json!({"formula": "=SUM()"})).is_err());
 }
 
 fn column_doc() -> Session {

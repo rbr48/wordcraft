@@ -271,27 +271,17 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"header"?: pt, "footer"?: pt}"#),
         CommandSpec::new("table.cellMargins", "Cell Margins", "Table Layout › Alignment", |s, v| {
             let Some((tp, _, _)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
-            let m = [
-                p::f32(v, "top").unwrap_or(0.0),
-                p::f32(v, "left").unwrap_or(5.4),
-                p::f32(v, "bottom").unwrap_or(0.0),
-                p::f32(v, "right").unwrap_or(5.4),
-            ]
-            .map(|x| x.clamp(0.0, 144.0));
             let story = s.sel.focus.story;
+            // Only the sides named change; the others keep the table's margins (Word's defaults at first).
+            let current = s.doc.table(story, &tp).and_then(|t| t.props.cell_margins).unwrap_or([0.0, 5.4, 0.0, 5.4]);
+            let side = |key: &str, now: f32| p::f32(v, key).map_or(now, |x| x.clamp(0.0, 144.0));
+            let [top, left, bottom, right] = current;
+            let m = [side("top", top), side("left", left), side("bottom", bottom), side("right", right)];
             s.doc.table_mut(story, &tp)?.props.cell_margins = Some(m);
-            for path in s.doc.para_paths(story).into_iter().filter(|p| p.0.starts_with(&tp.0) && p.0.len() > tp.0.len()) {
-                s.doc.para_mut(story, &path)?.touch();
-            }
+            super::table::touch_cells(s, &tp)?;
             sel_result(s)
         })
-        .params(r#"{"top"?, "left"?, "bottom"?, "right"? (pt)}"#),
-        CommandSpec::new("table.borderPainter", "Border Painter", "Table Design › Borders", |s, v| {
-            s.run(
-                "table.borders",
-                &json!({"kind": p::str(v, "kind").unwrap_or("all"), "width": p::f32(v, "width").unwrap_or(0.5), "color": p::str(v, "color")}),
-            )
-        }),
+        .params(r#"{"top"?: pt, "left"?: pt, "bottom"?: pt, "right"?: pt}"#),
         CommandSpec::new("para.setNumberingValue", "Set Numbering Value", "Home › Paragraph › Numbering", |s, v| {
             let value = p::u64(v, "value").unwrap_or(1).clamp(0, 100_000) as u32;
             let f = s.sel.focus.clone();

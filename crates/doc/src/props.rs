@@ -783,6 +783,9 @@ pub struct TableProps {
     pub borders: Option<Borders>,
     /// Default cell margins (top, left, bottom, right), points.
     pub cell_margins: Option<[f32; 4]>,
+    /// Space between cells and around the table's edge, points (`w:tblCellSpacing`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_spacing: Option<f32>,
     /// Fixed column widths (no auto-fit).
     pub fixed: bool,
     /// Table style options ("look"): header row, total row, banded rows, first column, last

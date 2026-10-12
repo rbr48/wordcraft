@@ -12,6 +12,7 @@ use wordcraft_geom::Rect;
 use wordcraft_layout::{DocLayout, Placed};
 
 use super::sel_result;
+use super::table::{Side, pen_border, set_side};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 /// A drag shorter than this (points) both ways isn't a rectangle.
@@ -22,11 +23,16 @@ pub const ERASER_REACH: f32 = 4.0;
 const SNAP: f32 = 3.0;
 /// The shortest stroke (points) that counts as a line.
 const MIN_LINE: f32 = 6.0;
+/// How near (points) the Border Painter has to be to an edge.
+pub const PAINT_REACH: f32 = 5.0;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("table.draw", "Draw Table", "Insert › Tables", draw).params(
             r#"{"page": n, "x0": pt, "y0": pt, "x1": pt, "y1": pt, "story"?: StoryRef} (a pen stroke in page points, 0-based page: a rectangle at least 12 pt each way outside any table inserts a one-cell table of that size at the paragraph under its start; a straight vertical or horizontal line inside a table splits the cells it crosses there. In the app the button turns the pen on.)"#,
+        ),
+        CommandSpec::new("table.borderPainter", "Border Painter", "Table Design › Borders", paint).params(
+            r#"{"page": n, "x": pt, "y": pt, "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "width"?: pt, "color"?: "RRGGBB|auto"} (paints the cell border nearest the point with that pen. In the app the button turns the painter on, and each click paints.)"#,
         ),
         CommandSpec::new("table.eraser", "Eraser", "Table Layout › Draw", eraser).params(
             r#"{"page": n, "x": pt, "y": pt} (removes the border between two cells within 4 pt of the point by merging them. In the app the button turns the eraser on.)"#,
@@ -116,6 +122,50 @@ fn draw(s: &mut Session, v: &Value) -> CmdResult {
             "draw a rectangle (at least 12 pt each way) outside a table, or a straight horizontal or vertical line across table cells".into(),
         )),
     }
+}
+
+/// Distance from (`x`, `y`) to the segment (`ax`, `ay`)–(`bx`, `by`).
+fn segment_distance(x: f32, y: f32, (ax, ay): (f32, f32), (bx, by): (f32, f32)) -> f32 {
+    let (dx, dy) = (bx - ax, by - ay);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 { (((x - ax) * dx + (y - ay) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    let (px, py) = (ax + t * dx, ay + t * dy);
+    ((x - px) * (x - px) + (y - py) * (y - py)).sqrt()
+}
+
+/// The cell side nearest (`x`, `y`) within [`PAINT_REACH`]: (story, table, row, cell, side).
+fn nearest_edge(boxes: &[CellBox], x: f32, y: f32) -> Option<(StoryRef, Path, usize, usize, Side)> {
+    let mut best: Option<(f32, &CellBox, Side)> = None;
+    for b in boxes {
+        let r = &b.rect;
+        let (l, t, rt, bt) = (r.x, r.y, r.right(), r.bottom());
+        let edges =
+            [(Side::Top, (l, t), (rt, t)), (Side::Bottom, (l, bt), (rt, bt)), (Side::Left, (l, t), (l, bt)), (Side::Right, (rt, t), (rt, bt))];
+        for (side, a, z) in edges {
+            let d = segment_distance(x, y, a, z);
+            if d <= PAINT_REACH && best.as_ref().is_none_or(|(bd, _, _)| d < *bd) {
+                best = Some((d, b, side));
+            }
+        }
+    }
+    best.map(|(_, b, side)| (b.story, b.table.clone(), b.row, b.cell, side))
+}
+
+/// Border Painter: paints the cell border nearest a click with the pen (one undo step).
+fn paint(s: &mut Session, v: &Value) -> CmdResult {
+    let page = page_param(v)?;
+    let (x, y) = (p::req_f32(v, "x")?, p::req_f32(v, "y")?);
+    let pen = pen_border(v)?;
+    let l = s.layout();
+    if l.pages.get(page).is_none() {
+        return Err(CmdError::Params(format!("no page {page}")));
+    }
+    let boxes = cell_boxes(&l, page);
+    let (story, tp, r, c, side) = nearest_edge(&boxes, x, y).ok_or_else(|| CmdError::Failed("there's no cell border there".into()))?;
+    let t = s.doc.table_mut(story, &tp)?;
+    set_side(t, r, c, side, pen);
+    super::table::touch_cells(s, &tp)?;
+    sel_result(s)
 }
 
 /// A one-cell table the size of `r`, at the paragraph under the stroke's start.

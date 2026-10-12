@@ -22,6 +22,7 @@ pub mod dialogs;
 pub mod dialogs_insert;
 pub mod dialogs_lists;
 pub mod dialogs_para;
+pub mod dialogs_table;
 pub mod equation_tab;
 pub mod file_dialogs;
 pub mod frame;
@@ -1200,6 +1201,15 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "insert.field" if !has("instr") => Some("field"),
         // Table Properties without settings shows the dialog (with settings it applies them).
         "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
+        // The table dialogs without their settings: each shows its dialog, and with settings runs the command.
+        "table.sort" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableSort"),
+        "table.formula" if !has("formula") => Some("tableFormula"),
+        "table.toText" if !has("separator") => Some("tableToText"),
+        "table.fromText" if !has("separator") => Some("tableFromText"),
+        "table.split" if !has("columns") && !has("rows") => Some("tableSplit"),
+        "table.deleteCells" if !has("shift") => Some("tableDeleteCells"),
+        "table.borders" if !has("kind") => Some("tableBorders"),
+        "table.position" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tablePosition"),
         // Tabs, Borders and Shading, and Page Borders without settings show their dialogs (#320).
         "para.tabs" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tabs"),
         "para.borders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("borders"),

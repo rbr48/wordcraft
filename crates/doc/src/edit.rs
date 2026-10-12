@@ -314,6 +314,12 @@ impl Document {
         Fragment { blocks, parts }
     }
 
+    /// A fragment of `blocks` taken from this document, with the text boxes they show.
+    pub fn fragment_from_blocks(&self, blocks: Vec<Block>) -> Fragment {
+        let parts = self.text_box_parts(&blocks);
+        Fragment { blocks, parts }
+    }
+
     /// The whole body as a fragment (with its text boxes), to insert into another document.
     pub fn body_fragment(&self) -> Fragment {
         let blocks: Vec<Block> = self.body.iter().map(|b| (**b).clone()).collect();
