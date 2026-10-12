@@ -183,3 +183,23 @@ fn explicit_alignment_sets_without_toggling() {
         }
     }
 }
+
+#[test]
+fn typing_kurdish_in_new_document_advances_caret_smoothly() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let mut first_x = None;
+    let mut last_x = 0.0;
+    for ch in ["م", "ن", " ", "ن", "ا", "و", "م", " ", "ه", "ێ", "ڤ", "ا", "ر", "ه"] {
+        run(&mut s, "text.insert", json!({"text": ch}));
+        let l = s.layout();
+        let c = l.caret(&s.sel.focus).unwrap();
+        if first_x.is_none() {
+            first_x = Some(c.x);
+        }
+        last_x = c.x;
+        // The caret must not jump back to the left margin (72.0), but stay near the right margin (540.0).
+        assert!(c.x > 400.0, "caret should not be at left margin: {}", c.x);
+    }
+    assert!(last_x < first_x.unwrap(), "caret should advance leftwards overall");
+    assert_eq!(props(&s, 0).bidi, Some(true), "paragraph auto-detected as right-to-left");
+}
