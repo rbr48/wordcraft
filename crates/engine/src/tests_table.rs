@@ -943,3 +943,390 @@ fn pasting_a_copied_sentence_over_selected_cells_fills_every_one_of_them() {
     assert_eq!(cell_text(t, 2, 1), "Column A");
     assert_eq!(cell_text(t, 3, 1), "Column A");
 }
+
+#[test]
+fn a_cell_range_grows_to_take_merged_cells_whole() {
+    let mut s = s();
+    matrix(&mut s);
+    // Column 0, rows 1-3 become one cell.
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 0, "r1": 3, "c1": 0}));
+    run(&mut s, "table.merge", json!({}));
+    // A range from the middle of that cell to its right neighbour takes all three rows.
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 2, "c0": 0, "r1": 2, "c1": 1}));
+    let col = s.column.as_ref().unwrap_or_else(|| panic!("no cell range"));
+    let rows: std::collections::BTreeSet<usize> = col.segments.iter().filter_map(|(a, _)| a.path.cell().map(|(_, r, _)| r)).collect();
+    assert_eq!(rows.into_iter().collect::<Vec<_>>(), vec![1, 2, 3]);
+    // Shading that range colours column 1 in all three rows, not row 2 alone.
+    run(&mut s, "table.shading", json!({"color": "FFCC00"}));
+    let t = table(&s);
+    assert!((1..=3).all(|r| t.rows[r].cells[1].props.shading.is_some()), "rows 1-3 of column 1 are shaded");
+    assert!(t.rows[0].cells[1].props.shading.is_none());
+}
+
+#[test]
+fn a_drag_selection_into_a_merged_cell_takes_it_whole() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 0, "r1": 3, "c1": 0}));
+    run(&mut s, "table.merge", json!({}));
+    // An ordinary selection from row 2's second cell into the merged cell, then Merge Cells.
+    let at = |r: u32, c: u32| json!({"story": "body", "path": [1, r, c, 0], "off": 0});
+    run(&mut s, "select.range", json!({"anchor": at(2, 1), "focus": at(1, 0)}));
+    run(&mut s, "table.merge", json!({}));
+    let t = table(&s);
+    assert_merges_valid(t);
+    // The merged cell (rows 1-3) and column 1 of those rows became one cell.
+    assert_eq!(t.rows[1].cells[0].span(), 2);
+    assert_eq!(t.rows[3].cells[0].props.vmerge, VMerge::Continue);
+}
+
+#[test]
+fn update_field_settles_formulas_that_read_other_formulas_below_them() {
+    let mut s = s();
+    matrix(&mut s);
+    let select = |s: &mut Session, r: u32, c: u32| {
+        let at = |off: usize| json!({"story": "body", "path": [1, r, c, 0], "off": off});
+        run(s, "select.range", json!({"anchor": at(0), "focus": at(1)}));
+    };
+    // D2 doubles D3; D3 is D4 plus one; D4 is a plain number.
+    select(&mut s, 1, 3);
+    run(&mut s, "table.formula", json!({"formula": "=D3*2"}));
+    select(&mut s, 2, 3);
+    run(&mut s, "table.formula", json!({"formula": "=D4+1"}));
+    assert_eq!(field_result(table(&s), 2, 3).as_deref(), Some("10"));
+    select(&mut s, 3, 3);
+    run(&mut s, "text.insert", json!({"text": "90"}));
+    run(&mut s, "references.updateFields", json!({}));
+    let t = table(&s);
+    assert_eq!(field_result(t, 2, 3).as_deref(), Some("91"));
+    assert_eq!(field_result(t, 1, 3).as_deref(), Some("182"), "D2 reads D3's new result, not the old one");
+}
+
+#[test]
+fn formulas_that_read_each_other_in_a_circle_stop_updating() {
+    let mut s = s();
+    matrix(&mut s);
+    let select = |s: &mut Session, r: u32, c: u32| {
+        let at = |off: usize| json!({"story": "body", "path": [1, r, c, 0], "off": off});
+        run(s, "select.range", json!({"anchor": at(0), "focus": at(1)}));
+    };
+    select(&mut s, 1, 1);
+    run(&mut s, "table.formula", json!({"formula": "=B3+1"}));
+    select(&mut s, 2, 1);
+    run(&mut s, "table.formula", json!({"formula": "=B2+1"}));
+    // Each pass adds one to both; the passes are bounded, so this returns.
+    run(&mut s, "references.updateFields", json!({}));
+    assert!(field_result(table(&s), 1, 1).is_some());
+}
+
+/// The page rectangles of row `r`'s cells, by cell index.
+fn row_cell_rects(s: &mut Session, r: usize) -> Vec<(usize, wordcraft_geom::Rect)> {
+    let l = s.layout();
+    let mut out: Vec<(usize, wordcraft_geom::Rect)> = l
+        .pages
+        .iter()
+        .flat_map(|pg| pg.items.iter())
+        .filter_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row, cell, table, .. } if *row == r && table.0.len() == 1 => Some((*cell, *rect)),
+            _ => None,
+        })
+        .collect();
+    out.sort_by_key(|x| x.0);
+    out
+}
+
+#[test]
+fn a_right_to_left_table_puts_its_first_column_on_the_right() {
+    let mut s = s();
+    matrix(&mut s);
+    let ltr = row_cell_rects(&mut s, 1);
+    assert!(ltr.windows(2).all(|w| w[0].1.x < w[1].1.x), "left to right first");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 1, 1, 0], "off": 0}}));
+    run(&mut s, "table.properties", json!({"rightToLeft": true}));
+    assert!(table(&s).props.rtl);
+    let rtl = row_cell_rects(&mut s, 1);
+    assert_eq!(rtl.len(), 4);
+    assert!(rtl.windows(2).all(|w| w[0].1.x > w[1].1.x), "cell 0 is the rightmost: {rtl:?}");
+    // The same columns, mirrored: the table's extent doesn't change for a table that fills the
+    // text column.
+    let span = |v: &[(usize, wordcraft_geom::Rect)]| {
+        let lo = v.iter().map(|x| x.1.x).fold(f32::MAX, f32::min);
+        let hi = v.iter().map(|x| x.1.right()).fold(f32::MIN, f32::max);
+        hi - lo
+    };
+    assert!((span(&ltr) - span(&rtl)).abs() < 0.5);
+    assert!((ltr[0].1.w - rtl[0].1.w).abs() < 0.01, "each column keeps its width");
+}
+
+#[test]
+fn a_right_to_left_table_survives_a_docx_round_trip() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 1, 1, 0], "off": 0}}));
+    run(&mut s, "table.properties", json!({"rightToLeft": true}));
+    let bytes = wordcraft_docx::write(&s.doc).unwrap_or_else(|e| panic!("{e}"));
+    let back = wordcraft_docx::read(&bytes).unwrap_or_else(|e| panic!("{e}"));
+    let t = back.body.iter().find_map(|b| b.as_table()).unwrap_or_else(|| panic!("no table"));
+    assert!(t.props.rtl);
+    // Turning it off writes no bidiVisual.
+    run(&mut s, "table.properties", json!({"rightToLeft": false}));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap_or_else(|e| panic!("{e}"))).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!back.body.iter().find_map(|b| b.as_table()).is_some_and(|t| t.props.rtl));
+}
+
+#[test]
+fn sort_by_several_keys_breaks_ties_with_the_next_key() {
+    let mut s = s();
+    text_table(&mut s, "Sales\tAnn\t3\nIT\tBob\t9\nSales\tCyd\t7\nIT\tDee\t2");
+    run(&mut s, "table.sort", json!({"keys": [{"column": 0, "type": "text"}, {"column": 2, "descending": true}]}));
+    let t = table(&s);
+    let names: Vec<String> = (0..t.rows.len()).map(|r| cell_text(t, r, 1)).collect();
+    assert_eq!(names, vec!["Bob", "Dee", "Cyd", "Ann"], "IT first, then by number, largest first");
+    assert!(s.run("table.sort", &json!({"keys": [{}, {}, {}, {}]})).is_err(), "Word's Sort takes three keys");
+    assert!(s.run("table.sort", &json!({"keys": []})).is_err());
+}
+
+#[test]
+fn sort_by_date_reads_the_dates_word_reads() {
+    let mut s = s();
+    text_table(&mut s, "12 October 2026\nnot a date\n2026-01-05\n3/4/2025\nOct 1, 2026");
+    run(&mut s, "table.sort", json!({"column": 0, "type": "date"}));
+    assert_eq!(first_column(table(&s)), vec!["3/4/2025", "2026-01-05", "Oct 1, 2026", "12 October 2026", "not a date"]);
+}
+
+#[test]
+fn sorting_with_rows_selected_moves_only_those_rows() {
+    let mut s = s();
+    text_table(&mut s, "5\n4\n3\n2\n1");
+    run(&mut s, "table.selectRange", json!({"path": "0", "r0": 1, "c0": 0, "r1": 3, "c1": 0}));
+    run(&mut s, "table.sort", json!({"column": 0}));
+    assert_eq!(first_column(table(&s)), vec!["5", "2", "3", "4", "1"]);
+}
+
+/// A session holding `n` floating tables (3 × 2, 200pt wide) at the same place on the page, each
+/// after a paragraph of text, with `overlap` as each table's Allow overlap.
+fn floating_tables(overlaps: &[bool]) -> Session {
+    use wordcraft_doc::para::Anchor;
+    let mut doc = wordcraft_doc::Document::new();
+    doc.body.clear();
+    for &overlap in overlaps {
+        doc.body.push(std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("Text before.", Default::default()))));
+        let mut t = Table::new(3, 2, 200.0);
+        t.props.float =
+            Some(wordcraft_doc::props::TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Page, x: 0.0, y: 144.0, overlap, ..Default::default() });
+        doc.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
+    }
+    let words = "Text that wraps beside the floating tables and must keep clear of them. ".repeat(40);
+    doc.body.push(std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text(&words, Default::default()))));
+    Session::new(doc)
+}
+
+/// The page area each table's cells cover, by the table's block index.
+fn table_areas(s: &mut Session) -> std::collections::BTreeMap<u32, wordcraft_geom::Rect> {
+    let l = s.layout();
+    let mut out: std::collections::BTreeMap<u32, wordcraft_geom::Rect> = Default::default();
+    for it in l.pages.first().map(|p| p.items.as_slice()).unwrap_or(&[]) {
+        if let wordcraft_layout::Placed::Cell { rect, table, .. } = it
+            && let [b] = table.0.as_slice()
+        {
+            let e = out.entry(*b).or_insert(*rect);
+            let (x0, y0) = (e.x.min(rect.x), e.y.min(rect.y));
+            let (x1, y1) = (e.right().max(rect.right()), e.bottom().max(rect.bottom()));
+            *e = wordcraft_geom::Rect::new(x0, y0, x1 - x0, y1 - y0);
+        }
+    }
+    out
+}
+
+#[test]
+fn a_floating_table_that_may_not_overlap_moves_below_the_one_in_its_way() {
+    let mut s = floating_tables(&[false, false]);
+    let areas = table_areas(&mut s);
+    let (a, b) = (areas[&1], areas[&3]);
+    assert!(!a.intersects(&b), "{a:?} and {b:?} must not overlap");
+    assert!(b.y >= a.bottom(), "the second goes below the first");
+    assert!((a.x - b.x).abs() < 0.5, "and keeps its horizontal place");
+}
+
+#[test]
+fn a_floating_table_that_may_overlap_stays_where_it_is_placed() {
+    let mut s = floating_tables(&[true, true]);
+    let areas = table_areas(&mut s);
+    let (a, b) = (areas[&1], areas[&3]);
+    assert!((a.y - b.y).abs() < 0.5 && (a.x - b.x).abs() < 0.5, "both at the place they ask for: {a:?} {b:?}");
+}
+
+#[test]
+fn text_keeps_clear_of_floating_tables() {
+    let mut s = floating_tables(&[false, false]);
+    let areas = table_areas(&mut s);
+    let l = s.layout();
+    let mut lines = 0;
+    for it in l.pages.first().map(|p| p.items.as_slice()).unwrap_or(&[]) {
+        let wordcraft_layout::Placed::Lines { para, l0, l1, x, y, path, .. } = it else { continue };
+        if path.0.len() != 1 {
+            continue;
+        }
+        let base = para.lines.get(*l0).map_or(0.0, |l| l.top);
+        for line in para.lines.get(*l0..*l1).unwrap_or(&[]) {
+            let top = y + line.top - base;
+            for v in &line.vis {
+                let r = wordcraft_geom::Rect::new(x + v.x, top, v.w.max(0.1), line.height);
+                for a in areas.values() {
+                    assert!(!r.inset(0.5, 0.5, 0.5, 0.5).intersects(a), "text at {r:?} runs into the table at {a:?}");
+                }
+            }
+            lines += 1;
+        }
+    }
+    assert!(lines > 10, "the text was laid out ({lines} lines)");
+}
+
+#[test]
+fn autofit_to_contents_keeps_fitting_as_you_type() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    run(&mut s, "table.autofit", json!({"mode": "contents"}));
+    let first = row_cell_rects(&mut s, 0);
+    // Typing a long line in the first cell after the fit widens its column, as Word's does.
+    run(&mut s, "text.insert", json!({"text": " much longer text in the first column"}));
+    let after = row_cell_rects(&mut s, 0);
+    assert!(after[0].1.w > first[0].1.w + 20.0, "the column grows with its text: {} -> {}", first[0].1.w, after[0].1.w);
+    // Fixed column width turns the live fit off again.
+    run(&mut s, "table.autofit", json!({"mode": "fixed"}));
+    let fixed = row_cell_rects(&mut s, 0);
+    run(&mut s, "text.insert", json!({"text": " and even more words that would widen it"}));
+    let still = row_cell_rects(&mut s, 0);
+    assert!((still[0].1.w - fixed[0].1.w).abs() < 0.5, "a fixed table keeps its widths");
+}
+
+/// Every cell box of the tables nested in the first table, and that table's first cell.
+fn nested_cells(s: &mut Session) -> (wordcraft_geom::Rect, Vec<wordcraft_geom::Rect>) {
+    let l = s.layout();
+    let (mut outer, mut inner) = (None, Vec::new());
+    for it in l.pages.iter().flat_map(|p| p.items.iter()) {
+        if let wordcraft_layout::Placed::Cell { rect, table, row, cell, .. } = it {
+            if table.0.len() == 1 && (*row, *cell) == (0, 0) {
+                outer = Some(*rect);
+            } else if table.0.len() > 1 {
+                inner.push(*rect);
+            }
+        }
+    }
+    (outer.unwrap_or_else(|| panic!("no outer cell")), inner)
+}
+
+#[test]
+fn a_table_inserted_in_a_cell_fits_the_cell() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let inner_tp = s.sel.focus.path.cell().unwrap_or_else(|| panic!("caret in the nested table")).0;
+    let w: f32 = s.doc.table(s.sel.focus.story, &inner_tp).map(|t| t.grid.iter().sum()).unwrap_or(0.0);
+    assert!(w < 234.0, "the nested table is narrower than its 234pt cell, not the page's 468pt: {w}");
+    let (outer, inner) = nested_cells(&mut s);
+    assert_eq!(inner.len(), 4);
+    assert!(inner.iter().all(|r| r.x >= outer.x - 0.5 && r.right() <= outer.right() + 0.5), "inside {outer:?}: {inner:?}");
+}
+
+#[test]
+fn autofit_to_window_in_a_nested_table_fills_its_cell_not_the_page() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "table.autofit", json!({"mode": "window"}));
+    let (outer, inner) = nested_cells(&mut s);
+    assert!(inner.iter().all(|r| r.right() <= outer.right() + 0.5), "inside {outer:?}: {inner:?}");
+    let span = inner.iter().map(|r| r.right()).fold(f32::MIN, f32::max) - inner.iter().map(|r| r.x).fold(f32::MAX, f32::min);
+    assert!(span > outer.w - 20.0, "and fills it: {span} of {}", outer.w);
+}
+
+/// Every cell box on every page: (page, table path, row, cell, rect).
+fn cell_boxes(s: &mut Session) -> Vec<(usize, wordcraft_doc::Path, usize, usize, wordcraft_geom::Rect)> {
+    let l = s.layout();
+    let mut out = Vec::new();
+    for (pi, pg) in l.pages.iter().enumerate() {
+        for it in &pg.items {
+            if let wordcraft_layout::Placed::Cell { rect, table, row, cell, .. } = it {
+                out.push((pi, table.clone(), *row, *cell, *rect));
+            }
+        }
+    }
+    out
+}
+
+/// Where a click at the middle of `r` (low part when `low`) on page `pi` puts the caret.
+fn click(s: &mut Session, pi: usize, r: wordcraft_geom::Rect, low: bool) -> wordcraft_doc::Pos {
+    let y = if low { r.bottom() - 3.0 } else { r.y + r.h / 2.0 };
+    let l = s.layout();
+    l.hit(pi, r.x + r.w / 2.0, y, wordcraft_doc::StoryRef::Body).unwrap_or_else(|| panic!("no hit at {r:?}"))
+}
+
+#[test]
+fn a_click_low_in_a_vertically_merged_cell_lands_in_it() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 1, "r1": 3, "c1": 1}));
+    run(&mut s, "table.merge", json!({}));
+    let merged = cell_boxes(&mut s).into_iter().find(|b| b.1.0 == [1] && (b.2, b.3) == (1, 1)).unwrap_or_else(|| panic!("no merged cell"));
+    // Low in the merged cell is beside row 3, yet the caret goes into the merged cell's text.
+    let pos = click(&mut s, merged.0, merged.4, true);
+    let (_, r, c) = pos.path.cell().unwrap_or_else(|| panic!("not in a cell: {pos:?}"));
+    assert_eq!((r, c), (1, 1), "the merged cell (row 1), not a continuation: {pos:?}");
+}
+
+#[test]
+fn a_click_in_a_nested_table_lands_in_its_cell() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let inner = cell_boxes(&mut s).into_iter().find(|b| b.1.0.len() > 1 && (b.2, b.3) == (1, 1)).unwrap_or_else(|| panic!("no nested cell"));
+    let pos = click(&mut s, inner.0, inner.4, false);
+    let (tp, r, c) = pos.path.cell().unwrap_or_else(|| panic!("not in a cell"));
+    assert_eq!((tp, r, c), (inner.1.clone(), 1, 1), "{pos:?}");
+}
+
+#[test]
+fn a_click_on_the_part_of_a_row_carried_to_the_next_page_lands_in_that_row() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    // The second row holds more lines than a page: it splits across pages.
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0, 1, 0, 0], "off": 0}}));
+    for _ in 0..80 {
+        run(&mut s, "text.insert", json!({"text": "line"}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    let boxes = cell_boxes(&mut s);
+    let later =
+        boxes.iter().find(|b| b.0 == 1 && b.1.0 == [0] && (b.2, b.3) == (1, 0)).cloned().unwrap_or_else(|| panic!("row 1 doesn't reach page 2"));
+    let pos = click(&mut s, later.0, later.4, false);
+    let (_, r, c) = pos.path.cell().unwrap_or_else(|| panic!("not in a cell: {pos:?}"));
+    assert_eq!((r, c), (1, 0), "{pos:?}");
+    let block = pos.path.0.get(3).copied().unwrap_or(0);
+    assert!(block > 20, "a paragraph from the part on page 2, not the row's start: {pos:?}");
+}
+
+/// Typing in a large table relays it out quickly. Measured 2026-10-12: about 70ms a keystroke
+/// with its layout in a 1000 × 6 table (60ms when the table is fixed), against about 200ms for
+/// the first layout. The bound is generous (a shared machine); it catches a quadratic step, such
+/// as a keystroke that walks every cell of every row once per cell.
+#[test]
+fn typing_in_a_large_table_relays_it_out_in_moderate_time() {
+    let mut s = large_table(1000, 6);
+    let pages = s.layout().pages.len();
+    assert!(pages > 10, "the table runs over many pages: {pages}");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 500, 2, 0], "off": 0}}));
+    let start = std::time::Instant::now();
+    for _ in 0..10 {
+        run(&mut s, "text.insert", json!({"text": "x"}));
+        let _ = s.layout();
+    }
+    let per = start.elapsed() / 10;
+    assert!(per.as_millis() < 1500, "a keystroke with its layout took {per:?} in a 1000 × 6 table");
+    let start = std::time::Instant::now();
+    run(&mut s, "table.insertRowBelow", json!({}));
+    run(&mut s, "table.selectColumn", json!({}));
+    let _ = s.layout();
+    assert!(start.elapsed().as_millis() < 3000, "a row insert and a column selection took {:?}", start.elapsed());
+}

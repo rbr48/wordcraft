@@ -505,7 +505,16 @@ impl Builder<'_> {
             let mut row = wordcraft_doc::Row { props: RowProps::default(), cells: Vec::new() };
             row.props.header = !r.is_empty() && r.iter().all(|c| c.header);
             let mut g = 0usize;
-            for c in r.iter().take(wordcraft_doc::table::MAX_COLS) {
+            for c in r.iter() {
+                // A row already as wide as the table can be: what is left of it goes into its last
+                // cell, so a cell past the column limit loses neither its text nor the grid.
+                if g >= cols
+                    && let Some(last) = row.cells.last_mut()
+                {
+                    let extra = self.blocks(&c.blocks, depth + 1);
+                    last.blocks.extend(extra.into_iter().filter(|b| b.as_para().is_none_or(|p| !p.is_empty())));
+                    continue;
+                }
                 let span = (c.colspan.clamp(1, 63) as usize).min(cols.saturating_sub(g).max(1));
                 let w: f32 = tb.grid.get(g..(g + span).min(tb.grid.len())).map(|s| s.iter().sum()).unwrap_or(72.0);
                 g += span;
@@ -530,6 +539,10 @@ impl Builder<'_> {
             }
             tb.rows.push(row);
         }
+        // A covered cell with nothing spanning into it from above (RTF's \clvmrg with no \clvmgf,
+        // ODT's covered cell under nothing) would be drawn as nothing: it becomes an ordinary cell
+        // so its text shows.
+        tb.repair_orphan_continues();
         Some(tb)
     }
 }

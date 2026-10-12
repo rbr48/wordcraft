@@ -159,7 +159,7 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })),
         t(CommandSpec::new("table.sort", "Sort", "Table Layout › Data", sort_table)
-            .params(r#"{"column"?: n (grid column, 0 = first), "descending"?: bool, "header"?: bool, "type"?: "number|text"}"#)),
+            .params(r#"{"keys"?: [{"column": n, "type"?: "number|text|date", "descending"?: bool}] (up to 3), "column"?: n (grid column, 0 = first), "descending"?: bool, "header"?: bool, "type"?: "number|text|date"} (several selected rows: only those are sorted)"#)),
         t(CommandSpec::new("table.toText", "Convert to Text", "Table Layout › Data", to_text).params(r#"{"separator"?: "tab|comma|paragraph|other", "char"?: "x"}"#)),
         t(CommandSpec::new("table.formula", "Formula", "Table Layout › Data", formula).params(r#"{"formula"?: "=SUM(ABOVE)"}"#)),
         CommandSpec::new("table.selectTable", "Select Table", "Table Layout › Table › Select", |s, v| {
@@ -222,7 +222,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path"?: "0.1", "r0"?: n, "c0"?: n, "r1"?: n, "c1"?: n}"#)
         .pure(),
         t(CommandSpec::new("table.properties", "Properties", "Table Layout › Table", properties).params(
-            r#"{"align"?: "left|center|right", "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "cellSpacing"?: pt|null, "altText"?: string, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom"} (row, column and cell settings apply to the caret's; without settings it returns the current ones)"#,
+            r#"{"align"?: "left|center|right", "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "cellSpacing"?: pt|null, "altText"?: string, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom", "rightToLeft"?: bool} (row, column and cell settings apply to the caret's; without settings it returns the current ones)"#,
         )),
         CommandSpec::new("table.position", "Table Positioning", "Table Layout › Table", position)
             .params(r#"{"floating"?: bool, "hRel"?: "column|margin|page", "hAlign"?: "left|center|right", "x"?: pt, "vRel"?: "paragraph|margin|page", "vAlign"?: "top|center|bottom", "y"?: pt, "dist"?: [left, top, right, bottom] pt, "overlap"?: bool} (floating: false puts the table back in the text)"#),
@@ -237,7 +237,8 @@ fn autofit(s: &mut Session, v: &Value) -> CmdResult {
     let mode = p::str(v, "mode").unwrap_or("window");
     let (tp, _, _) = cell(s)?;
     let story = s.sel.focus.story;
-    let tw = super::page::sect(s).text_width();
+    // A nested table fills its cell, not the page.
+    let tw = room_at(s, &tp);
     match mode {
         "fixed" => with_table(s, |t| t.props.fixed = true),
         "contents" => {
@@ -414,6 +415,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
         "columnWidth",
         "cellWidth",
         "valign",
+        "rightToLeft",
     ];
     if !keys.iter().any(|k| v.get(*k).is_some()) {
         let t = s.doc.table(s.sel.focus.story, &tp).cloned().unwrap_or_default();
@@ -465,7 +467,8 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     let header = p::bool(v, "headerRow");
     let column_width = p::f32(v, "columnWidth").map(|x| x.clamp(6.0, 1584.0));
     let cell_width = size("cellWidth", 6.0, 1584.0);
-    let text_width = super::page::sect(s).text_width();
+    let rtl = p::bool(v, "rightToLeft");
+    let text_width = room_at(s, &tp);
     with_table(s, |t| {
         if let Some(a) = align {
             t.props.align = Some(a);
@@ -475,6 +478,9 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
         }
         if let Some(sp) = cell_spacing {
             t.props.cell_spacing = sp;
+        }
+        if let Some(r) = rtl {
+            t.props.rtl = r;
         }
         if let Some(a) = &alt_text {
             t.props.caption = (!a.is_empty()).then(|| a.clone());
@@ -529,6 +535,23 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
+/// The width a block at `at` has to fill: inside a table cell, the cell's columns less its side
+/// margins (so a nested table fits its cell, as in Word); elsewhere the section's text width.
+pub(crate) fn room_at(s: &Session, at: &Path) -> f32 {
+    let page = super::page::sect(s).text_width();
+    let Some((tp, r, c)) = at.cell() else { return page };
+    let Some(t) = s.doc.table(at_story(s), &tp) else { return page };
+    let g = t.grid_col(r, c);
+    let Some(cell) = t.rows.get(r).and_then(|row| row.cells.get(c)) else { return page };
+    let cols: f32 = t.grid.get(g..(g + cell.span()).min(t.grid.len())).unwrap_or(&[]).iter().filter(|w| w.is_finite()).sum();
+    let m = cell.props.margins.or(t.props.cell_margins).unwrap_or([0.0, 5.4, 0.0, 5.4]);
+    (cols - m[1].max(0.0) - m[3].max(0.0)).clamp(18.0, page.max(18.0))
+}
+
+fn at_story(s: &Session) -> wordcraft_doc::StoryRef {
+    s.sel.focus.story
+}
+
 fn cell(s: &Session) -> Result<(Path, usize, usize), CmdError> {
     s.sel.focus.path.cell().ok_or_else(|| CmdError::Disabled("the cursor isn't in a table".into()))
 }
@@ -565,8 +588,9 @@ fn selected_cells(s: &Session) -> Vec<(usize, usize)> {
         let span_b = t.rows.get(rb).and_then(|r| r.cells.get(cb)).map(|c| c.span()).unwrap_or(1);
         let ga = t.grid_col(ra, ca);
         let gb = t.grid_col(rb, cb);
-        let g0 = ga.min(gb);
-        let g1 = (ga + span_a - 1).max(gb + span_b - 1);
+        // Vertically merged cells the selection touches are part of it whole.
+        let (g0, g1) = (ga.min(gb), (ga + span_a - 1).max(gb + span_b - 1));
+        let (r0, r1) = t.whole_rows(r0, r1, g0, g1);
         let mut v = Vec::new();
         for r in r0..=r1 {
             let mut seen_in_row = std::collections::BTreeSet::new();
@@ -1055,43 +1079,130 @@ fn compare_keys(a: &SortKey, b: &SortKey) -> std::cmp::Ordering {
     }
 }
 
-/// Table Layout › Data › Sort: reorders the rows below the header by the cell in grid column
-/// `column` (0 is the first column). `type` is `number` (numbers first, by value, then text) or
-/// `text`. Rows with a vertically merged cell can't move with their rows, so they are refused.
-fn sort_table(s: &mut Session, v: &Value) -> CmdResult {
-    let col = p::u64(v, "column").unwrap_or(0) as usize;
-    let desc = p::bool(v, "descending").unwrap_or(false);
-    let header = p::bool(v, "header");
-    let text_only = match p::str(v, "type").unwrap_or("number") {
-        "text" => true,
-        "number" => false,
-        x => return Err(CmdError::Params(format!("unknown sort type `{x}`"))),
+/// One sort key: a grid column, how its text is read and the direction.
+struct SortSpec {
+    col: usize,
+    kind: SortType,
+    desc: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SortType {
+    Number,
+    Text,
+    Date,
+}
+
+/// The sort keys a `table.sort` call names: `keys` (up to three, Word's Sort by / Then by / Then
+/// by), else the single `column`, `type` and `descending`.
+fn sort_specs(v: &Value) -> Result<Vec<SortSpec>, CmdError> {
+    let one = |k: &Value| -> Result<SortSpec, CmdError> {
+        let kind = match p::str(k, "type").unwrap_or("number") {
+            "number" => SortType::Number,
+            "text" => SortType::Text,
+            "date" => SortType::Date,
+            x => return Err(CmdError::Params(format!("unknown sort type `{x}`"))),
+        };
+        Ok(SortSpec {
+            col: p::u64(k, "column").unwrap_or(0).min(wordcraft_doc::table::MAX_COLS as u64) as usize,
+            kind,
+            desc: p::bool(k, "descending").unwrap_or(false),
+        })
     };
+    match v.get("keys").and_then(Value::as_array) {
+        Some(keys) if keys.is_empty() => Err(CmdError::Params("`keys` needs at least one sort key".into())),
+        Some(keys) if keys.len() > 3 => Err(CmdError::Params("a sort takes at most three keys".into())),
+        Some(keys) => keys.iter().map(one).collect(),
+        None => Ok(vec![one(v)?]),
+    }
+}
+
+/// A cell's sort key under its type: dates sort as their day number, before text.
+fn typed_key(text: &str, kind: SortType) -> SortKey {
+    match kind {
+        SortType::Number => sort_key(text, false),
+        SortType::Text => sort_key(text, true),
+        SortType::Date => match parse_date(text) {
+            Some(day) => SortKey::Number(day as f64),
+            None => sort_key(text, true),
+        },
+    }
+}
+
+/// A date as Word's Sort reads one: `2026-10-12`, `10/12/2026` (month first, as Word does in
+/// English), `12 October 2026`, `October 12, 2026` or `Oct 12 2026`. The day number since
+/// 1970-01-01, or `None` when the text is no date.
+fn parse_date(text: &str) -> Option<i64> {
+    let t = text.trim();
+    let valid = |y: i64, m: i64, d: i64| (1..=9999).contains(&y) && (1..=12).contains(&m) && d >= 1 && d <= days_in_month(y, m);
+    let num = |s: &str| s.trim().parse::<i64>().ok();
+    for sep in ['-', '/', '.'] {
+        let parts: Vec<&str> = t.split(sep).collect();
+        if let [a, b, c] = parts.as_slice() {
+            let (a, b, c) = (num(a)?, num(b)?, num(c)?);
+            // Year first (ISO), else month first.
+            let (y, m, d) = if a > 31 { (a, b, c) } else { (if c < 100 { c + 2000 } else { c }, a, b) };
+            return valid(y, m, d).then(|| days_from_civil(y, m, d));
+        }
+    }
+    let words: Vec<String> = t.split(|ch: char| ch.is_whitespace() || ch == ',').filter(|w| !w.is_empty()).map(str::to_lowercase).collect();
+    let month = |w: &str| MONTHS.iter().position(|m| w.len() >= 3 && m.to_lowercase().starts_with(w)).map(|i| i as i64 + 1);
+    let (m, d, y) = match words.as_slice() {
+        [a, b, c] if month(a).is_some() => (month(a)?, num(b)?, num(c)?),
+        [a, b, c] if month(b).is_some() => (month(b)?, num(a)?, num(c)?),
+        _ => return None,
+    };
+    valid(y, m, d).then(|| days_from_civil(y, m, d))
+}
+
+/// Table Layout › Data › Sort: reorders rows by up to three keys (`keys`, each a grid `column`
+/// with 0 the first, a `type` of `number`, `text` or `date`, and `descending`), or by the single
+/// `column`, `type` and `descending`. With several rows selected only those rows move, as in
+/// Word; otherwise every row below the header. Rows with merged cells can't move with their rows,
+/// so such a table is refused.
+fn sort_table(s: &mut Session, v: &Value) -> CmdResult {
+    let specs = sort_specs(v)?;
+    let header = p::bool(v, "header");
     let (tp, _, _) = cell(s)?;
     let story = s.sel.focus.story;
-    let (skip, order) = {
+    let selected: std::collections::BTreeSet<usize> =
+        if s.column_segments().is_some() { selected_cells(s).into_iter().map(|x| x.0).collect() } else { Default::default() };
+    let (lo, order) = {
         let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
         let skip = usize::from(header.unwrap_or(t.rows.first().is_some_and(|r| r.props.header))).min(t.rows.len());
-        let body = t.rows.get(skip..).unwrap_or(&[]);
+        // The rows that move: the selected ones when the selection spans rows, else the body.
+        let (lo, hi) = match (selected.first(), selected.last()) {
+            (Some(&a), Some(&b)) if b > a => (a.max(skip), (b + 1).min(t.rows.len())),
+            _ => (skip, t.rows.len()),
+        };
         // Word refuses to sort any table with merged cells, horizontal spans included.
         if t.rows.iter().any(|row| row.cells.iter().any(|c| c.props.vmerge != VMerge::None || c.span() > 1)) {
             return Err(CmdError::Failed("a table with merged cells can't be sorted; unmerge them first".into()));
         }
-        // One key per row, from the cell covering the grid column (rows may differ in their cells).
-        let mut keyed: Vec<(SortKey, usize)> = body.iter().enumerate().map(|(i, row)| (sort_key(&row_text_at(row, col), text_only), i)).collect();
+        let body = t.rows.get(lo..hi).unwrap_or(&[]);
+        // Each row's keys, from the cells covering the key columns (rows may differ in their cells).
+        let mut keyed: Vec<(Vec<SortKey>, usize)> =
+            body.iter().enumerate().map(|(i, row)| (specs.iter().map(|k| typed_key(&row_text_at(row, k.col), k.kind)).collect(), i)).collect();
         keyed.sort_by(|a, b| {
-            let o = compare_keys(&a.0, &b.0);
-            if desc { o.reverse() } else { o }
+            specs
+                .iter()
+                .zip(a.0.iter().zip(&b.0))
+                .map(|(k, (x, y))| {
+                    let o = compare_keys(x, y);
+                    if k.desc { o.reverse() } else { o }
+                })
+                .find(|o| o.is_ne())
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
-        (skip, keyed.into_iter().map(|(_, i)| i).collect::<Vec<usize>>())
+        (lo, keyed.into_iter().map(|(_, i)| i).collect::<Vec<usize>>())
     };
     let t = s.doc.table_mut(story, &tp)?;
-    let mut rows: Vec<Option<wordcraft_doc::Row>> = t.rows.drain(skip..).map(Some).collect();
-    for i in order {
-        if let Some(row) = rows.get_mut(i).and_then(Option::take) {
-            t.rows.push(row);
-        }
-    }
+    let hi = (lo + order.len()).min(t.rows.len());
+    let mut moving: Vec<Option<wordcraft_doc::Row>> = t.rows.drain(lo..hi).map(Some).collect();
+    let sorted: Vec<wordcraft_doc::Row> = order.into_iter().filter_map(|i| moving.get_mut(i).and_then(Option::take)).collect();
+    let tail = t.rows.split_off(lo.min(t.rows.len()));
+    t.rows.extend(sorted);
+    t.rows.extend(tail);
     touch_cells(s, &tp)?;
     sel_result(s)
 }
@@ -1662,6 +1773,8 @@ pub fn select_grid_range(s: &mut Session, tp: &Path, min_r: usize, min_g: usize,
         return Err(CmdError::Params(format!("the table has no column {g0}")));
     }
     let g1 = g1.min(cols - 1);
+    // Vertically merged cells are selected whole, as Word grows a selection over them.
+    let (r0, r1) = t.whole_rows(r0, r1, g0, g1);
     // The cells covering the rectangle, row by row, in document order.
     let mut chosen: Vec<(usize, usize)> = Vec::new();
     for r in r0..=r1 {
@@ -1772,7 +1885,7 @@ fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     if rows.len() > wordcraft_doc::table::MAX_ROWS {
         return Err(CmdError::Failed(format!("the text has {} rows, but a table can have at most {}", rows.len(), wordcraft_doc::table::MAX_ROWS)));
     }
-    let width = super::page::sect(s).text_width();
+    let width = room_at(s, &a.path);
     let mut t = Table::new(rows.len().max(1), cols.max(1), width);
     for (r, cells) in rows.into_iter().enumerate() {
         for (c, para) in cells.into_iter().enumerate() {
@@ -1916,7 +2029,7 @@ fn quick_table(s: &mut Session, v: &Value) -> CmdResult {
         x => return Err(CmdError::Params(format!("unknown quick table `{x}`"))),
     };
     let cols = if calendar { 7 } else { data.iter().map(Vec::len).max().unwrap_or(1) };
-    let width = super::page::sect(s).text_width();
+    let width = room_at(s, &s.sel.focus.path);
     let mut t = Table::new(data.len(), cols, width);
     t.props.style = Some(style.into());
     for (r, row) in data.iter().enumerate() {

@@ -1670,6 +1670,28 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             let _ = app.run("para.indents", json!({"right": (pt / 4.5).round() * 4.5}));
         }
     }
+    // Table column markers (#49, #217): with the caret in a table, a marker at each cell boundary
+    // of the caret's row; dragging one sets that column's width, as dragging the border does.
+    if let Some((tp, row, _)) = app.session.sel.focus.path.cell() {
+        let story = app.session.sel.focus.story;
+        let rtl = app.session.doc.table(story, &tp).is_some_and(|t| t.props.rtl);
+        for (ci, rect, edge) in table_column_marks(page, &tp, row, story, rtl) {
+            let sx = x0 + edge * scale;
+            hp.rect_filled(Rect::from_center_size(pos2(sx, bar.center().y), vec2(5.0, (bar.height() - 4.0).max(2.0))), 1.0, t.ruler_tick);
+            let zone = Rect::from_center_size(pos2(sx, bar.center().y), vec2(9.0, bar.height()));
+            let r = ui.interact(zone, ui.id().with(("ruler_col", ci)), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            if r.dragged()
+                && let Some(pp) = r.interact_pointer_pos()
+            {
+                let at = (pp.x - x0) / scale;
+                let w = if rtl { rect.right() - at } else { at - rect.x };
+                if !r.drag_started() {
+                    app.session.join_next_undo();
+                }
+                let _ = app.run("table.columnWidth", json!({"path": tp.to_string(), "row": row, "col": ci, "width": w.max(6.0)}));
+            }
+        }
+    }
     // Vertical.
     let vp = ui.painter_at(v);
     let y0 = pr.min.y;
@@ -1699,6 +1721,30 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             break;
         }
     }
+}
+
+/// The ruler's column markers for row `row` of table `tp` on a page: each cell's index, its box
+/// and the page x of its trailing edge (the right one; the left one in a right-to-left table).
+fn table_column_marks(
+    page: &wordcraft_layout::Page,
+    tp: &wordcraft_doc::Path,
+    row: usize,
+    story: wordcraft_doc::StoryRef,
+    rtl: bool,
+) -> Vec<(usize, wordcraft_geom::Rect, f32)> {
+    let mut cells: Vec<(usize, wordcraft_geom::Rect)> = page
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, table, row: r, cell, story: st } if table == tp && *r == row && *st == story => {
+                Some((*cell, *rect))
+            }
+            _ => None,
+        })
+        .collect();
+    cells.sort_by_key(|c| c.0);
+    cells.dedup_by_key(|c| c.0);
+    cells.into_iter().map(|(ci, rect)| (ci, rect, if rtl { rect.x } else { rect.right() })).collect()
 }
 
 /// One edge of a page's text area on a ruler.
@@ -1955,13 +2001,13 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
         });
         ui.menu_button(tl!("Delete"), |ui| {
-            item(ui, app, "Delete Cells…", "table.deleteCells", json!({}));
+            item(ui, app, "Delete Cells…", "ui.dialog", json!({"name": "tableDeleteCells"}));
             item(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
             item(ui, app, "Delete Rows", "table.deleteRow", json!({}));
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));
         });
         item(ui, app, "Merge Cells", "table.merge", json!({}));
-        item(ui, app, "Split Cells…", "table.split", json!({}));
+        item(ui, app, "Split Cells…", "ui.dialog", json!({"name": "tableSplit"}));
         ui.menu_button(tl!("Cell Alignment"), |ui| {
             item(ui, app, "Top Left", "table.cellAlign", json!({"value": "topLeft"}));
             item(ui, app, "Top Center", "table.cellAlign", json!({"value": "topCenter"}));
@@ -2017,6 +2063,31 @@ fn is_followable_link(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #49, #217: the ruler marks each cell boundary of the caret's row, at the cell's right
+    /// edge (its left edge in a right-to-left table).
+    #[test]
+    fn the_ruler_marks_the_column_boundaries_of_the_caret_row() {
+        let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        s.run("insert.table", &json!({"rows": 2, "cols": 3})).unwrap();
+        let (tp, row, _) = s.sel.focus.path.cell().unwrap();
+        let story = s.sel.focus.story;
+        let l = s.layout();
+        let marks = table_column_marks(&l.pages[0], &tp, row, story, false);
+        assert_eq!(marks.iter().map(|m| m.0).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert!(marks.iter().all(|(_, r, e)| (*e - r.right()).abs() < 0.01));
+        assert!(marks.windows(2).all(|w| w[0].2 < w[1].2), "left to right");
+        s.run("table.properties", &json!({"rightToLeft": true})).unwrap();
+        let l = s.layout();
+        let marks = table_column_marks(&l.pages[0], &tp, row, story, true);
+        assert!(marks.iter().all(|(_, r, e)| (*e - r.x).abs() < 0.01), "the trailing edge is the left one");
+        assert!(marks.windows(2).all(|w| w[0].2 > w[1].2), "cell 0 is the rightmost");
+        // Dragging a marker runs Table Column Width for that cell.
+        let before = s.doc.table(story, &tp).unwrap().grid.clone();
+        s.run("table.columnWidth", &json!({"path": tp.to_string(), "row": row, "col": 1, "width": 100.0})).unwrap();
+        let after = s.doc.table(story, &tp).unwrap().grid.clone();
+        assert_eq!((after[0], after[1]), (before[0], 100.0));
+    }
 
     /// #167: dragging a ruler's margin edge sets that margin, snapped, never negative, and
     /// always leaving an inch of text.

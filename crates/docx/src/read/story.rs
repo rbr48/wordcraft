@@ -990,7 +990,7 @@ impl Reader<'_> {
             }
             let mut tcs = Vec::new();
             collect(tr, "w:tc", &mut tcs, 0);
-            for tc in tcs.into_iter().take(MAX_COLS) {
+            for tc in tcs {
                 let (mut props, hcont) = tc
                     .child("w:tcPr")
                     .map(|p| tcpr(&self.pc, p))
@@ -1006,6 +1006,13 @@ impl Reader<'_> {
                 let mut blocks = Blocks::new();
                 self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
                 self.flush_pending(sc, &mut blocks);
+                // A row already as wide as a table can be: a cell past the limit gives its text to
+                // the row's last cell instead of being dropped.
+                let wide = row.cells.iter().map(Cell::span).sum::<usize>() >= MAX_COLS;
+                if wide && let Some(last) = row.cells.last_mut() {
+                    last.blocks.extend(blocks.into_iter().filter(|b| b.as_para().is_none_or(|p| !p.is_empty())));
+                    continue;
+                }
                 row.cells.push(Cell { props, blocks });
             }
             if !row.cells.is_empty() {

@@ -378,6 +378,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         }
         _ => indent - first_cell_left_margin_in(t, margins_def),
     };
+    // A right-to-left table is laid out as its mirror image: its indent and alignment count from
+    // the right edge, and its first column is on the right.
+    let rtl = t.props.rtl;
+    let x = if rtl { avail - outer - x } else { x };
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;
     // First pass: lay out every cell's content.
@@ -411,7 +415,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let span = cell.span();
             let x0 = colx.get(g).copied().unwrap_or(acc) + gap * (g + 1) as f32;
             let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc) + gap * (g + span) as f32;
-            let margins = cell.props.margins.unwrap_or(margins_def);
+            let (x0, x1) = if rtl { (outer - x1, outer - x0) } else { (x0, x1) };
+            // From here on `margins` and `borders` are by the side they are drawn on: in a
+            // right-to-left table a cell's left (leading) side is its right one.
+            let m = cell.props.margins.unwrap_or(margins_def);
+            let margins = if rtl { [m[0], m[3], m[2], m[1]] } else { m };
             let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             let mut fill = cell.props.shading;
             let region = region_of(t, style.as_ref(), ri, g, span, ncols);
@@ -466,6 +474,9 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 between: None,
                 inside_v: None,
             };
+            if rtl {
+                std::mem::swap(&mut borders.left, &mut borders.right);
+            }
             if is_total
                 && parts.is_none_or(|p| p.total_borders.is_none_or(|b| b.top.is_none()))
                 && let Some(b) = parts.and_then(|p| p.total_border_top)

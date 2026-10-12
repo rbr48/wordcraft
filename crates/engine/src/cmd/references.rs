@@ -332,8 +332,57 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
         }
         para.touch();
     }
+    settle_table_formulas(s)?;
     super::citations::update_citations(s)?;
     update_toc(s)
+}
+
+/// The most extra passes over the table formulas: enough for chains of totals, and a bound for
+/// formulas that read each other in a circle (Word leaves those at whatever they last showed).
+const FORMULA_PASSES: usize = 16;
+
+/// Table formulas read the cells' text, and a cell can hold another formula's result. The pass
+/// above works in document order, so a formula that reads one below or to its right got that
+/// one's old result: work them all out again until none changes.
+fn settle_table_formulas(s: &mut Session) -> Result<(), CmdError> {
+    let mut formulas: Vec<(wordcraft_doc::Path, usize)> = Vec::new();
+    for path in s.doc.para_paths(StoryRef::Body) {
+        if path.cell().is_none() {
+            continue;
+        }
+        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        for (k, o) in p.objects.iter().enumerate() {
+            if let InlineObject::Field { instr, locked: false, .. } = o
+                && instr.trim_start().starts_with('=')
+            {
+                formulas.push((path.clone(), k));
+            }
+        }
+    }
+    if formulas.len() < 2 {
+        return Ok(());
+    }
+    for _ in 0..FORMULA_PASSES {
+        let mut changed = false;
+        for (path, k) in &formulas {
+            let Some((tp, r, c)) = path.cell() else { continue };
+            let (Some(t), Some(p)) = (s.doc.table(StoryRef::Body, &tp), s.doc.para(StoryRef::Body, path)) else { continue };
+            let Some(InlineObject::Field { instr, result, .. }) = p.objects.get(*k) else { continue };
+            let text = super::table_formula::evaluate_field(t, r, c, instr).unwrap_or_else(|e| format!("!{e}"));
+            if text != *result {
+                let para = s.doc.para_mut(StoryRef::Body, path)?;
+                if let Some(InlineObject::Field { result, .. }) = para.objects.get_mut(*k) {
+                    *result = text;
+                }
+                para.touch();
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// A field's `\@` date picture: the quoted text after it (switches may follow), or one word.
