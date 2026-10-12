@@ -571,33 +571,27 @@ impl Table {
         (r0, r1)
     }
 
-    /// The smallest rectangle (rows `r0..=r1`, grid columns `g0..=g1`) that holds the given one
-    /// and every cell it touches whole: a cell spanning columns or merged across rows is selected
-    /// as one, as Word grows a selection over merged cells.
-    pub fn whole_cells(&self, mut r0: usize, mut r1: usize, mut g0: usize, mut g1: usize) -> (usize, usize, usize, usize) {
-        let last_row = self.rows.len().saturating_sub(1);
-        r1 = r1.min(last_row);
-        // Each pass only grows the rectangle, so it settles within rows + columns passes.
-        for _ in 0..=(self.rows.len() + self.cols()) {
-            let before = (r0, r1, g0, g1);
-            let (rows, cols) = (before.0..=before.1, before.2..=before.3);
-            for r in rows {
-                for g in cols.clone() {
+    /// The rows the rectangle (rows `r0..=r1`, grid columns `g0..=g1`) must cover to hold every
+    /// vertically merged cell it touches whole, as Word grows a selection over merged cells. A
+    /// cell spanning columns is already one cell, so the columns stay as they are.
+    pub fn whole_rows(&self, mut r0: usize, mut r1: usize, g0: usize, g1: usize) -> (usize, usize) {
+        r1 = r1.min(self.rows.len().saturating_sub(1));
+        // Each pass only grows the rows, so it settles within as many passes as there are rows.
+        for _ in 0..=self.rows.len() {
+            let before = (r0, r1);
+            for r in before.0..=before.1 {
+                for g in g0..=g1 {
                     let Some(ci) = self.cell_at_grid(r, g) else { continue };
-                    let start = self.grid_col(r, ci);
-                    let span = self.rows.get(r).and_then(|row| row.cells.get(ci)).map_or(1, Cell::span);
-                    g0 = g0.min(start);
-                    g1 = g1.max(start + span - 1);
-                    let (a, b) = self.merged_rows(r, start);
+                    let (a, b) = self.merged_rows(r, self.grid_col(r, ci));
                     r0 = r0.min(a);
                     r1 = r1.max(b);
                 }
             }
-            if (r0, r1, g0, g1) == before {
+            if (r0, r1) == before {
                 break;
             }
         }
-        (r0, r1, g0, g1)
+        (r0, r1)
     }
 
     /// Give every paragraph in the table (nested tables included) a new revision, so the layout
@@ -782,13 +776,12 @@ mod tests {
         assert_eq!(t.merged_rows(2, 0), (1, 3));
         assert_eq!(t.merged_rows(2, 1), (2, 2));
         // A cell in the middle of the vertical merge selects all three rows.
-        assert_eq!(t.whole_cells(2, 2, 0, 0), (1, 3, 0, 0));
-        // Touching the wide cell in row 0 takes both of its columns, and the rectangle then
-        // reaches the vertical merge below through column 0 only when it covers it.
-        assert_eq!(t.whole_cells(0, 0, 2, 2), (0, 0, 1, 2));
-        assert_eq!(t.whole_cells(0, 1, 0, 1), (0, 3, 0, 2));
+        assert_eq!(t.whole_rows(2, 2, 0, 0), (1, 3));
+        // Columns away from the merge add no rows; reaching into it adds them all.
+        assert_eq!(t.whole_rows(0, 0, 2, 2), (0, 0));
+        assert_eq!(t.whole_rows(0, 1, 0, 1), (0, 3));
         // Out-of-range rows are clamped, never panic.
-        assert_eq!(t.whole_cells(3, 99, 1, 1), (3, 3, 1, 1));
+        assert_eq!(t.whole_rows(3, 99, 1, 1), (3, 3));
     }
 
     #[test]

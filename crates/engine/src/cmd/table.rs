@@ -565,8 +565,9 @@ fn selected_cells(s: &Session) -> Vec<(usize, usize)> {
         let span_b = t.rows.get(rb).and_then(|r| r.cells.get(cb)).map(|c| c.span()).unwrap_or(1);
         let ga = t.grid_col(ra, ca);
         let gb = t.grid_col(rb, cb);
-        // Merged cells the selection touches are part of it whole.
-        let (r0, r1, g0, g1) = t.whole_cells(r0, r1, ga.min(gb), (ga + span_a - 1).max(gb + span_b - 1));
+        // Vertically merged cells the selection touches are part of it whole.
+        let (g0, g1) = (ga.min(gb), (ga + span_a - 1).max(gb + span_b - 1));
+        let (r0, r1) = t.whole_rows(r0, r1, g0, g1);
         let mut v = Vec::new();
         for r in r0..=r1 {
             let mut seen_in_row = std::collections::BTreeSet::new();
@@ -1662,8 +1663,8 @@ pub fn select_grid_range(s: &mut Session, tp: &Path, min_r: usize, min_g: usize,
         return Err(CmdError::Params(format!("the table has no column {g0}")));
     }
     let g1 = g1.min(cols - 1);
-    // Merged cells are selected whole, as Word grows a selection over them.
-    let (r0, r1, g0, g1) = t.whole_cells(r0, r1, g0, g1);
+    // Vertically merged cells are selected whole, as Word grows a selection over them.
+    let (r0, r1) = t.whole_rows(r0, r1, g0, g1);
     // The cells covering the rectangle, row by row, in document order.
     let mut chosen: Vec<(usize, usize)> = Vec::new();
     for r in r0..=r1 {
