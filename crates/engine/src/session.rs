@@ -256,6 +256,11 @@ pub struct Session {
     pub macros: std::collections::BTreeMap<String, Vec<(String, Value)>>,
     pub autocorrect_on: bool,
     pub autocorrect_user: Vec<(String, String)>,
+    pub autocorrect_two_initial_caps: bool,
+    pub autocorrect_caps_lock: bool,
+    pub autocorrect_cap_sentences: bool,
+    pub autocorrect_cap_cells: bool,
+    pub autocorrect_initial_caps_exceptions: Vec<String>,
     /// Saved versions: (label, date, document).
     pub versions: Vec<(String, String, Document)>,
     /// Quick Parts / AutoText entries.
@@ -375,6 +380,11 @@ impl Session {
             macros: Default::default(),
             autocorrect_on: true,
             autocorrect_user: Vec::new(),
+            autocorrect_two_initial_caps: true,
+            autocorrect_caps_lock: true,
+            autocorrect_cap_sentences: true,
+            autocorrect_cap_cells: true,
+            autocorrect_initial_caps_exceptions: Vec::new(),
             versions: Vec::new(),
             building_blocks: Default::default(),
             autosave: true,
