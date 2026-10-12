@@ -64,6 +64,11 @@ description: Comprehensive project memory, architecture guide, and operational r
   - Prioritized exact dictionary matches as Candidate #1 in `phonetic_candidates` and added direct vocabulary lookup in `phonetic_word`: words like `krishi` (`কৃষি`), `banke` (`ব্যাংকে`), `chakri` (`চাকরি`), and `kori` (`করি`) now transliterate and auto-commit accurately (e.g., `ami bangladesh krishi banke chakri kori` -> `আমি বাংলাদেশ কৃষি ব্যাংকে চাকরি করি`).
   - Added length-based prefix candidate prioritization so common, shorter words appear first in candidate suggestion popups (e.g., `am` suggests `আমি`, `আমার`, `আমরা` first).
   - Fixed Dari (`।`) in Avro Phonetic mode: mapped `|` (Shift + `\`) to insert `।` (was previously bugged inserting `ঃ` [Bisarga]), enabled `..` (double period) automatic conversion into `।`, and allowed non-digit period `.` to insert `।`.
-  - Re-verified all 6 CI quality gates (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`) clean.
-  - Rebuilt production installer at `packaging/windows/Output/wordcraft-0.6.0-windows-x64-setup.exe` and portable archive at `dist/wordcraft/wordcraft-0.6.0-windows-x64-portable.zip`.
-
+  - Conducted deep table audit (`docs/table-audit.md`) covering commands, data model, layout, OOXML round-trips, ribbon UI, and context dialogs across 19 critical-to-low findings (A–S).
+  - Unblocked multi-cell selection for mutating table commands: `crates/engine/src/cmd/column.rs` now allows all `table.*` commands to retain column block selections across cells rather than prematurely collapsing to a single caret.
+  - Implemented grid-based multi-cell and column selection: added `select_grid_range` and updated `select_column_cells` so column selection uniformly selects grid column ranges even across complex horizontally merged rows.
+  - Fixed merged cell column resizing (`boundary_g = g.saturating_add(span).saturating_sub(1)`) in `crates/engine/src/cmd/table.rs`.
+  - Decoupled vertical cell alignment (`table.cellAlign`) to set `cl.props.valign` (`top`, `vcenter`, `bottom`) directly on cells without clobbering paragraph text alignment.
+  - Fixed table resize hit testing in `crates/ui-egui/src/table_resize.rs` to skip `VMerge::Continue` cells on row borders.
+  - Implemented dedicated `Dialog::CellMargins` dialog with top, left, bottom, right inputs and wired it to the Table Layout ribbon button.
+  - Verified all 6 CI quality gates (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`) pass cleanly.
