@@ -1376,6 +1376,35 @@ mod tests {
         assert_eq!(dialogs::TableForm::read(&a).unwrap().changes(&f), json!({}), "the dialog reopens with the new values");
     }
 
+    /// Issue #772: Ctrl/⌘+F left focus on the document, so typing didn't go into Find what.
+    #[test]
+    fn find_shortcut_focuses_find_what() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput { events, ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        // The first frames install fonts; the canvas appears after them.
+        for _ in 0..3 {
+            frame(&mut a, Vec::new());
+        }
+        let key = egui::Event::Key { key: egui::Key::F, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
+        frame(&mut a, vec![key]);
+        for _ in 0..2 {
+            frame(&mut a, Vec::new());
+        }
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("find_what"))), "Find what has the focus");
+        frame(&mut a, vec![egui::Event::Text("abc".into())]);
+        let Some(dialogs::Dialog::Find { query, .. }) = &a.dialog else { panic!("no Find dialog") };
+        assert!(query.ends_with("abc"), "typing went into Find what: {query:?}");
+        assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "nothing was typed into the document");
+    }
+
     /// Issue #139: Ctrl+wheel over the page didn't zoom.
     #[test]
     fn ctrl_wheel_over_canvas_zooms() {

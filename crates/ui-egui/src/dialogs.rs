@@ -180,6 +180,8 @@ pub enum Dialog {
         extra: FindExtra,
         replace_mode: bool,
         message: String,
+        /// Put the caret in Find what on the first frame, so typing searches (#772).
+        focus: bool,
     },
     Goto {
         page: String,
@@ -913,6 +915,7 @@ impl Dialog {
                 },
                 replace_mode: name == "replace",
                 message: String::new(),
+                focus: true,
             },
             "goto" => Dialog::Goto { page: String::new() },
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
@@ -1402,7 +1405,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::Tabs { form } => crate::dialogs_para::tabs(app, ui, form),
         Dialog::Borders { form } => crate::dialogs_para::borders(app, ui, form),
-        Dialog::Find { query, replace, match_case, whole_word, regex, extra, replace_mode, message } => {
+        Dialog::Find { query, replace, match_case, whole_word, regex, extra, replace_mode, message, focus } => {
             ui.horizontal(|ui| {
                 if ui.selectable_label(!*replace_mode, tl!("Find")).clicked() {
                     *replace_mode = false;
@@ -1413,7 +1416,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Find what:"));
-                if ui.add(egui::TextEdit::singleline(query).desired_width(240.0)).gained_focus() {
+                let r = ui.add(egui::TextEdit::singleline(query).id(egui::Id::new("find_what")).desired_width(240.0));
+                if std::mem::take(focus) {
+                    r.request_focus();
+                }
+                if r.gained_focus() {
                     extra.to_replace = false;
                 }
             });
