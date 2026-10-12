@@ -416,6 +416,10 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.ruler", json!({"value": ruler}));
     }
     ui.add_space(10.0);
+    ui.label(egui::RichText::new(tl!("Opening files")).font(semibold(15.0)));
+    ui.checkbox(&mut app.session.prefs.convert_legacy, tl!("Convert Word 97–2003 files (.doc) to .docx when opening"));
+    ui.label(egui::RichText::new(tl!("A .docx is saved beside the original, which is left unchanged.")).font(crate::theme::regular(11.0)).weak());
+    ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Keyboard Shortcuts")).font(semibold(15.0)));
     if ui.button(tl!("Customize Keyboard Shortcuts…")).clicked() {
         app.dialog = Some(crate::dialogs::Dialog::open("customizeKeyboard", app).unwrap_or(crate::dialogs::Dialog::CustomizeKeyboard {

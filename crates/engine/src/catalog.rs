@@ -15,6 +15,7 @@ File|Backstage|Save As|file.saveAs
 File|Backstage|Print|file.print
 File|Backstage|Close|file.close
 File|Backstage|Info|file.info
+File|Info|Convert|file.convert
 File|Backstage|Properties|file.properties
 File|Backstage|Export PDF|file.exportPdf
 File|Backstage|Export Image|file.exportPng

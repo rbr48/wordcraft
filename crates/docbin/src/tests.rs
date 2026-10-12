@@ -945,6 +945,43 @@ fn table_assembled_from_marks() {
     assert_eq!(last.text, "tail");
 }
 
+/// Word stores a row end's grpprl in the Data stream when it is too big for the FKP
+/// (`sprmPHugePapx`). Without following it the row never ends: every following row ran into
+/// one 46-cell row in a real appraisal form, and its 7 pages became 19.
+#[test]
+fn huge_papx_row_ends_are_read_from_the_data_stream() {
+    let def_table = t_def_table(&[0, 2880, 5760]);
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), def_table].concat();
+    // PrcData at offset 8 in the Data stream: cbGrpprl, then the row end's grpprl.
+    let mut data = vec![0u8; 8];
+    data.extend_from_slice(&(ttp.len() as u16).to_le_bytes());
+    data.extend_from_slice(&ttp);
+    let huge = grpprl(&[(0x6646, &8u32.to_le_bytes())]);
+    // An offset past the stream's end is ignored, not a crash.
+    let broken = grpprl(&[(0x6646, &0xFFFF_FFF0u32.to_le_bytes())]);
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl.clone()), (2, 0, huge.clone()), (4, 0, in_tbl), (6, 0, huge), (8, 0, broken)],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: data,
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.len(), 2, "each huge-PAPX row end closes its row");
+    assert!(tbl.rows.iter().all(|r| r.cells.len() == 2));
+    assert_eq!(tbl.grid, vec![144.0, 144.0], "the column widths come from the Data stream too");
+    assert_eq!(doc.body.last().and_then(|b| b.as_para()).map(|p| p.text.as_str()), Some("tail"));
+}
+
 #[test]
 fn table_merges_borders_shading() {
     // Two rows: the first "a\x07 b\x07 c\x07" with cells 0-1 horizontally merged; the second

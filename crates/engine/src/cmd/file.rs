@@ -31,13 +31,17 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O")
-            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document), "convert"?: bool (convert a .doc/.dot to .docx/.dotx on opening; default: the Convert on Open preference, on)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S")
             .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does)}"#)
             .pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key("F12").params(r#"{"path": string, "password"?: string}"#).pure(),
+        // Pure: converting changes where the document is saved, not its content.
+        CommandSpec::new("file.convert", "Convert", "File › Info", convert)
+            .params(r#"{"write"?: bool (default true: write the converted file now; the original stays as it was)}"#)
+            .pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
@@ -165,7 +169,71 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
-    Ok(json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted}))
+    let mut out = json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted});
+    // A Word 97–2003 file becomes a .docx beside it (bytes from a browser only get the new name).
+    if legacy_target(std::path::Path::new(path)).is_some() && p::bool(v, "convert").unwrap_or(s.prefs.convert_legacy) {
+        let conv = convert(s, &json!({"write": v.get("data").is_none()}))?;
+        if let (Some(o), Some(c)) = (out.as_object_mut(), conv.as_object()) {
+            o.extend(c.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// The converted file for a Word 97–2003 `path` (`.doc` → `.docx`, `.dot` → `.dotx`), or `None`
+/// when `path` isn't one. An existing file of that name is never replaced: the name gets
+/// " (converted)", then a number.
+fn legacy_target(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    let new_ext = match ext.as_str() {
+        "doc" => "docx",
+        "dot" => "dotx",
+        _ => return None,
+    };
+    let stem = path.file_stem()?.to_string_lossy().to_string();
+    let dir = path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+    let first = dir.join(format!("{stem}.{new_ext}"));
+    if !first.exists() {
+        return Some(first);
+    }
+    (1..1000)
+        .map(|n| dir.join(if n == 1 { format!("{stem} (converted).{new_ext}") } else { format!("{stem} (converted {n}).{new_ext}") }))
+        .find(|p| !p.exists())
+}
+
+/// File › Info › Convert: a document opened from a Word 97–2003 file (`.doc`, `.dot`) is saved
+/// as a `.docx` (`.dotx`) from now on, beside the original, which is never overwritten. With
+/// `write` (the default) the converted file is written at once.
+fn convert(s: &mut Session, v: &Value) -> CmdResult {
+    let Some(from) = s.path.clone() else {
+        return Err(CmdError::Failed("the document has no file to convert; use Save As".into()));
+    };
+    let Some(to) = legacy_target(&from) else {
+        return Ok(json!({"converted": false, "reason": "already in the current format"}));
+    };
+    let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    s.path = Some(to.clone());
+    let written = if p::bool(v, "write").unwrap_or(true) {
+        s.stamp_save();
+        let password = s.password.as_ref().map(crate::io::Password::as_str);
+        match crate::io::save_path_with(&to, &s.doc, password) {
+            Ok(()) => {
+                s.dirty = false;
+                true
+            }
+            // The folder may be read-only: the document still saves as .docx (Save asks where).
+            Err(e) => {
+                s.dirty = true;
+                s.status = format!("Converted {} but couldn't write {}: {e}", name(&from), name(&to));
+                return Ok(json!({"converted": true, "convertedTo": to.to_string_lossy(), "written": false, "error": e}));
+            }
+        }
+    } else {
+        s.dirty = true;
+        false
+    };
+    s.status = format!("Converted {} to {} (the original is unchanged)", name(&from), name(&to));
+    Ok(json!({"converted": true, "convertedFrom": from.to_string_lossy(), "convertedTo": to.to_string_lossy(), "written": written}))
 }
 
 /// File › Info › Protect Document › Encrypt with Password: the password Word documents are saved

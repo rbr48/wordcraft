@@ -2516,6 +2516,17 @@ mod tests {
     }
 
     #[test]
+    fn convert_on_open_setting_survives_a_restart() {
+        let mut a = app();
+        assert!(a.session.prefs.convert_legacy, "on by default");
+        a.session.prefs.convert_legacy = false;
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert!(!b.session.prefs.convert_legacy);
+    }
+
+    #[test]
     fn prefs_without_editing_keep_its_defaults() {
         let mut a = app();
         a.apply_prefs(serde_json::from_str(r#"{"tab": "Insert", "dark": true}"#).unwrap());
