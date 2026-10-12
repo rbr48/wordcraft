@@ -1334,14 +1334,16 @@ mod tests {
         f.row_height = 0.5;
         f.row_exact = true;
         f.header_row = true;
+        f.rtl = true;
         let changes = f.changes(&basis);
-        assert_eq!(changes, json!({"align": "center", "rowHeight": 36.0, "rowHeightRule": "exact", "headerRow": true}));
+        assert_eq!(changes, json!({"align": "center", "rightToLeft": true, "rowHeight": 36.0, "rowHeightRule": "exact", "headerRow": true}));
         a.dialog = None;
         a.run("table.properties", changes).unwrap();
         assert!(a.dialog.is_none(), "settings apply without the dialog");
         let (tp, _, _) = a.session.sel.focus.path.cell().unwrap();
         let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
         assert_eq!(t.props.align, Some(wordcraft_doc::props::Align::Center));
+        assert!(t.props.rtl, "the table direction applies");
         assert_eq!((t.rows[0].props.height, t.rows[0].props.header), (Some(36.0), true));
         assert_eq!(dialogs::TableForm::read(&a).unwrap().changes(&f), json!({}), "the dialog reopens with the new values");
     }

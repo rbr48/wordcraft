@@ -293,6 +293,8 @@ pub struct TableForm {
     pub width: f32,
     /// `left`, `center` or `right`.
     pub align: String,
+    /// Table direction: right to left (the first column on the right).
+    pub rtl: bool,
     pub indent: f32,
     pub row_height_on: bool,
     pub row_height: f32,
@@ -323,6 +325,7 @@ impl TableForm {
             cell_spacing_on: t.props.cell_spacing.is_some_and(|x| x > 0.0),
             cell_spacing: fin(t.props.cell_spacing.unwrap_or(0.0)) / k,
             alt_text: t.props.caption.clone().unwrap_or_default(),
+            rtl: t.props.rtl,
             width_on: width.is_some(),
             width: fin(width.unwrap_or(tw)) / k,
             align: match t.props.align {
@@ -365,6 +368,9 @@ impl TableForm {
         }
         if self.align != basis.align {
             v.insert("align".into(), json!(self.align));
+        }
+        if self.rtl != basis.rtl {
+            v.insert("rightToLeft".into(), json!(self.rtl));
         }
         if moved(self.indent, basis.indent) {
             v.insert("indent".into(), json!(self.indent * k));
@@ -2434,6 +2440,12 @@ fn table_properties(ui: &mut Ui, f: &mut TableForm) {
         ui.end_row();
         ui.label(tl!("Indent from left:"));
         ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).suffix(unit.suffix()).max_decimals(2));
+        ui.end_row();
+        ui.label("");
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.rtl, false, tl!("Left-to-right"));
+            ui.radio_value(&mut f.rtl, true, tl!("Right-to-left"));
+        });
         ui.end_row();
     });
     egui::Grid::new("tp_spacing").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
