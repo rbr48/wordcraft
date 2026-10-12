@@ -280,8 +280,9 @@ pub(crate) fn sync_cell_widths(t: &mut Table) {
     }
 }
 
-/// Set the width of the grid column cell `c` of row `r` starts in. The table's preferred width
-/// goes, so the layout doesn't scale the column back.
+/// Set the width of the last grid column cell `c` of row `r` spans: the column whose right edge is
+/// the cell's (the border a column drag moves). The table's preferred width goes, so the layout
+/// doesn't scale the column back.
 fn set_column_width(t: &mut Table, r: usize, c: usize, w: f32, adjust_next: bool) {
     let g = t.grid_col(r, c);
     let span = t.rows.get(r).and_then(|row| row.cells.get(c)).map(|cell| cell.span()).unwrap_or(1);
@@ -724,9 +725,12 @@ fn del_col(s: &mut Session, _: &Value) -> CmdResult {
     if t.grid.len() <= 1 {
         return del_table(s, &Value::Null);
     }
+    // Every grid column a selected cell covers: a merged cell takes all of its columns with it.
     let mut gc_set = std::collections::BTreeSet::new();
-    for (ri, ci) in &cells {
-        gc_set.insert(t.grid_col(*ri, *ci));
+    for &(ri, ci) in &cells {
+        let span = t.rows.get(ri).and_then(|row| row.cells.get(ci)).map_or(1, wordcraft_doc::Cell::span);
+        let g = t.grid_col(ri, ci);
+        gc_set.extend((g..g + span).filter(|&x| x < t.grid.len()));
     }
     let mut grid_cols: Vec<usize> = gc_set.into_iter().collect();
     grid_cols.sort_unstable_by(|a, b| b.cmp(a));
@@ -766,11 +770,16 @@ fn merge(s: &mut Session, _: &Value) -> CmdResult {
     let story = s.sel.focus.story;
     let (r0, r1) = (cells.iter().map(|x| x.0).min().unwrap_or(0), cells.iter().map(|x| x.0).max().unwrap_or(0));
     let t = s.doc.table_mut(story, &tp)?;
-    let c0 = cells.iter().map(|x| x.1).min().unwrap_or(0);
-    let c1 = cells.iter().map(|x| x.1).max().unwrap_or(0);
-    let g0 = t.grid_col(r0, c0);
-    let g1 = t.grid_col(r0, c1) + t.rows.get(r0).and_then(|r| r.cells.get(c1)).map(|c| c.span()).unwrap_or(1) - 1;
+    // The rectangle in grid columns: cell indices differ between rows that hold merged cells.
+    let span_of = |t: &Table, r: usize, c: usize| t.rows.get(r).and_then(|row| row.cells.get(c)).map_or(1, wordcraft_doc::Cell::span);
+    let g0 = cells.iter().map(|&(r, c)| t.grid_col(r, c)).min().unwrap_or(0);
+    let g1 = cells.iter().map(|&(r, c)| t.grid_col(r, c) + span_of(t, r, c) - 1).max().unwrap_or(0);
+    let before = t.rows.clone();
     t.merge(r0, r1, g0, g1);
+    if t.rows == before {
+        return Err(CmdError::Failed("those cells can't be merged".into()));
+    }
+    let c0 = t.cell_at_grid(r0, g0).unwrap_or(0);
     fix_caret(s, &tp, r0, c0)
 }
 
@@ -782,7 +791,10 @@ fn split_table(s: &mut Session, _: &Value) -> CmdResult {
     let story = s.sel.focus.story;
     let t = s.doc.table_mut(story, &tp)?;
     let tail_rows = if r <= t.rows.len() { t.rows.split_off(r) } else { vec![] };
-    let tail = Table { props: t.props.clone(), grid: t.grid.clone(), rows: tail_rows };
+    // A vertical merge across the split ends there: each table's merges must stand on their own.
+    t.repair_vmerge();
+    let mut tail = Table { props: t.props.clone(), grid: t.grid.clone(), rows: tail_rows };
+    tail.repair_vmerge();
     let after = tp.with_last(tp.last() + 1);
     s.doc.insert_block(story, &after, Block::Para(Paragraph::new()))?;
     s.doc.insert_block(story, &after.with_last(after.last() + 1), Block::Table(tail))?;
@@ -927,9 +939,20 @@ fn borders(s: &mut Session, v: &Value) -> CmdResult {
             _ => cur.right = Some(b),
         }
         t.props.borders = Some(cur);
-        for r in &mut t.rows {
-            for c in &mut r.cells {
-                c.props.borders = None;
+        // The cells' own borders give way to the table's on the sides it sets, and only there.
+        let last_row = t.rows.len().saturating_sub(1);
+        for (ri, r) in t.rows.iter_mut().enumerate() {
+            let last_cell = r.cells.len().saturating_sub(1);
+            for (ci, c) in r.cells.iter_mut().enumerate() {
+                let Some(own) = c.props.borders.as_mut() else { continue };
+                match kind {
+                    "top" if ri == 0 => own.top = None,
+                    "bottom" if ri == last_row => own.bottom = None,
+                    "left" if ci == 0 => own.left = None,
+                    "right" if ci == last_cell => own.right = None,
+                    "top" | "bottom" | "left" | "right" => {}
+                    _ => c.props.borders = None,
+                }
             }
         }
     } else {
@@ -1227,8 +1250,17 @@ fn delete_cells(s: &mut Session, v: &Value) -> CmdResult {
                         return Err(CmdError::Failed("shifting cells up needs plain cells of the same width below".into()));
                     }
                 }
+                // The bottom cells removed must end their row together: every cell from this one
+                // to the row's end is the bottom of a selected column.
                 let bottom_ci = starting_at(t, last, g).unwrap_or(0);
-                let ends_row = t.rows.get(last).is_some_and(|row| bottom_ci + 1 == row.cells.len());
+                let ends_row = t.rows.get(last).is_some_and(|row| {
+                    let mut x = t.grid_col(last, bottom_ci);
+                    row.cells.iter().skip(bottom_ci).all(|cl| {
+                        let ok = groups.contains_key(&x);
+                        x += cl.span();
+                        ok
+                    })
+                });
                 if !ends_row {
                     return Err(CmdError::Failed(
                         "shifting cells up is only possible where the bottom cell ends its row; delete the row or shift left instead".into(),
@@ -1245,8 +1277,13 @@ fn delete_cells(s: &mut Session, v: &Value) -> CmdResult {
                         x.blocks = if moved.is_empty() { vec![para_block(Paragraph::new())] } else { moved };
                     }
                 }
-                let bottom_ci = starting_at(t, last, g).unwrap_or(0);
-                if let Some(row) = t.rows.get_mut(last) {
+            }
+            // Right to left, so the cells still to remove keep their grid columns.
+            for &g in groups.keys().rev() {
+                if let Some(bottom_ci) = starting_at(t, last, g)
+                    && let Some(row) = t.rows.get_mut(last)
+                    && bottom_ci < row.cells.len()
+                {
                     row.cells.remove(bottom_ci);
                 }
             }
@@ -1593,23 +1630,25 @@ pub fn select_grid_range(s: &mut Session, tp: &Path, min_r: usize, min_g: usize,
 pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: usize, c1: usize) -> CmdResult {
     let story = s.sel.focus.story;
     let t = s.doc.table(story, tp).ok_or_else(no_table)?;
-    let g0 = t
+    // Each corner cell's first and last grid column: the rectangle covers both cells whole.
+    let first = t
         .rows
         .get(r0)
         .and_then(|row| row.cells.get(c0))
-        .map(|_| t.grid_col(r0, c0))
+        .map(|cell| (t.grid_col(r0, c0), t.grid_col(r0, c0) + cell.span() - 1))
         .ok_or_else(|| CmdError::Params(format!("the table has no cell at row {r0}, column {c0}")))?;
-    let g1 = if c1 == usize::MAX {
-        t.grid.len().saturating_sub(1)
+    let second = if c1 == usize::MAX {
+        let last = t.grid.len().saturating_sub(1);
+        (last, last)
     } else {
         let cell = t
             .rows
             .get(r1)
             .and_then(|row| row.cells.get(c1))
             .ok_or_else(|| CmdError::Params(format!("the table has no cell at row {r1}, column {c1}")))?;
-        t.grid_col(r1, c1) + cell.span() - 1
+        (t.grid_col(r1, c1), t.grid_col(r1, c1) + cell.span() - 1)
     };
-    select_grid_range(s, tp, r0.min(r1), g0.min(g1), r0.max(r1), g0.max(g1))
+    select_grid_range(s, tp, r0.min(r1), first.0.min(second.0), r0.max(r1), first.1.max(second.1))
 }
 
 fn select_cells(s: &mut Session, tp: &Path, which: Option<(usize, Option<usize>)>) -> CmdResult {
@@ -1716,9 +1755,9 @@ fn trim_paragraph(p: &mut Paragraph) -> Result<(), CmdError> {
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/// Today as days since 1970-01-01 (UTC).
+/// Today as days since 1970-01-01 (UTC), from the clock that works on the web too.
 fn today_days() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| (d.as_secs() / 86_400) as i64).unwrap_or(0)
+    i64::try_from(super::now_unix() / 86_400).unwrap_or(0)
 }
 
 /// (year, month 1–12, day 1–31) of a day count from 1970-01-01 (proleptic Gregorian calendar).

@@ -278,7 +278,10 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 }
             }
         } else {
-            out.push(Arc::new(Block::Table(Table { props: props.clone(), grid: grid.to_vec(), rows: std::mem::take(rows) })));
+            let mut t = Table { props: props.clone(), grid: grid.to_vec(), rows: std::mem::take(rows) };
+            // A continuation with no restart above it becomes an ordinary cell (its text shown).
+            t.repair_orphan_continues();
+            out.push(Arc::new(Block::Table(t)));
         }
         rows.clear();
     }
