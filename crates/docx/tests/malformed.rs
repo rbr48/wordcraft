@@ -193,3 +193,15 @@ proptest! {
         let _ = read(&z);
     }
 }
+
+#[test]
+fn an_orphaned_vertical_merge_continuation_is_read_as_an_ordinary_cell() {
+    // The first row's cell continues a merge that has no restart above it.
+    let xml = format!(
+        r#"<w:document {W_NS}><w:body><w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p><w:r><w:t>kept</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl></w:body></w:document>"#
+    );
+    let doc = read(&doc_zip(xml.as_bytes())).unwrap();
+    let t = doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t.rows.iter().all(|r| r.cells.iter().all(|c| c.props.vmerge == wordcraft_doc::props::VMerge::None)));
+    assert!(t.rows[0].cells[0].blocks.iter().any(|b| b.as_para().is_some_and(|p| p.plain_text() == "kept")));
+}

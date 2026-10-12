@@ -196,13 +196,13 @@ impl Table {
             let mut moved: Blocks =
                 self.rows.get_mut(r).and_then(|row| row.cells.get_mut(ci)).map(|c| std::mem::take(&mut c.blocks)).unwrap_or_default();
             moved.retain(|b| b.as_para().is_none_or(|p| !p.is_empty()));
-            if moved.is_empty() {
-                continue;
-            }
             let Some(below) = self.rows.get_mut(r + 1).and_then(|row| row.cells.get_mut(bi)) else { continue };
-            let mut blocks = moved;
-            blocks.extend(std::mem::take(&mut below.blocks).into_iter().filter(|b| b.as_para().is_none_or(|p| !p.is_empty())));
-            below.blocks = blocks;
+            // The continuation below becomes the restart even when the deleted cell was empty.
+            if !moved.is_empty() {
+                let mut blocks = moved;
+                blocks.extend(std::mem::take(&mut below.blocks).into_iter().filter(|b| b.as_para().is_none_or(|p| !p.is_empty())));
+                below.blocks = blocks;
+            }
             below.props.vmerge = VMerge::Restart;
         }
         self.rows.remove(r);
@@ -407,18 +407,20 @@ impl Table {
         } else {
             // Need to subdivide grid columns: split the last column of the span into (n - span + 1) parts
             let extra = n - span;
-            if self.grid.len() + extra > MAX_COLS {
+            if self.cols() + extra > MAX_COLS {
                 return;
             }
             let last_g = g + span.saturating_sub(1);
             let old_w = self.grid.get(last_g).copied().unwrap_or(72.0);
             let sub_w = (old_w / (extra + 1) as f32).max(6.0);
-            // Replace grid[last_g] with (extra+1) sub-columns
+            // Replace grid[last_g] with (extra+1) sub-columns. A row wider than the grid (a .docx
+            // whose tblGrid is short) has cells past its end: the new columns go at its end.
             if let Some(entry) = self.grid.get_mut(last_g) {
                 *entry = sub_w;
             }
+            let at = (last_g + 1).min(self.grid.len());
             for _ in 0..extra {
-                self.grid.insert(last_g + 1, sub_w);
+                self.grid.insert(at, sub_w);
             }
             // Widen spans in other rows that cover last_g
             for ri in 0..self.rows.len() {
@@ -511,6 +513,24 @@ impl Table {
             end_merge(&mut self.rows, &mut open, g);
         }
     }
+    /// For files as they are read: a continuation with no restart above it becomes an ordinary
+    /// cell (its text would otherwise never show), while a restart nothing continues is kept as
+    /// written, so it round-trips.
+    pub fn repair_orphan_continues(&mut self) {
+        let restarts: Vec<(usize, usize)> = self
+            .rows
+            .iter()
+            .enumerate()
+            .flat_map(|(r, row)| row.cells.iter().enumerate().filter(|(_, c)| c.props.vmerge == VMerge::Restart).map(move |(ci, _)| (r, ci)))
+            .collect();
+        self.repair_vmerge();
+        for (r, ci) in restarts {
+            if let Some(c) = self.rows.get_mut(r).and_then(|row| row.cells.get_mut(ci)) {
+                c.props.vmerge = VMerge::Restart;
+            }
+        }
+    }
+
     pub fn distribute_rows(&mut self) {
         let total: f32 = self.rows.iter().filter_map(|r| r.props.height).sum::<f32>();
         let count = self.rows.len().max(1);
@@ -523,6 +543,59 @@ impl Table {
     pub fn total_width(&self) -> f32 {
         self.grid.iter().sum()
     }
+
+    /// Give every paragraph in the table (nested tables included) a new revision, so the layout
+    /// lays them out again. Walks this table alone, not the story around it.
+    pub fn touch_paragraphs(&mut self) {
+        touch_rows(&mut self.rows, 0);
+    }
+
+    /// Where the text of cell `c` in row `r` ends: the path below the table to its last paragraph
+    /// (`[r, c, block, …]`, through nested tables) and that paragraph's length.
+    pub fn cell_end(&self, r: usize, c: usize) -> Option<(Vec<u32>, usize)> {
+        let cell = self.rows.get(r)?.cells.get(c)?;
+        let (mut path, len) = blocks_end(&cell.blocks, 0)?;
+        path.splice(0..0, [r as u32, c as u32]);
+        Some((path, len))
+    }
+}
+
+/// How deep nested tables are followed, as `Document::para_paths` follows them.
+const NEST_LIMIT: usize = 16;
+
+fn touch_rows(rows: &mut [Row], depth: usize) {
+    if depth > NEST_LIMIT {
+        return;
+    }
+    for cell in rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+        for b in &mut cell.blocks {
+            match std::sync::Arc::make_mut(b) {
+                crate::Block::Para(p) => p.touch(),
+                crate::Block::Table(t) => touch_rows(&mut t.rows, depth + 1),
+            }
+        }
+    }
+}
+
+/// The last paragraph of a block list (`[block, …]`) and its length.
+fn blocks_end(blocks: &Blocks, depth: usize) -> Option<(Vec<u32>, usize)> {
+    if depth > NEST_LIMIT {
+        return None;
+    }
+    blocks.iter().enumerate().rev().find_map(|(bi, b)| {
+        let (mut path, len) = match &**b {
+            crate::Block::Para(p) => (Vec::new(), p.len()),
+            crate::Block::Table(t) => t.rows.iter().enumerate().rev().find_map(|(r, row)| {
+                row.cells.iter().enumerate().rev().find_map(|(c, cell)| {
+                    let (mut path, len) = blocks_end(&cell.blocks, depth + 1)?;
+                    path.splice(0..0, [r as u32, c as u32]);
+                    Some((path, len))
+                })
+            })?,
+        };
+        path.insert(0, bi as u32);
+        Some((path, len))
+    })
 }
 
 #[cfg(test)]
@@ -622,6 +695,53 @@ mod tests {
         t.delete_row(0);
         let c0 = t.cell_at_grid(0, 0).and_then(|ci| t.rows.first().and_then(|r| r.cells.get(ci))).unwrap();
         assert_ne!(c0.props.vmerge, VMerge::Continue);
+    }
+
+    #[test]
+    fn deleting_the_top_row_of_an_empty_vertical_merge_keeps_the_rest_merged() {
+        let mut t = Table::new(3, 2, 200.0);
+        t.merge(0, 2, 0, 0);
+        t.delete_row(0);
+        assert_eq!(t.rows[0].cells[0].props.vmerge, VMerge::Restart);
+        assert_eq!(t.rows[1].cells[0].props.vmerge, VMerge::Continue);
+    }
+
+    #[test]
+    fn splitting_a_cell_in_a_row_wider_than_the_grid_does_not_panic() {
+        // A short tblGrid: two grid columns, but the row's cells cover three.
+        let mut t = Table::new(1, 2, 200.0);
+        let mut wide = Cell::empty();
+        wide.props.span = 2;
+        t.rows = vec![Row { props: RowProps::default(), cells: vec![wide, Cell::empty()] }];
+        t.split_cell(0, 1, 2);
+        assert_eq!(t.rows[0].cells.len(), 3);
+        assert_eq!(t.rows[0].cells.iter().map(Cell::span).sum::<usize>(), t.cols());
+    }
+
+    #[test]
+    fn cell_end_finds_the_last_paragraph_through_nested_tables() {
+        let mut t = Table::new(1, 2, 200.0);
+        let mut inner = Table::new(2, 2, 100.0);
+        inner.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("deep", Default::default()))];
+        t.rows[0].cells[1].blocks.push(std::sync::Arc::new(crate::Block::Table(inner)));
+        assert_eq!(t.cell_end(0, 0), Some((vec![0, 0, 0], 0)));
+        assert_eq!(t.cell_end(0, 1), Some((vec![0, 1, 1, 1, 1, 0], 4)));
+        assert_eq!(t.cell_end(0, 9), None);
+    }
+
+    #[test]
+    fn touching_a_table_gives_every_paragraph_a_new_revision() {
+        let mut t = Table::new(2, 2, 200.0);
+        let mut inner = Table::new(1, 1, 100.0);
+        let rev = |t: &Table| t.rows[1].cells[1].blocks[0].as_para().map(|p| p.rev);
+        inner.rows[0].cells[0].blocks = vec![para_block(Paragraph::new())];
+        t.rows[0].cells[0].blocks.push(std::sync::Arc::new(crate::Block::Table(inner)));
+        let before = rev(&t);
+        let nested = |t: &Table| t.rows[0].cells[0].blocks[1].as_table().and_then(|x| x.rows[0].cells[0].blocks[0].as_para().map(|p| p.rev));
+        let nested_before = nested(&t);
+        t.touch_paragraphs();
+        assert_ne!(rev(&t), before);
+        assert_ne!(nested(&t), nested_before);
     }
 
     #[test]

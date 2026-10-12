@@ -1022,6 +1022,9 @@ impl Reader<'_> {
                 vec![72.0; cols]
             });
         }
+        // A continuation with no restart above it would be drawn as nothing (its text hidden but
+        // kept): it becomes an ordinary cell.
+        table.repair_orphan_continues();
         Some(table)
     }
 }
