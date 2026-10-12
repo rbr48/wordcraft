@@ -279,6 +279,28 @@ impl ParaBuild {
     }
 }
 
+/// `sprmPHugePapx`: the paragraph's grpprl is in the Data stream at the operand's offset.
+const P_HUGE_PAPX: u16 = 0x6646;
+
+/// The full grpprl of a PAPX that carries `sprmPHugePapx` ([MS-DOC] §2.6.2): the PrcData in the
+/// Data stream (cbGrpprl u16, then the grpprl) followed by the PAPX's own bytes (decoders skip
+/// the huge sprm itself). Word writes table row ends this way when their properties
+/// don't fit in the FKP; without it such a row never ends. `None` when there is no such sprm or
+/// its offset is outside the stream.
+fn huge_papx(data: &[u8], papx: &[u8]) -> Option<Vec<u8>> {
+    let off = sprm::iter(papx).find(|p| p.op == P_HUGE_PAPX).and_then(|p| match p.operand {
+        [a, b, c, d, ..] => Some(u32::from_le_bytes([*a, *b, *c, *d]) as usize),
+        _ => None,
+    })?;
+    let cb = data.get(off..off.checked_add(2)?).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes)? as usize;
+    let grpprl = data.get(off + 2..(off + 2).checked_add(cb)?)?;
+    // The Data stream's sprms first: the FKP may pad the PAPX with a byte after the huge sprm,
+    // which would misalign anything appended after it.
+    let mut out = grpprl.to_vec();
+    out.extend_from_slice(papx);
+    Some(out)
+}
+
 /// Walk a CP range, splitting paragraphs at 0x0D/0x07 marks, applying the direct character
 /// formatting of each CP and the paragraph formatting of each mark. Works for the main
 /// document and for any subdocument range (headers, footers, notes…). Field characters,
@@ -325,6 +347,9 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pics: &mut media::Pictures) -
                 // querying at the mark's own FC finds that paragraph's properties.
                 let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let (istd, papx) = ctx.papx_bins.papx(ctx.word, fc_mark);
+                // A grpprl too big for the FKP lives in the Data stream (sprmPHugePapx).
+                let huge = huge_papx(ctx.data, papx);
+                let papx: &[u8] = huge.as_deref().unwrap_or(papx);
                 if let Some(st) = ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
                     pb.props.style = Some(fmt::style_id(&st.name));
                 }

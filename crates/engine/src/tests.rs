@@ -1,6 +1,6 @@
 use serde_json::json;
 use wordcraft_doc::props::BorderStyle;
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{Document, Pos, StoryRef};
 
 use crate::{Session, cmd};
 
@@ -23,6 +23,59 @@ fn doc_extension_dispatches_to_docbin() {
     for name in ["x.doc", "x.dot"] {
         assert!(crate::io::open_bytes(name, &[0u8; 64]).is_err(), "{name} should fail");
     }
+}
+
+/// A document opened from a Word 97–2003 file is converted to a .docx beside it: the original
+/// is never touched, an existing .docx of that name is never replaced, and later saves go to the
+/// .docx (a .doc can't be written).
+#[test]
+fn convert_writes_a_docx_beside_a_doc_and_never_overwrites() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-convert-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("Report.doc");
+    std::fs::write(&original, b"legacy bytes").unwrap();
+    std::fs::write(dir.join("Report.docx"), b"someone else's file").unwrap();
+
+    let mut s = Session::new(Document::from_text("Appraisal report"));
+    s.path = Some(original.clone());
+    let r = s.run("file.convert", &json!({})).unwrap();
+    let to = dir.join("Report (converted).docx");
+    assert_eq!(r["convertedTo"], json!(to.to_string_lossy()));
+    assert_eq!(r["written"], json!(true));
+    assert_eq!(std::fs::read(&original).unwrap(), b"legacy bytes", "the original stays as it was");
+    assert_eq!(std::fs::read(dir.join("Report.docx")).unwrap(), b"someone else's file", "an existing .docx is never replaced");
+    let reopened = crate::io::open_path(&to).unwrap();
+    assert_eq!(reopened.plain_text(StoryRef::Body), "Appraisal report");
+    assert_eq!(s.path.as_deref(), Some(to.as_path()));
+    assert!(!s.dirty);
+    // Save now writes the .docx.
+    s.run("text.insert", &json!({"text": "!"})).unwrap();
+    s.run("file.save", &json!({})).unwrap();
+    assert!(crate::io::open_path(&to).unwrap().plain_text(StoryRef::Body).contains('!'));
+    // Converting again does nothing: it already is a .docx.
+    assert_eq!(s.run("file.convert", &json!({})).unwrap()["converted"], json!(false));
+
+    // A template converts to .dotx; without a file there is nothing to convert.
+    let mut t = Session::new(Document::from_text("Form"));
+    t.path = Some(dir.join("Form.dot"));
+    assert_eq!(t.run("file.convert", &json!({"write": false})).unwrap()["convertedTo"], json!(dir.join("Form.dotx").to_string_lossy()));
+    assert!(t.dirty, "not written yet: Save writes it");
+    assert!(Session::new(Document::new()).run("file.convert", &json!({})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn opening_a_broken_doc_writes_nothing() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-convert-bad-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let bad = dir.join("Broken.doc");
+    std::fs::write(&bad, [0u8; 64]).unwrap();
+    let mut s = Session::new(Document::new());
+    assert!(s.run("file.open", &json!({"path": bad.to_string_lossy()})).is_err());
+    assert!(!dir.join("Broken.docx").exists());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

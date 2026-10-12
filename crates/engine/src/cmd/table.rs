@@ -1806,7 +1806,7 @@ pub fn select_grid_range(s: &mut Session, tp: &Path, min_r: usize, min_g: usize,
         let l = s.layout();
         let xa = l.caret_on(first_a, s.page_hint).map(|k| k.x).unwrap_or(0.0);
         let xb = l.caret_on(last_b, s.page_hint).map(|k| k.x + 50.0).unwrap_or(100.0);
-        s.column = Some(crate::session::ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments });
+        s.column = Some(crate::session::ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments, cells: true });
     }
     sel_result(s)
 }

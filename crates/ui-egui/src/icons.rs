@@ -1086,6 +1086,26 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
                 pen.fcircle(x, 10.0, 1.3, c);
             }
         }
+        // A gear: a ring with eight teeth around a hub.
+        "settings" => {
+            pen.circle(10.0, 10.0, 4.6, c);
+            pen.circle(10.0, 10.0, 1.8, c);
+            for k in 0..8 {
+                let ang = k as f32 * std::f32::consts::FRAC_PI_4;
+                let (s, co) = ang.sin_cos();
+                pen.line(&[(10.0 + 4.6 * co, 10.0 + 4.6 * s), (10.0 + 7.0 * co, 10.0 + 7.0 * s)]);
+            }
+        }
+        // A speech bubble with a plus: start a new conversation.
+        "newChat" => {
+            pen.line(&[(4.0, 4.0), (16.0, 4.0), (16.0, 13.0), (9.0, 13.0), (5.5, 16.5), (5.5, 13.0), (4.0, 13.0), (4.0, 4.0)]);
+            pen.line_c(&[(10.0, 6.0), (10.0, 11.0)], a);
+            pen.line_c(&[(7.5, 8.5), (12.5, 8.5)], a);
+        }
+        // A paper plane pointing right.
+        "send" => {
+            pen.fill(&[(3.0, 3.5), (17.5, 10.0), (3.0, 16.5), (5.5, 10.0)], a);
+        }
         "launcher" => {
             pen.line(&[(5.0, 5.0), (5.0, 15.0), (15.0, 15.0)]);
             pen.line(&[(8.0, 8.0), (15.0, 15.0)]);

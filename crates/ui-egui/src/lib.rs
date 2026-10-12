@@ -17,6 +17,7 @@ pub mod backstage;
 pub mod canvas;
 pub mod chrome;
 pub mod control;
+pub mod copilot;
 pub mod credits;
 pub mod dialogs;
 pub mod dialogs_insert;
@@ -149,10 +150,9 @@ pub struct UiState {
     pub ai_pane: bool,
     #[serde(skip)]
     pub ai_prompt: String,
+    /// The Copilot conversation (this session only).
     #[serde(skip)]
-    pub ai_response: String,
-    #[serde(skip)]
-    pub ai_mode: String,
+    pub ai_chat: Vec<copilot::ChatMsg>,
     #[serde(skip)]
     pub phonetic_buffer: String,
     #[serde(skip)]
@@ -184,9 +184,23 @@ pub struct UiState {
     /// Whether the AI Settings modal/popover is currently open.
     #[serde(skip)]
     pub ai_settings_open: bool,
-    /// Transient status or error message from AI execution.
-    #[serde(skip)]
-    pub ai_status: String,
+    /// Copilot settings, Response: randomness (0–2), the longest answer (tokens), the wait (s).
+    pub ai_temperature: f32,
+    pub ai_max_tokens: u32,
+    pub ai_timeout_s: u64,
+    /// Copilot settings, Writing: the answer language (`Auto`: the request's), the tone, and
+    /// standing instructions sent with every request.
+    pub ai_language: String,
+    pub ai_tone: String,
+    pub ai_custom_instructions: String,
+    /// Copilot settings, Document context: send the whole document when nothing is selected; the
+    /// most characters sent; carry the earlier conversation.
+    pub ai_whole_document: bool,
+    pub ai_max_chars: u32,
+    pub ai_remember_chat: bool,
+    /// Copilot settings, Agent: plain messages change the document; the most rounds per request.
+    pub ai_agent: bool,
+    pub ai_agent_rounds: u32,
 }
 
 impl Default for UiState {
@@ -214,8 +228,7 @@ impl Default for UiState {
             dark_page: false,
             ai_pane: false,
             ai_prompt: String::new(),
-            ai_response: String::new(),
-            ai_mode: "Draft".into(),
+            ai_chat: Vec::new(),
             phonetic_buffer: String::new(),
             phonetic_rendered_len: 0,
             phonetic_candidates: Vec::new(),
@@ -231,7 +244,17 @@ impl Default for UiState {
             ai_api_key: String::new(),
             ai_base_url: String::new(),
             ai_settings_open: false,
-            ai_status: String::new(),
+            ai_temperature: 0.7,
+            ai_max_tokens: 4096,
+            ai_timeout_s: 60,
+            ai_language: "Auto".into(),
+            ai_tone: "professional".into(),
+            ai_custom_instructions: String::new(),
+            ai_whole_document: true,
+            ai_max_chars: 120_000,
+            ai_remember_chat: true,
+            ai_agent: true,
+            ai_agent_rounds: wordcraft_engine::agent::DEFAULT_ROUNDS as u32,
         }
     }
 }
@@ -281,6 +304,8 @@ pub struct WordApp {
     pub(crate) equation_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// The Copilot pane's provider call in flight.
+    pub copilot: copilot::CopilotLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
@@ -350,6 +375,7 @@ impl WordApp {
             last_autosave: 0.0,
             equation_prev_tab: None,
             zotero: zotero::ZoteroLink::default(),
+            copilot: copilot::CopilotLink::default(),
             ctx: None,
             read_aloud_at: None,
             read_aloud_error: None,
@@ -910,6 +936,7 @@ impl WordApp {
         }
         self.drain_control(ctx);
         zotero::poll(self, ctx);
+        copilot::poll(self, ctx);
         read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();
@@ -2491,6 +2518,17 @@ mod tests {
         let mut b = app();
         b.apply_prefs(serde_json::from_str(&saved).unwrap());
         assert!(!b.session.prefs.count_notes);
+    }
+
+    #[test]
+    fn convert_on_open_setting_survives_a_restart() {
+        let mut a = app();
+        assert!(a.session.prefs.convert_legacy, "on by default");
+        a.session.prefs.convert_legacy = false;
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert!(!b.session.prefs.convert_legacy);
     }
 
     #[test]
