@@ -1102,3 +1102,82 @@ fn sorting_with_rows_selected_moves_only_those_rows() {
     run(&mut s, "table.sort", json!({"column": 0}));
     assert_eq!(first_column(table(&s)), vec!["5", "2", "3", "4", "1"]);
 }
+
+/// A session holding `n` floating tables (3 × 2, 200pt wide) at the same place on the page, each
+/// after a paragraph of text, with `overlap` as each table's Allow overlap.
+fn floating_tables(overlaps: &[bool]) -> Session {
+    use wordcraft_doc::para::Anchor;
+    let mut doc = wordcraft_doc::Document::new();
+    doc.body.clear();
+    for &overlap in overlaps {
+        doc.body.push(std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("Text before.", Default::default()))));
+        let mut t = Table::new(3, 2, 200.0);
+        t.props.float =
+            Some(wordcraft_doc::props::TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Page, x: 0.0, y: 144.0, overlap, ..Default::default() });
+        doc.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
+    }
+    let words = "Text that wraps beside the floating tables and must keep clear of them. ".repeat(40);
+    doc.body.push(std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text(&words, Default::default()))));
+    Session::new(doc)
+}
+
+/// The page area each table's cells cover, by the table's block index.
+fn table_areas(s: &mut Session) -> std::collections::BTreeMap<u32, wordcraft_geom::Rect> {
+    let l = s.layout();
+    let mut out: std::collections::BTreeMap<u32, wordcraft_geom::Rect> = Default::default();
+    for it in l.pages.first().map(|p| p.items.as_slice()).unwrap_or(&[]) {
+        if let wordcraft_layout::Placed::Cell { rect, table, .. } = it
+            && let [b] = table.0.as_slice()
+        {
+            let e = out.entry(*b).or_insert(*rect);
+            let (x0, y0) = (e.x.min(rect.x), e.y.min(rect.y));
+            let (x1, y1) = (e.right().max(rect.right()), e.bottom().max(rect.bottom()));
+            *e = wordcraft_geom::Rect::new(x0, y0, x1 - x0, y1 - y0);
+        }
+    }
+    out
+}
+
+#[test]
+fn a_floating_table_that_may_not_overlap_moves_below_the_one_in_its_way() {
+    let mut s = floating_tables(&[false, false]);
+    let areas = table_areas(&mut s);
+    let (a, b) = (areas[&1], areas[&3]);
+    assert!(!a.intersects(&b), "{a:?} and {b:?} must not overlap");
+    assert!(b.y >= a.bottom(), "the second goes below the first");
+    assert!((a.x - b.x).abs() < 0.5, "and keeps its horizontal place");
+}
+
+#[test]
+fn a_floating_table_that_may_overlap_stays_where_it_is_placed() {
+    let mut s = floating_tables(&[true, true]);
+    let areas = table_areas(&mut s);
+    let (a, b) = (areas[&1], areas[&3]);
+    assert!((a.y - b.y).abs() < 0.5 && (a.x - b.x).abs() < 0.5, "both at the place they ask for: {a:?} {b:?}");
+}
+
+#[test]
+fn text_keeps_clear_of_floating_tables() {
+    let mut s = floating_tables(&[false, false]);
+    let areas = table_areas(&mut s);
+    let l = s.layout();
+    let mut lines = 0;
+    for it in l.pages.first().map(|p| p.items.as_slice()).unwrap_or(&[]) {
+        let wordcraft_layout::Placed::Lines { para, l0, l1, x, y, path, .. } = it else { continue };
+        if path.0.len() != 1 {
+            continue;
+        }
+        let base = para.lines.get(*l0).map_or(0.0, |l| l.top);
+        for line in para.lines.get(*l0..*l1).unwrap_or(&[]) {
+            let top = y + line.top - base;
+            for v in &line.vis {
+                let r = wordcraft_geom::Rect::new(x + v.x, top, v.w.max(0.1), line.height);
+                for a in areas.values() {
+                    assert!(!r.inset(0.5, 0.5, 0.5, 0.5).intersects(a), "text at {r:?} runs into the table at {a:?}");
+                }
+            }
+            lines += 1;
+        }
+    }
+    assert!(lines > 10, "the text was laid out ({lines} lines)");
+}
