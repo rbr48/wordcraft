@@ -157,7 +157,7 @@ pub fn parse_number(text: &str) -> Option<f64> {
 }
 
 /// The number in a cell, if its text is one.
-fn cell_number(c: &Cell) -> Option<f64> {
+pub(crate) fn cell_number(c: &Cell) -> Option<f64> {
     parse_number(&super::table::cell_text(c))
 }
 

@@ -2027,10 +2027,13 @@ fn table_formula_supports_all_directions() {
     let r_left = run(&mut s, "table.formula", json!({"formula": "=SUM(LEFT)"}));
     assert_eq!(r_left["result"], "15");
 
-    // A function without arguments is a syntax error, as in Word: nothing is inserted.
+    // Empty parentheses are a syntax error, as in Word: nothing is inserted.
     s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 2, 1, 0]), off: 0 });
-    assert!(s.run("table.formula", &json!({"formula": "=SUM"})).is_err());
     assert!(s.run("table.formula", &json!({"formula": "=SUM()"})).is_err());
+    // A bare function name picks its direction: numbers above the cell make it ABOVE (the 5).
+    let r_bare = run(&mut s, "table.formula", json!({"formula": "=SUM"}));
+    assert_eq!(r_bare["formula"], "=SUM(ABOVE)");
+    assert_eq!(r_bare["result"], "5");
 }
 
 fn column_doc() -> Session {
