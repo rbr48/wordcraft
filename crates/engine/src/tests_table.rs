@@ -1338,9 +1338,11 @@ fn text_selected_inside_a_cell_is_not_a_cell_range() {
     let mut s = s();
     matrix(&mut s);
     // Text inside the cell "Row 1" (row 1, column 0): select the first word by hand.
-    let cell_path = json!([1, 1, 0, 0, 0]);
+    let cell_path = json!([1, 1, 0, 0]);
     run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": cell_path, "off": 0}}));
     run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": cell_path, "off": 3}, "extend": true}));
+    assert_eq!(s.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((1, 0)), "the selection is inside the cell");
+    assert_eq!(s.selected_text(), "Row");
     assert!(!s.is_cell_range(), "a text selection inside a cell must not shade the whole cell");
     assert!(s.column_segments().is_none());
     // A table cell range does shade its cells whole.

@@ -422,7 +422,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("tools.dictate", "Dictate", "Home › Voice", dictate).params(r#"{"text"?: string, "listening"?: bool}"#),
         CommandSpec::new("tools.copilot", "Copilot / AI Assistant", "Home › AI", copilot).params(
-            r#"{"action"?: "toggle|draft|rewrite|summarize|proofread|table|ask|autocomplete", "prompt"?: string, "tone"?: string, "replace"?: bool, "insert"?: bool}"#,
+            r#"{"action"?: "toggle|draft|rewrite|summarize|proofread|table|ask|autocomplete", "prompt"?: string, "instructions"?: string, "tone"?: string, "replace"?: bool, "insert"?: bool, "provider"?: string, "model"?: string, "api_key"?: string, "base_url"?: string}"#,
         ),
         CommandSpec::new("ai.rewrite", "AI Rewrite", "Home › AI", ai_rewrite).params(
             r#"{"text"?: string, "tone"?: "concise|academic|executive|casual|professional", "replace"?: bool, "insert"?: bool}"#,
@@ -517,7 +517,8 @@ fn copilot(s: &mut Session, v: &Value) -> CmdResult {
     if action == "table" {
         return ai_generate_table(s, v);
     }
-    if action == "ask" {
+    // Ask goes to the model when one is set up; the offline answer is the fallback.
+    if action == "ask" && p::str(v, "api_key").is_none_or(|k| k.trim().is_empty()) {
         let q = if !prompt.is_empty() { prompt } else { p::str(v, "question").unwrap_or("") };
         let res = ask_document(s, q);
         let answer = res.get("answer").and_then(Value::as_str).unwrap_or("").to_string();
@@ -531,66 +532,14 @@ fn copilot(s: &mut Session, v: &Value) -> CmdResult {
     if action == "autocomplete" {
         return ai_autocomplete(s, v);
     }
+    if action == "rewrite" && prompt.trim().is_empty() && s.selected_text().trim().is_empty() {
+        return Err(CmdError::Failed("Select the text to rewrite first".into()));
+    }
 
-    let api_key = p::str(v, "api_key").unwrap_or("");
-    let provider = p::str(v, "provider").unwrap_or("OpenRouter");
-    let model = p::str(v, "model").unwrap_or("");
-    let base_url = p::str(v, "base_url");
-
-    let (title, content) = if !api_key.trim().is_empty() {
-        let (sys_prompt, user_prompt, title_name) = match action {
-            "rewrite" => {
-                let src = if !prompt.is_empty() { prompt.to_string() } else { s.selected_text() };
-                (
-                    format!("You are an expert editing assistant. Rewrite the following text with a {tone} tone. Output ONLY the rewritten text without conversational commentary."),
-                    src,
-                    "Rewrite",
-                )
-            }
-            "summarize" => {
-                let src = if !prompt.is_empty() {
-                    prompt.to_string()
-                } else {
-                    let sel = s.selected_text();
-                    if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
-                };
-                (
-                    format!("You are an executive summarizer. Summarize the text using {tone} format. Output concise, structured, professional text."),
-                    src,
-                    "Summary",
-                )
-            }
-            "proofread" => {
-                let src = if !prompt.is_empty() {
-                    prompt.to_string()
-                } else {
-                    let sel = s.selected_text();
-                    if !sel.is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) }
-                };
-                (
-                    "You are a professional proofreader. Correct all spelling, grammar, punctuation, and flow issues. Output the polished corrected text.".into(),
-                    src,
-                    "Proofreading",
-                )
-            }
-            "ask" => {
-                let doc_txt = s.doc.plain_text(StoryRef::Body);
-                (
-                    "You are an intelligent document analyst. Answer the user's question accurately using the provided document context.".into(),
-                    format!("Document text:\n{}\n\nUser question: {}", doc_txt, prompt),
-                    "Ask Document",
-                )
-            }
-            _ => (
-                "You are an expert document author. Draft articulate, ready-to-use document text following the prompt. Output clean prose without meta-commentary.".into(),
-                prompt.to_string(),
-                "Draft",
-            ),
-        };
-
-        match crate::ai_client::query_llm_api(provider, model, api_key, base_url, &sys_prompt, &user_prompt) {
-            Ok(generated) => (title_name.to_string(), generated),
-            Err(e) => return Err(CmdError::Failed(format!("AI Provider ({provider}) error: {e}"))),
+    let (title, content) = if let Some(req) = copilot_request(s, v) {
+        match req.send() {
+            Ok(generated) => (req.title.clone(), generated),
+            Err(e) => return Err(CmdError::Failed(format!("AI Provider ({}) error: {e}", req.provider))),
         }
     } else {
         match action {
@@ -635,6 +584,106 @@ fn copilot(s: &mut Session, v: &Value) -> CmdResult {
         "title": title,
         "content": content,
     }))
+}
+
+/// The most document text a Copilot request sends: a very long document is cut at a character
+/// boundary rather than sent whole.
+const COPILOT_MAX_CHARS: usize = 120_000;
+
+/// One call to the user's AI provider, built from the document as it is now. The call itself
+/// ([`CopilotRequest::send`]) needs no `Session`, so the app makes it on a worker thread while the
+/// document stays responsive.
+#[derive(Clone, Debug)]
+pub struct CopilotRequest {
+    pub action: String,
+    /// The result's heading (`Rewrite`, `Summary`…).
+    pub title: String,
+    pub provider: String,
+    pub model: String,
+    pub api_key: String,
+    pub base_url: Option<String>,
+    pub system: String,
+    pub user: String,
+}
+
+impl CopilotRequest {
+    /// Ask the provider (blocking, bounded by the client's timeout).
+    pub fn send(&self) -> Result<String, String> {
+        crate::ai_client::query_llm_api(&self.provider, &self.model, &self.api_key, self.base_url.as_deref(), &self.system, &self.user)
+    }
+}
+
+/// `text` cut to at most [`COPILOT_MAX_CHARS`] characters.
+fn copilot_text(text: String) -> String {
+    match text.char_indices().nth(COPILOT_MAX_CHARS) {
+        Some((cut, _)) => text.get(..cut).unwrap_or_default().to_string(),
+        None => text,
+    }
+}
+
+/// The provider call `tools.copilot` makes for these params, or `None` when it answers offline
+/// (no API key, or an action the model isn't asked for: Table, Autocomplete).
+pub fn copilot_request(s: &Session, v: &Value) -> Option<CopilotRequest> {
+    let api_key = p::str(v, "api_key").unwrap_or("").trim();
+    let action = p::str(v, "action").unwrap_or("");
+    if api_key.is_empty() || matches!(action, "table" | "autocomplete") || (action.is_empty() && p::str(v, "prompt").unwrap_or("").is_empty()) {
+        return None;
+    }
+    let prompt = p::str(v, "prompt").unwrap_or("");
+    let tone = p::str(v, "tone").unwrap_or("professional");
+    // How to do it ("Key Takeaways", "keep it formal"): guidance for the model, not text to edit.
+    let guide = p::str(v, "instructions").map(|i| copilot_text(i.trim().to_string())).filter(|i| !i.is_empty());
+    let with_guide = |system: String| match &guide {
+        Some(g) => format!("{system}\n\nThe user's instructions: {g}"),
+        None => system,
+    };
+    // The selection, or the whole body when nothing is selected.
+    let target = || {
+        let sel = s.selected_text();
+        copilot_text(if !sel.trim().is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) })
+    };
+    let source = || if !prompt.is_empty() { copilot_text(prompt.to_string()) } else { target() };
+    let (system, user, title) = match action {
+        "rewrite" => (
+            format!("You are an expert editing assistant. Rewrite the following text with a {tone} tone. Output ONLY the rewritten text without conversational commentary."),
+            if !prompt.is_empty() { copilot_text(prompt.to_string()) } else { copilot_text(s.selected_text()) },
+            "Rewrite",
+        ),
+        "summarize" => (
+            format!("You are an executive summarizer. Summarize the text using {tone} format. Output concise, structured, professional text."),
+            source(),
+            "Summary",
+        ),
+        "proofread" => (
+            "You are a professional proofreader. Correct all spelling, grammar, punctuation, and flow issues. Output the polished corrected text.".into(),
+            source(),
+            "Proofreading",
+        ),
+        "ask" => {
+            let q = if !prompt.is_empty() { prompt } else { p::str(v, "question").unwrap_or("") };
+            (
+                "You are an intelligent document analyst. Answer the user's question accurately using the provided document context. Answer in the language of the question.".into(),
+                format!("Document text:\n{}\n\nUser question: {q}", target()),
+                "Ask Document",
+            )
+        }
+        _ => (
+            "You are an expert document author. Draft articulate, ready-to-use document text following the prompt. Output clean prose without meta-commentary.".into(),
+            copilot_text(prompt.to_string()),
+            "Draft",
+        ),
+    };
+    let system = with_guide(system);
+    Some(CopilotRequest {
+        action: if action.is_empty() { "draft".into() } else { action.into() },
+        title: title.into(),
+        provider: p::str(v, "provider").unwrap_or("OpenRouter").into(),
+        model: p::str(v, "model").unwrap_or("").into(),
+        api_key: api_key.into(),
+        base_url: p::str(v, "base_url").filter(|u| !u.trim().is_empty()).map(str::to_string),
+        system,
+        user,
+    })
 }
 
 fn ai_rewrite(s: &mut Session, v: &Value) -> CmdResult {
@@ -2292,5 +2341,59 @@ mod tests {
         assert!(tbl_res["rows"].as_u64().unwrap() >= 2);
         assert!(tbl_res["cols"].as_u64().unwrap() >= 3);
         assert_eq!(s.doc.body.iter().filter(|b| matches!(b.as_ref(), Block::Table(_))).count(), 1);
+    }
+
+    /// Params for a Copilot call with a provider set up (the request is only built, not sent).
+    fn with_key(action: &str, extra: Value) -> Value {
+        let mut v = json!({"action": action, "provider": "OpenRouter", "model": "m", "api_key": "sk-test"});
+        if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+            o.extend(e.clone());
+        }
+        v
+    }
+
+    #[test]
+    fn copilot_ask_goes_to_the_model_when_a_key_is_set() {
+        let s = Session::new(Document::from_text("The loan was approved on 26 February."));
+        let req = copilot_request(&s, &with_key("ask", json!({"prompt": "can you properly format the whole document"}))).unwrap();
+        assert_eq!(req.action, "ask");
+        assert!(req.user.contains("The loan was approved"), "the document goes with the question");
+        assert!(req.user.contains("can you properly format the whole document"));
+        // Without a key the offline answer is used, as before.
+        assert!(copilot_request(&s, &json!({"action": "ask", "prompt": "loan"})).is_none());
+        let mut s = s;
+        let off = s.run("tools.copilot", &json!({"action": "ask", "prompt": "loan"})).unwrap();
+        assert_eq!(off["title"], "Ask Document");
+    }
+
+    #[test]
+    fn copilot_instructions_guide_the_model_and_the_document_is_the_text() {
+        let s = Session::new(Document::from_text("Quarterly revenue rose by a tenth."));
+        let req = copilot_request(&s, &with_key("summarize", json!({"instructions": "Key Takeaways"}))).unwrap();
+        assert!(req.user.contains("Quarterly revenue"), "the body is summarized, not the chip's words");
+        assert!(!req.user.contains("Key Takeaways"));
+        assert!(req.system.contains("Key Takeaways"));
+    }
+
+    #[test]
+    fn copilot_sends_at_most_the_cap_of_document_text() {
+        let s = Session::new(Document::from_text(&"অ".repeat(COPILOT_MAX_CHARS + 500)));
+        let req = copilot_request(&s, &with_key("proofread", json!({}))).unwrap();
+        assert_eq!(req.user.chars().count(), COPILOT_MAX_CHARS);
+    }
+
+    #[test]
+    fn copilot_table_autocomplete_and_keyless_calls_stay_offline() {
+        let s = Session::new(Document::from_text("Text"));
+        assert!(copilot_request(&s, &with_key("table", json!({"prompt": "Roster"}))).is_none());
+        assert!(copilot_request(&s, &with_key("autocomplete", json!({}))).is_none());
+        assert!(copilot_request(&s, &with_key("draft", json!({"api_key": "  "}))).is_none());
+    }
+
+    #[test]
+    fn copilot_rewrite_without_text_says_so() {
+        let mut s = Session::new(Document::from_text("Nothing selected here."));
+        let e = s.run("tools.copilot", &json!({"action": "rewrite", "instructions": "Professional"}));
+        assert!(e.is_err(), "rewriting nothing is an error, not an empty result");
     }
 }

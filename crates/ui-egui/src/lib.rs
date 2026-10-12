@@ -17,6 +17,7 @@ pub mod backstage;
 pub mod canvas;
 pub mod chrome;
 pub mod control;
+pub mod copilot;
 pub mod credits;
 pub mod dialogs;
 pub mod dialogs_insert;
@@ -281,6 +282,8 @@ pub struct WordApp {
     pub(crate) equation_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// The Copilot pane's provider call in flight.
+    pub copilot: copilot::CopilotLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
@@ -350,6 +353,7 @@ impl WordApp {
             last_autosave: 0.0,
             equation_prev_tab: None,
             zotero: zotero::ZoteroLink::default(),
+            copilot: copilot::CopilotLink::default(),
             ctx: None,
             read_aloud_at: None,
             read_aloud_error: None,
@@ -910,6 +914,7 @@ impl WordApp {
         }
         self.drain_control(ctx);
         zotero::poll(self, ctx);
+        copilot::poll(self, ctx);
         read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();

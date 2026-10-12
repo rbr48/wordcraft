@@ -654,6 +654,27 @@ fn camel_words(s: &str) -> String {
     out
 }
 
+/// `tools.copilot` params for the pane's mode: `text` is the box (or chip) text. For Rewrite,
+/// Summarize and Proofread it says how (instructions); the text worked on is the selection, or
+/// the whole document. For Draft, Ask and Table it is the request itself.
+fn copilot_payload(app: &WordApp, mode: &str, text: &str, tone: &str) -> Value {
+    let mut payload = json!({
+        "action": mode,
+        "tone": tone,
+        "provider": app.ui.ai_provider,
+        "model": app.ui.ai_model,
+    });
+    let key = if matches!(mode, "rewrite" | "summarize" | "proofread") { "instructions" } else { "prompt" };
+    payload[key] = json!(text);
+    if !app.ui.ai_api_key.trim().is_empty() {
+        payload["api_key"] = json!(app.ui.ai_api_key);
+    }
+    if !app.ui.ai_base_url.trim().is_empty() {
+        payload["base_url"] = json!(app.ui.ai_base_url);
+    }
+    payload
+}
+
 fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
     if header(ui, "Copilot") {
         app.ui.ai_pane = false;
@@ -815,36 +836,8 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
             if ui.add(egui::Button::new(egui::RichText::new(*chip).small())).clicked() {
                 app.ui.ai_prompt = chip.to_string();
                 let mode_lower = app.ui.ai_mode.to_lowercase();
-                let tone = chip.to_lowercase();
-                let mut payload = json!({
-                    "action": mode_lower,
-                    "prompt": chip,
-                    "tone": tone,
-                    "provider": app.ui.ai_provider,
-                    "model": app.ui.ai_model,
-                });
-                if !app.ui.ai_api_key.trim().is_empty() {
-                    payload["api_key"] = json!(app.ui.ai_api_key);
-                }
-                if !app.ui.ai_base_url.trim().is_empty() {
-                    payload["base_url"] = json!(app.ui.ai_base_url);
-                }
-                app.ui.ai_status.clear();
-                let r = app.session.run("tools.copilot", &payload);
-                match r {
-                    Ok(res) => {
-                        if let Some(c) = res.get("content").and_then(Value::as_str) {
-                            app.ui.ai_response = c.to_string();
-                        } else if mode_lower == "table" {
-                            let rows = res.get("rows").and_then(Value::as_u64).unwrap_or(0);
-                            let cols = res.get("cols").and_then(Value::as_u64).unwrap_or(0);
-                            app.ui.ai_response = format!("✓ Inserted native {rows}×{cols} table for \"{chip}\" into document at caret.");
-                        }
-                    }
-                    Err(e) => {
-                        app.ui.ai_status = format!("Error: {e}");
-                    }
-                }
+                let payload = copilot_payload(app, &mode_lower, chip, &chip.to_lowercase());
+                crate::copilot::run(app, &payload, chip);
             }
         }
     });
@@ -871,7 +864,9 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
             "Ask" => "Ask Document",
             _ => "Generate Draft",
         };
-        let run_btn = ui.add(
+        let busy = app.copilot.busy();
+        let run_btn = ui.add_enabled(
+            !busy,
             egui::Button::new(egui::RichText::new(tl!(btn_label)).font(semibold(12.5)).color(egui::Color32::WHITE))
                 .fill(crate::theme::APP_COLOR)
                 .min_size(vec2(140.0, 26.0)),
@@ -903,40 +898,24 @@ fn ai_copilot(app: &mut WordApp, ui: &mut Ui) {
             } else {
                 "professional"
             };
-            let mut payload = json!({
-                "action": mode_lower,
-                "prompt": app.ui.ai_prompt,
-                "tone": tone,
-                "provider": app.ui.ai_provider,
-                "model": app.ui.ai_model,
-            });
-            if !app.ui.ai_api_key.trim().is_empty() {
-                payload["api_key"] = json!(app.ui.ai_api_key);
-            }
-            if !app.ui.ai_base_url.trim().is_empty() {
-                payload["base_url"] = json!(app.ui.ai_base_url);
-            }
-            app.ui.ai_status.clear();
-            let r = app.session.run("tools.copilot", &payload);
-            match r {
-                Ok(res) => {
-                    if let Some(c) = res.get("content").and_then(Value::as_str) {
-                        app.ui.ai_response = c.to_string();
-                    } else if mode_lower == "table" {
-                        let rows = res.get("rows").and_then(Value::as_u64).unwrap_or(0);
-                        let cols = res.get("cols").and_then(Value::as_u64).unwrap_or(0);
-                        app.ui.ai_response = format!("✓ Inserted native {rows}×{cols} table for \"{}\" into document at caret.", app.ui.ai_prompt);
-                    }
-                }
-                Err(e) => {
-                    app.ui.ai_status = format!("Error: {e}");
-                }
-            }
+            let text = app.ui.ai_prompt.clone();
+            let payload = copilot_payload(app, &mode_lower, &text, tone);
+            crate::copilot::run(app, &payload, &text);
         }
         if !app.ui.ai_response.is_empty() && ui.small_button(tl!("Clear")).clicked() {
             app.ui.ai_response.clear();
         }
     });
+    // The provider is thinking: the document stays usable meanwhile.
+    if let Some(secs) = app.copilot.elapsed_s() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(egui::RichText::new(format!("{} {secs:.0}s", tl!("Thinking…"))).font(regular(11.5)));
+            if ui.small_button(tl!("Cancel")).clicked() {
+                crate::copilot::cancel(app);
+            }
+        });
+    }
 
     if !app.ui.ai_response.is_empty() {
         ui.add_space(6.0);
