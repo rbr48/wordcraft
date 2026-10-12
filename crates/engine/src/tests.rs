@@ -2980,3 +2980,46 @@ fn table_formula_unknown_function_errors() {
     let res = s.run("table.formula", &json!({"formula": "=MEDIAN(ABOVE)"}));
     assert!(res.is_err(), "expected error for unknown formula function, got: {res:?}");
 }
+
+/// #745: layout keeps a picture's size, so pictures read from HTML, Markdown, ODT or RTF at
+/// their pixel size are fitted to the text width when the file is opened (and when pasted),
+/// keeping their proportions; small pictures keep their size.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn imported_pictures_fit_the_text_width() {
+    let png = |w: u32, h: u32| {
+        let mut b = Vec::new();
+        image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png)
+            .unwrap();
+        cmd::insert::base64_encode(&b)
+    };
+    let sizes = |doc: &wordcraft_doc::Document| -> Vec<(f32, f32)> {
+        doc.body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .filter_map(|o| match o {
+                wordcraft_doc::InlineObject::Image { w, h, .. } => Some((*w, *h)),
+                _ => None,
+            })
+            .collect()
+    };
+    let md = format!("![wide](data:image/png;base64,{})\n\n![small](data:image/png;base64,{})\n", png(1200, 300), png(40, 20));
+    let doc = crate::io::open_bytes("p.md", md.as_bytes()).unwrap();
+    let max_w = crate::io::text_width(&doc);
+    let got = sizes(&doc);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!((got[0].0 - max_w).abs() < 0.01, "wide picture fits: {got:?} (text width {max_w})");
+    assert!((got[0].1 - max_w / 4.0).abs() < 0.01, "and keeps its proportions: {got:?}");
+    assert!((got[1].0 - 30.0).abs() < 0.01 && (got[1].1 - 15.0).abs() < 0.01, "small picture keeps its size: {got:?}");
+
+    // Pasting HTML fits our text width too.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let html = format!("<p><img src=\"data:image/png;base64,{}\"></p>", png(1200, 300));
+    s.run("edit.pasteSpecial", &json!({"as": "html", "html": html})).unwrap();
+    let max_w = crate::io::text_width(&s.doc);
+    let got = sizes(&s.doc);
+    assert!(got.iter().any(|(w, _)| (w - max_w).abs() < 0.01), "pasted picture fits: {got:?}");
+}
+

@@ -2679,10 +2679,10 @@ fn graphic_paths_drop_segments_that_cannot_be_drawn() {
 }
 
 #[test]
-fn oversized_graphic_draws_shrunk_with_its_items() {
+fn graphic_items_scale_with_their_frame() {
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind};
     use wordcraft_doc::props::Rgb;
-    // A 1000 x 500 pt chart is wider than the text: layout shrinks it, and its items with it.
+    // A chart drawn for 1000 x 500 pt in a 500 x 250 pt frame: its items and strokes scale by half.
     let items = vec![GraphicItem::Shape {
         rect: [0.0, 0.0, 1000.0, 500.0],
         kind: wordcraft_doc::para::ShapeKind::Rectangle,
@@ -2691,7 +2691,7 @@ fn oversized_graphic_draws_shrunk_with_its_items() {
         stroke_width: 4.0,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, w: 1000.0, h: 500.0, source: None };
-    let obj = InlineObject::Graphic { w: 1000.0, h: 500.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let obj = InlineObject::Graphic { w: 500.0, h: 250.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
     let mut d = Document::from_text("Chart");
     d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
     let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
@@ -2699,9 +2699,58 @@ fn oversized_graphic_draws_shrunk_with_its_items() {
         .iter()
         .find_map(|x| if let display::Draw::Shape { rect, stroke_width, .. } = x { Some((*rect, *stroke_width)) } else { None })
         .expect("a shape");
-    assert!(r.w < 1000.0, "{r:?}");
-    assert!((r.h / r.w - 0.5).abs() < 1e-3, "{r:?}");
-    assert!((stroke / r.w - 4.0 / 1000.0).abs() < 1e-5, "stroke {stroke} at width {}", r.w);
+    assert!((r.w - 500.0).abs() < 1e-3 && (r.h - 250.0).abs() < 1e-3, "{r:?}");
+    assert!((stroke - 2.0).abs() < 1e-5, "stroke {stroke}");
+}
+
+#[test]
+fn inline_picture_wider_than_a_text_box_is_fitted_to_it() {
+    // Text boxes don't clip what runs past their sides, so a 400 x 100 pt picture in a 144 pt box
+    // is fitted to the box's 129.6 pt inside its margins instead of spilling over the page.
+    let mut d = Document::from_text("Before");
+    let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
+    p.insert_object(0, picture(400.0, 100.0, Default::default()), &Default::default()).unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(p)]);
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 144.0,
+        h: 72.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Default::default(),
+        story: Some(id),
+        freeform: None,
+        effects: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let draws = flat(display::page_display(&d, &l.pages[0], &Default::default()));
+    let r = draws
+        .iter()
+        .find_map(|x| match x {
+            display::Draw::Shape { rect, kind: wordcraft_doc::para::ShapeKind::Rectangle, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("the picture");
+    assert!((r.w - 129.6).abs() < 0.1 && (r.h - 32.4).abs() < 0.1, "{r:?}");
+}
+
+#[test]
+fn inline_picture_wider_than_the_text_keeps_its_size() {
+    // A 1000 x 100 pt picture in 468 pt of text: Word draws it at its size, past the margin, and the
+    // page edge clips it; the line is as tall as the picture (docxide-pdf's case179).
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.insert_object(0, picture(1000.0, 100.0, Default::default()), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let line = &para.lines[0];
+    assert!((line.baseline - line.top - 100.0).abs() < 0.01, "the picture keeps its height: {line:?}");
+    let draws = flat(display::page_display(&d, &l.pages[0], &Default::default()));
+    let r = draws.iter().find_map(|x| if let display::Draw::Shape { rect, .. } = x { Some(*rect) } else { None }).expect("the picture");
+    assert!((r.w - 1000.0).abs() < 0.01 && (r.h - 100.0).abs() < 0.01, "{r:?}");
 }
 
 /// The paragraph at `path` on page 0: its first line's x, its y and its line count.
