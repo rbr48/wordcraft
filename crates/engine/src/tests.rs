@@ -2849,7 +2849,7 @@ fn table_sort_total_order_and_currency() {
     let values = ["$100", "$9", "$20", "abc", "10"];
     for (r, val) in values.iter().enumerate() {
         let t = s.doc.table_mut(StoryRef::Body, &tp).unwrap();
-        t.rows[r].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(*val, Default::default()))];
+        t.rows[r].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(val, Default::default()))];
     }
     run(&mut s, "table.sort", json!({"column": 0, "descending": false, "header": false}));
     let t = s.doc.table(StoryRef::Body, &tp).unwrap();
