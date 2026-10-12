@@ -136,6 +136,14 @@ pub struct FindState {
     pub match_case: bool,
     pub whole_word: bool,
     pub regex: bool,
+    /// Word's "Use wildcards" (#543).
+    pub wildcards: bool,
+    /// Take Find what literally: no `^` codes (`special: false`).
+    pub literal: bool,
+    pub match_prefix: bool,
+    pub match_suffix: bool,
+    pub ignore_punct: bool,
+    pub ignore_space: bool,
     /// Matches from the last search: (start, end).
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,

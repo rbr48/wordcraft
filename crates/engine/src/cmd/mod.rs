@@ -10,6 +10,7 @@ pub mod draw;
 pub mod edit;
 pub mod equation;
 pub mod file;
+pub mod find_pattern;
 pub mod fmt_revisions;
 pub mod format;
 pub mod insert;

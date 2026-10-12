@@ -14,6 +14,108 @@ use wordcraft_engine::Password;
 use crate::WordApp;
 use crate::theme::{Tokens, semibold};
 
+/// The Find and Replace dialog's search options beyond the first row (#543).
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindExtra {
+    pub wildcards: bool,
+    pub prefix: bool,
+    pub suffix: bool,
+    pub ignore_punct: bool,
+    pub ignore_space: bool,
+    /// The search options are shown.
+    pub more: bool,
+    /// Special ▾ inserts into Replace with (it last had the focus), not Find what.
+    pub to_replace: bool,
+}
+
+/// The Special ▾ menu: (name, code) for Find what, without and with wildcards.
+const SPECIAL_FIND: &[(&str, &str)] = &[
+    ("Paragraph Mark", "^p"),
+    ("Tab Character", "^t"),
+    ("Any Character", "^?"),
+    ("Any Digit", "^#"),
+    ("Any Letter", "^$"),
+    ("Caret Character", "^^"),
+    ("Section Character", "^%"),
+    ("Paragraph Character", "^v"),
+    ("Column Break", "^n"),
+    ("Em Dash", "^+"),
+    ("En Dash", "^="),
+    ("Graphic", "^g"),
+    ("Manual Line Break", "^l"),
+    ("Manual Page Break", "^m"),
+    ("Nonbreaking Hyphen", "^~"),
+    ("Nonbreaking Space", "^s"),
+    ("Optional Hyphen", "^-"),
+    ("Section Break", "^b"),
+    ("White Space", "^w"),
+];
+const SPECIAL_FIND_WILD: &[(&str, &str)] = &[
+    ("Any Character", "?"),
+    ("Character in Range", "[-]"),
+    ("Beginning of Word", "<"),
+    ("End of Word", ">"),
+    ("Expression", "()"),
+    ("Not", "[!]"),
+    ("Num Occurrences", "{,}"),
+    ("Previous 1 or More", "@"),
+    ("0 or More Characters", "*"),
+    ("Paragraph Mark", "^13"),
+    ("Tab Character", "^t"),
+    ("Caret Character", "^^"),
+    ("Section Character", "^%"),
+    ("Paragraph Character", "^v"),
+    ("Column Break", "^n"),
+    ("Em Dash", "^+"),
+    ("En Dash", "^="),
+    ("Graphic", "^g"),
+    ("Manual Line Break", "^l"),
+    ("Manual Page Break", "^m"),
+    ("Nonbreaking Hyphen", "^~"),
+    ("Nonbreaking Space", "^s"),
+    ("Optional Hyphen", "^-"),
+];
+/// Replace with; with wildcards, "Find What Expression" (`\1`) comes first.
+const SPECIAL_REPLACE: &[(&str, &str)] = &[
+    ("Paragraph Mark", "^p"),
+    ("Tab Character", "^t"),
+    ("Caret Character", "^^"),
+    ("Section Character", "^%"),
+    ("Paragraph Character", "^v"),
+    ("Clipboard Contents", "^c"),
+    ("Column Break", "^n"),
+    ("Em Dash", "^+"),
+    ("En Dash", "^="),
+    ("Find What Text", "^&"),
+    ("Manual Line Break", "^l"),
+    ("Manual Page Break", "^m"),
+    ("Nonbreaking Hyphen", "^~"),
+    ("Nonbreaking Space", "^s"),
+    ("Optional Hyphen", "^-"),
+];
+
+/// The Special ▾ menu button; returns the code picked.
+fn special_menu(ui: &mut Ui, extra: &FindExtra) -> Option<&'static str> {
+    let mut picked = None;
+    ui.menu_button(format!("{} ▾", tl!("Special")), |ui| {
+        let wild_replace: &[(&str, &str)] = &[("Find What Expression", "\\1")];
+        let lists: [&[(&str, &str)]; 2] = match (extra.to_replace, extra.wildcards) {
+            (false, false) => [SPECIAL_FIND, &[]],
+            (false, true) => [SPECIAL_FIND_WILD, &[]],
+            (true, false) => [SPECIAL_REPLACE, &[]],
+            (true, true) => [wild_replace, SPECIAL_REPLACE],
+        };
+        for (name, code) in lists.into_iter().flatten() {
+            if ui.button(format!("{}   {code}", tl!(name))).clicked() {
+                picked = Some(*code);
+                ui.close();
+            }
+        }
+    });
+    picked
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "dialog", rename_all = "camelCase")]
 pub enum Dialog {
@@ -74,6 +176,8 @@ pub enum Dialog {
         match_case: bool,
         whole_word: bool,
         regex: bool,
+        /// Search options under "Search Options" (#543).
+        extra: FindExtra,
         replace_mode: bool,
         message: String,
     },
@@ -788,6 +892,19 @@ impl Dialog {
                 match_case: app.session.find.match_case,
                 whole_word: app.session.find.whole_word,
                 regex: app.session.find.regex,
+                extra: FindExtra {
+                    wildcards: app.session.find.wildcards,
+                    prefix: app.session.find.match_prefix,
+                    suffix: app.session.find.match_suffix,
+                    ignore_punct: app.session.find.ignore_punct,
+                    ignore_space: app.session.find.ignore_space,
+                    more: app.session.find.wildcards
+                        || app.session.find.match_prefix
+                        || app.session.find.match_suffix
+                        || app.session.find.ignore_punct
+                        || app.session.find.ignore_space,
+                    to_replace: false,
+                },
                 replace_mode: name == "replace",
                 message: String::new(),
             },
@@ -1279,7 +1396,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::Tabs { form } => crate::dialogs_para::tabs(app, ui, form),
         Dialog::Borders { form } => crate::dialogs_para::borders(app, ui, form),
-        Dialog::Find { query, replace, match_case, whole_word, regex, replace_mode, message } => {
+        Dialog::Find { query, replace, match_case, whole_word, regex, extra, replace_mode, message } => {
             ui.horizontal(|ui| {
                 if ui.selectable_label(!*replace_mode, tl!("Find")).clicked() {
                     *replace_mode = false;
@@ -1290,20 +1407,59 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Find what:"));
-                ui.add(egui::TextEdit::singleline(query).desired_width(240.0));
+                if ui.add(egui::TextEdit::singleline(query).desired_width(240.0)).gained_focus() {
+                    extra.to_replace = false;
+                }
             });
             if *replace_mode {
                 ui.horizontal(|ui| {
                     ui.label(tl!("Replace with:"));
-                    ui.add(egui::TextEdit::singleline(replace).desired_width(228.0));
+                    if ui.add(egui::TextEdit::singleline(replace).desired_width(228.0)).gained_focus() {
+                        extra.to_replace = true;
+                    }
+                });
+            } else {
+                extra.to_replace = false;
+            }
+            // Word greys out Match case and the word options with wildcards (they always match case).
+            let plain = !extra.wildcards;
+            ui.horizontal(|ui| {
+                ui.add_enabled(plain, egui::Checkbox::new(match_case, tl!("Match case")));
+                ui.add_enabled(plain, egui::Checkbox::new(whole_word, tl!("Whole words")));
+                ui.checkbox(&mut extra.wildcards, tl!("Use wildcards"));
+            });
+            let arrow = if extra.more { "▾" } else { "▸" };
+            if ui.selectable_label(extra.more, format!("{arrow} {}", tl!("Search Options"))).clicked() {
+                extra.more = !extra.more;
+            }
+            if extra.more {
+                ui.horizontal(|ui| {
+                    ui.add_enabled(plain, egui::Checkbox::new(&mut extra.prefix, tl!("Match prefix")));
+                    ui.add_enabled(plain, egui::Checkbox::new(&mut extra.suffix, tl!("Match suffix")));
+                });
+                ui.horizontal(|ui| {
+                    ui.add_enabled(plain, egui::Checkbox::new(&mut extra.ignore_punct, tl!("Ignore punctuation characters")));
+                    ui.add_enabled(plain, egui::Checkbox::new(&mut extra.ignore_space, tl!("Ignore white-space characters")));
+                });
+                ui.horizontal(|ui| {
+                    ui.checkbox(regex, tl!("Regular expressions"));
+                    if let Some(code) = special_menu(ui, extra) {
+                        if extra.to_replace { replace.push_str(code) } else { query.push_str(code) }
+                    }
                 });
             }
-            ui.horizontal(|ui| {
-                ui.checkbox(match_case, tl!("Match case"));
-                ui.checkbox(whole_word, tl!("Whole words"));
-                ui.checkbox(regex, tl!("Wildcards (regex)"));
+            let opts = json!({
+                "text": query,
+                "with": replace,
+                "matchCase": *match_case,
+                "wholeWord": *whole_word,
+                "regex": *regex,
+                "wildcards": extra.wildcards,
+                "matchPrefix": extra.prefix,
+                "matchSuffix": extra.suffix,
+                "ignorePunct": extra.ignore_punct,
+                "ignoreSpace": extra.ignore_space,
             });
-            let opts = json!({"text": query, "with": replace, "matchCase": *match_case, "wholeWord": *whole_word, "regex": *regex});
             if !*replace_mode {
                 ui.horizontal(|ui| {
                     let lit = app.session.find.highlight;
