@@ -10,6 +10,7 @@ pub mod draw;
 pub mod edit;
 pub mod equation;
 pub mod file;
+pub mod find_pattern;
 pub mod fmt_revisions;
 pub mod format;
 pub mod insert;
@@ -68,6 +69,17 @@ pub fn registry() -> Registry {
     v.extend(bangla::specs());
     v.extend(speech::specs());
     Registry::new(v)
+}
+
+/// A shortcut that differs on macOS, where Word for Mac moves it (⌘Q quits, ⌘Space is
+/// Spotlight, ⌘⌥H hides other apps…): `mac` there, `other` everywhere else.
+pub const fn mac_or(mac: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") { mac } else { other }
+}
+
+/// A shortcut with no macOS equivalent (Option+letter types the character there).
+pub const fn non_mac(k: &'static str) -> &'static str {
+    mac_or("", k)
 }
 
 /// Parse a position from JSON (`{"story":"body","path":[0],"off":3}` or `{"block":0,"off":3}`).
@@ -204,12 +216,34 @@ pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
         first = false;
         let part = part.replace('\u{000B}', "\n");
         if !part.is_empty() {
+            let starts_para = direction_unset(s, &at);
             at = s.doc.insert_text(&at, &part, &props)?;
+            // Typing Arabic, Hebrew… as the first letters of a paragraph whose direction nothing
+            // sets makes it a right-to-left paragraph, so the caret and text start at the right
+            // margin. Paragraphs that already have letters, or a direction, keep theirs.
+            if starts_para
+                && let Ok(p) = s.doc.para_mut(at.story, &at.path)
+                && wordcraft_doc::bidi::first_strong_is_rtl(&p.text)
+            {
+                p.props.bidi = Some(true);
+                p.touch();
+            }
         }
     }
     s.sel = crate::Selection::caret(at);
     s.goal_x = None;
     Ok(())
+}
+
+/// Is the paragraph at `at` still without letters (empty, or only spaces, digits and
+/// punctuation), with no direction set on it, its style chain or the document defaults?
+fn direction_unset(s: &Session, at: &Pos) -> bool {
+    let Some(p) = s.doc.para_at(at) else { return false };
+    if p.props.bidi.is_some() || p.text.chars().any(char::is_alphabetic) || s.doc.styles.default_para.bidi.is_some() {
+        return false;
+    }
+    let style = p.props.style.as_deref().unwrap_or("Normal");
+    !s.doc.styles.chain(style).iter().any(|st| st.para.bidi.is_some())
 }
 
 /// Take a paragraph out of its list like Word does when Enter or Backspace ends a list: a

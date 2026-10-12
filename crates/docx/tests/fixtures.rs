@@ -1075,3 +1075,84 @@ fn formatting_revisions_round_trip() {
     assert_eq!(again.last_section, d.last_section);
     assert_eq!(again.revisions, d.revisions);
 }
+
+/// A package with `styles`, a theme (accent1 4472C4, accent2 ED7D31, major font "Major Face") and,
+/// when given, `settings`.
+fn themed_docx(body: &str, styles: &str, settings: Option<&str>) -> Document {
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:clrScheme name="T"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="T"><a:majorFont><a:latin typeface="Major Face"/></a:majorFont><a:minorFont><a:latin typeface="Minor Face"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>{styles}</w:styles>"#
+    );
+    let mut doc_rels = vec![("rId1", "styles", "styles.xml"), ("rId2", "theme", "theme/theme1.xml")];
+    let mut extra = vec![("word/styles.xml", styles.as_str()), ("word/theme/theme1.xml", theme)];
+    let settings = settings.map(|s| format!(r#"<w:settings {W_NS}>{s}</w:settings>"#));
+    if let Some(s) = &settings {
+        doc_rels.push(("rId3", "settings", "settings.xml"));
+        extra.push(("word/settings.xml", s.as_str()));
+    }
+    wordcraft_docx::read(&docx(body, &doc_rels, &extra)).unwrap()
+}
+
+/// Within one step per channel: Word's tint and shade round differently from ours in the last bit.
+fn near(c: Option<TextColor>, want: Rgb) -> bool {
+    matches!(c, Some(TextColor::Rgb(Rgb(r, g, b))) if r.abs_diff(want.0) <= 1 && g.abs_diff(want.1) <= 1 && b.abs_diff(want.2) <= 1)
+}
+
+#[test]
+fn theme_colour_wins_over_the_fixed_colour() {
+    // Heading 1 as Word writes it: the stale w:val is ignored, accent1 darkened 25% is 2F5496.
+    let styles = r#"<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:color w:val="FF0000" w:themeColor="accent1" w:themeShade="BF"/><w:u w:val="single" w:color="FF0000" w:themeColor="accent2"/></w:rPr></w:style>"#;
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>H</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:color w:val="000000" w:themeColor="accent1" w:themeTint="99"/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:color w:val="000000" w:themeColor="accent1" w:themeTint="66"/></w:rPr><w:t>b</w:t></w:r><w:r><w:rPr><w:color w:val="000000" w:themeColor="accent1" w:themeTint="33"/></w:rPr><w:t>c</w:t></w:r><w:r><w:rPr><w:color w:val="000000" w:themeColor="accent1" w:themeShade="7F"/></w:rPr><w:t>d</w:t></w:r><w:r><w:rPr><w:color w:val="000000" w:themeColor="accent2" w:themeShade="BF"/></w:rPr><w:t>e</w:t></w:r><w:r><w:rPr><w:color w:val="000000" w:themeColor="text2"/></w:rPr><w:t>f</w:t></w:r><w:r><w:rPr><w:color w:val="auto" w:themeColor="hyperlink"/></w:rPr><w:t>g</w:t></w:r><w:r><w:rPr><w:shd w:val="clear" w:color="auto" w:fill="000000" w:themeFill="accent2" w:themeFillTint="33"/></w:rPr><w:t>h</w:t></w:r></w:p>"#;
+    let d = themed_docx(body, styles, None);
+    let h = d.styles.get("Heading1").unwrap();
+    assert_eq!(h.chr.color, Some(TextColor::Rgb(Rgb(0x2F, 0x54, 0x96))));
+    assert_eq!(h.chr.underline_color, Some(Rgb(0xED, 0x7D, 0x31)));
+    let p = paras(&d);
+    let at = |i: usize| p[1].props_of_char(i);
+    // Colours Word writes into w:val next to these theme colours (Grid Table and heading styles).
+    assert!(near(at(0).color, Rgb(0x8E, 0xAA, 0xDB)), "{:?}", at(0).color);
+    assert!(near(at(1).color, Rgb(0xB4, 0xC6, 0xE7)), "{:?}", at(1).color);
+    assert!(near(at(2).color, Rgb(0xD9, 0xE2, 0xF3)), "{:?}", at(2).color);
+    assert!(near(at(3).color, Rgb(0x1F, 0x37, 0x63)), "{:?}", at(3).color);
+    assert!(near(at(4).color, Rgb(0xC4, 0x59, 0x11)), "{:?}", at(4).color);
+    // text2 maps to dk2 without a w:clrSchemeMapping; hyperlink to hlink.
+    assert_eq!(at(5).color, Some(TextColor::Rgb(Rgb(0x44, 0x54, 0x6A))));
+    assert_eq!(at(6).color, Some(TextColor::Rgb(Rgb(0x05, 0x63, 0xC1))));
+    let fill = at(7).shading.unwrap();
+    assert!(near(Some(TextColor::Rgb(fill)), Rgb(0xFB, 0xE4, 0xD5)), "{fill:?}");
+}
+
+#[test]
+fn theme_colours_follow_the_colour_scheme_mapping() {
+    // Styles are read before settings; the mapping still applies to them.
+    let styles =
+        r#"<w:style w:type="character" w:styleId="T1"><w:name w:val="T1"/><w:rPr><w:color w:val="000000" w:themeColor="text1"/></w:rPr></w:style>"#;
+    let body = r#"<w:p><w:r><w:rPr><w:rStyle w:val="T1"/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:color w:val="000000" w:themeColor="background1"/></w:rPr><w:t>b</w:t></w:r><w:r><w:rPr><w:color w:val="000000" w:themeColor="dark1"/></w:rPr><w:t>c</w:t></w:r></w:p>"#;
+    let mapping = r#"<w:clrSchemeMapping w:bg1="dark1" w:t1="accent2" w:bg2="light2" w:t2="dark2" w:accent1="accent1" w:accent2="accent2" w:accent3="accent3" w:accent4="accent4" w:accent5="accent5" w:accent6="accent6" w:hyperlink="hyperlink" w:followedHyperlink="followedHyperlink"/>"#;
+    let d = themed_docx(body, styles, Some(mapping));
+    assert_eq!(d.styles.get("T1").unwrap().chr.color, Some(TextColor::Rgb(Rgb(0xED, 0x7D, 0x31))));
+    let p = paras(&d);
+    assert_eq!(p[0].props_of_char(1).color, Some(TextColor::Rgb(Rgb(0, 0, 0))), "background1 → dark1");
+    assert_eq!(p[0].props_of_char(2).color, Some(TextColor::Rgb(Rgb(0, 0, 0))), "dark1 isn't remapped");
+}
+
+#[test]
+fn theme_colour_without_a_theme_keeps_the_fixed_colour() {
+    let d = read_body(r#"<w:p><w:r><w:rPr><w:color w:val="00FF00" w:themeColor="accent1" w:themeShade="BF"/></w:rPr><w:t>a</w:t></w:r></w:p>"#);
+    assert_eq!(paras(&d)[0].props_of_char(0).color, Some(TextColor::Rgb(Rgb(0, 0xFF, 0))));
+}
+
+#[test]
+fn theme_font_wins_over_the_fixed_font() {
+    let styles = r#"<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:rFonts w:ascii="Calibri Light" w:hAnsi="Calibri Light" w:asciiTheme="majorHAnsi" w:hAnsiTheme="majorHAnsi"/></w:rPr></w:style>"#;
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>H</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:rFonts w:hAnsi="Arial" w:hAnsiTheme="minorHAnsi"/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Arial" w:asciiTheme="minorHAnsi"/></w:rPr><w:t>b</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsiTheme="majorHAnsi"/></w:rPr><w:t>c</w:t></w:r></w:p>"#;
+    let d = themed_docx(body, styles, None);
+    assert_eq!(d.styles.get("Heading1").unwrap().chr.font.as_deref(), Some("Major Face"));
+    let p = paras(&d);
+    assert_eq!(p[1].props_of_char(0).font.as_deref(), Some("Minor Face"));
+    assert_eq!(p[1].props_of_char(1).font.as_deref(), Some("Minor Face"));
+    // An explicit ascii font still beats a theme font given only for hAnsi.
+    assert_eq!(p[1].props_of_char(2).font.as_deref(), Some("Arial"));
+}

@@ -123,6 +123,45 @@ fn restore_takes_a_command_back_exactly() {
 }
 
 #[test]
+fn custom_dictionary_words_persist_through_their_file() {
+    // #40: adding a word through a command writes it to the session's file, and loading
+    // that file makes the word known (only the desktop app wires this up).
+    let dir = std::env::temp_dir().join(format!("wc-engdict-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("custom-dictionary.txt");
+    let _ = std::fs::remove_file(&path);
+    let mut s = s();
+    s.user_dict_path = Some(path.clone());
+    run(&mut s, "review.addToDictionary", json!({"word": "zxqengpersist"}));
+    let saved = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(saved.lines().any(|l| l == "zxqengpersist"), "the word reaches the file: {saved:?}");
+    run(&mut s, "file.options", json!({"removeWords": ["zxqengpersist"]}));
+    let saved = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(!saved.lines().any(|l| l == "zxqengpersist"), "removal reaches the file too: {saved:?}");
+
+    // Ignore All is for this session only, as in Word: the word is accepted, never saved.
+    assert!(!wordcraft_proof::is_correct("zxqengignored"));
+    run(&mut s, "review.ignoreAll", json!({"word": "zxqengignored"}));
+    assert!(wordcraft_proof::is_correct("zxqengignored"));
+    assert!(!wordcraft_proof::user_dictionary().contains(&"zxqengignored".to_string()));
+    let saved = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(!saved.contains("zxqengignored"), "Ignore All doesn't reach the file: {saved:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn add_to_dictionary_takes_only_words_the_file_keeps() {
+    // #40: the same rule as loading the dictionary file, so nothing added is dropped on the next load.
+    let mut s = s();
+    for bad in ["two words", "tab\tword", "bell\u{7}", &"x".repeat(65)] {
+        assert!(s.run("review.addToDictionary", &json!({"word": bad})).is_err(), "{bad:?}");
+        assert!(!wordcraft_proof::user_dictionary().iter().any(|w| w == &bad.to_lowercase()));
+    }
+    run(&mut s, "review.addToDictionary", json!({"word": " zxqengtrimmed "}));
+    assert!(wordcraft_proof::user_dictionary().contains(&"zxqengtrimmed".to_string()));
+}
+
+#[test]
 fn restore_is_exact_at_the_undo_limit() {
     // 510 steps, each with its own indent: the stack holds the newest 500.
     let build = || {
@@ -420,6 +459,75 @@ fn find_replace() {
     assert_eq!(text(&s), "fox dog fox\nCat bird");
     let r = run(&mut s, "edit.find", json!({"text": "\\b\\w{3}\\b", "regex": true, "matchCase": false}));
     assert_eq!(r["count"], 4);
+}
+
+#[test]
+fn find_replace_special_codes() {
+    // ^p finds paragraph marks across paragraphs; Replace All with ^p splits paragraphs and is one undo step.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "one\ntwo\nthree"}));
+    let paras = |s: &Session| s.doc.para_paths(StoryRef::Body).len();
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "^p"}))["count"], 2);
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "o^pt", "with": "O+T"}))["replaced"], 1);
+    assert_eq!((text(&s).as_str(), paras(&s)), ("one\ntwO+Three", 2));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!((text(&s).as_str(), paras(&s)), ("one\ntwo\nthree", 3));
+    run(&mut s, "document.setText", json!({"text": "a, b, c"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": ", ", "with": "^p"}))["replaced"], 2);
+    assert_eq!((text(&s).as_str(), paras(&s)), ("a\nb\nc", 3));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!((text(&s).as_str(), paras(&s)), ("a, b, c", 1));
+    // ^t, ^# and ^& (the found text), ^^ is a caret.
+    run(&mut s, "document.setText", json!({"text": "x\ty 12 a^b"}));
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "^t", "with": " "}))["replaced"], 1);
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "^#", "with": "<^&>"}))["replaced"], 2);
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "^^", "with": "-"}))["replaced"], 1);
+    assert_eq!(text(&s), "x y <1><2> a-b");
+    // `special: false` reads the text literally.
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "^#", "special": false}))["count"], 0);
+}
+
+#[test]
+fn find_replace_wildcards() {
+    let mut s = s();
+    // Groups and back-references swap words; Use wildcards matches case.
+    run(&mut s, "document.setText", json!({"text": "Smith, John and Doe, Jane; smith, x"}));
+    let r = run(&mut s, "edit.replaceAll", json!({"text": "([A-Z][a-z]@), ([A-Z][a-z]@)", "with": "\\2 \\1", "wildcards": true}));
+    assert_eq!(r["replaced"], 2);
+    assert_eq!(text(&s), "John Smith and Jane Doe; smith, x");
+    // < and > anchor to word starts and ends; * is the shortest run; {n} counts.
+    run(&mut s, "document.setText", json!({"text": "cat concat cats scatter"}));
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "<cat", "wildcards": true}))["count"], 2);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "cat>", "wildcards": true}))["count"], 2);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "<c*t>", "wildcards": true}))["count"], 2);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "t{2}", "wildcards": true}))["count"], 1);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "[!c]at", "wildcards": true}))["count"], 0);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "[!s ]cat", "wildcards": true}))["count"], 1);
+    // Options of the normal search: prefix, suffix, ignore punctuation.
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "cat", "wildcards": false, "matchPrefix": true}))["count"], 2);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "cat", "matchPrefix": false, "matchSuffix": true}))["count"], 2);
+    run(&mut s, "document.setText", json!({"text": "e.g. eg"}));
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "eg", "matchSuffix": false, "ignorePunct": true}))["count"], 2);
+}
+
+#[test]
+fn hostile_find_patterns_are_bounded() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": &"a".repeat(5000)}));
+    // Patterns that backtrack catastrophically elsewhere finish quickly (linear-time engine).
+    let t = std::time::Instant::now();
+    for q in ["(a@)@b", "(*)@b", "(a{1,1000}){1,1000}", "(((((a*)*)*)*)*)b"] {
+        let _ = s.run("edit.find", &json!({"text": q, "wildcards": true}));
+    }
+    assert!(t.elapsed().as_secs() < 20);
+    // Bad and oversized patterns are errors, not crashes.
+    for q in ["[z-a]", "a{5", "(ab", "\\1", "x{2000}", "[", "@"] {
+        assert!(s.run("edit.find", &json!({"text": q, "wildcards": true})).is_err(), "{q}");
+    }
+    assert!(s.run("edit.find", &json!({"text": "x".repeat(2000), "wildcards": false})).is_err());
+    for q in ["^", "^p^", "^u", "^99999999", "^0", "a^"] {
+        let _ = s.run("edit.replaceAll", &json!({"text": q, "with": "^&^c\\9^p^", "wildcards": false}));
+    }
 }
 
 #[test]
@@ -2871,4 +2979,46 @@ fn table_formula_unknown_function_errors() {
     run(&mut s, "insert.table", json!({"rows": 2, "cols": 1}));
     let res = s.run("table.formula", &json!({"formula": "=MEDIAN(ABOVE)"}));
     assert!(res.is_err(), "expected error for unknown formula function, got: {res:?}");
+}
+
+/// #745: layout keeps a picture's size, so pictures read from HTML, Markdown, ODT or RTF at
+/// their pixel size are fitted to the text width when the file is opened (and when pasted),
+/// keeping their proportions; small pictures keep their size.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn imported_pictures_fit_the_text_width() {
+    let png = |w: u32, h: u32| {
+        let mut b = Vec::new();
+        image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png)
+            .unwrap();
+        cmd::insert::base64_encode(&b)
+    };
+    let sizes = |doc: &wordcraft_doc::Document| -> Vec<(f32, f32)> {
+        doc.body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .filter_map(|o| match o {
+                wordcraft_doc::InlineObject::Image { w, h, .. } => Some((*w, *h)),
+                _ => None,
+            })
+            .collect()
+    };
+    let md = format!("![wide](data:image/png;base64,{})\n\n![small](data:image/png;base64,{})\n", png(1200, 300), png(40, 20));
+    let doc = crate::io::open_bytes("p.md", md.as_bytes()).unwrap();
+    let max_w = crate::io::text_width(&doc);
+    let got = sizes(&doc);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!((got[0].0 - max_w).abs() < 0.01, "wide picture fits: {got:?} (text width {max_w})");
+    assert!((got[0].1 - max_w / 4.0).abs() < 0.01, "and keeps its proportions: {got:?}");
+    assert!((got[1].0 - 30.0).abs() < 0.01 && (got[1].1 - 15.0).abs() < 0.01, "small picture keeps its size: {got:?}");
+
+    // Pasting HTML fits our text width too.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let html = format!("<p><img src=\"data:image/png;base64,{}\"></p>", png(1200, 300));
+    s.run("edit.pasteSpecial", &json!({"as": "html", "html": html})).unwrap();
+    let max_w = crate::io::text_width(&s.doc);
+    let got = sizes(&s.doc);
+    assert!(got.iter().any(|(w, _)| (w - max_w).abs() < 0.01), "pasted picture fits: {got:?}");
 }

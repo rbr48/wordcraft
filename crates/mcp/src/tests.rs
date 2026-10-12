@@ -67,3 +67,15 @@ fn resources() {
     let r = call(&mut s, 2, "resources/read", json!({"uri": "wordcraft://document"}));
     assert!(r["result"]["contents"][0]["text"].as_str().unwrap().contains("blocks"));
 }
+
+/// #40: a headless session never reads or writes the person's custom dictionary file: an agent's
+/// Add to Dictionary stays in memory (only the desktop app saves the dictionary).
+#[test]
+fn headless_sessions_keep_the_dictionary_in_memory() {
+    let mut h = Headless::default();
+    assert!(h.session.user_dict_path.is_none());
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "execute", json!({"command": "review.addToDictionary", "params": {"word": "zxqmcpword"}}));
+    h.session.run("review.addToDictionary", &json!({"word": "zxqmcpword2"})).expect("added");
+    assert!(h.session.user_dict_path.is_none());
+}

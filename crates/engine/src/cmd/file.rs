@@ -70,10 +70,38 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
             .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
-        CommandSpec::new("file.options", "Options", "File", |s, _| {
-            s.ui_requests.push(json!({"open": "options"}));
+        CommandSpec::new("file.options", "Options", "File", |s, v| {
+            let mut remove = Vec::new();
+            if let Some(list) = v.get("removeWords").and_then(|x| x.as_array()) {
+                for w in list {
+                    if let Some(w) = w.as_str() {
+                        let w = w.trim();
+                        if !w.is_empty() {
+                            wordcraft_proof::remove_word(w);
+                            remove.push(w.to_string());
+                        }
+                    }
+                }
+            }
+            if let Some(list) = v.get("addWords").and_then(|x| x.as_array()) {
+                for w in list {
+                    if let Some(w) = w.as_str() {
+                        let w = w.trim();
+                        if !w.is_empty() {
+                            wordcraft_proof::add_word(w);
+                        }
+                    }
+                }
+            }
+            if !remove.is_empty() || v.get("addWords").is_some() {
+                s.persist_user_dictionary(&remove);
+                s.relayout();
+            } else {
+                s.ui_requests.push(json!({"open": "options"}));
+            }
             sel_result(s)
         })
+        .params(r#"{"addWords"?: [string], "removeWords"?: [string]}"#)
         .pure(),
         CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
             .params(r#"{"name": string (author of new tracked changes and comments)}"#)

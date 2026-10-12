@@ -8,14 +8,21 @@ use wordcraft_doc::props::{
 };
 use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NumFormat, SectionProps, SectionStart};
 
+use super::drawing_color::adjust_lum;
 use crate::units::{int, measure, on_off, tw, u32_of};
 use crate::xml::El;
 
-/// Context for property reading: theme fonts and style id aliases.
+/// Context for property reading: theme fonts and colours, and style id aliases.
 #[derive(Default)]
 pub struct PropCtx {
     pub major_font: String,
     pub minor_font: String,
+    /// The theme's colour scheme (dk1, lt1, dk2, lt2, accent1..6, hlink, folHlink); empty when the
+    /// package has none, and then `w:themeColor` falls back to the fixed colour.
+    pub theme_colors: Vec<Rgb>,
+    /// `w:clrSchemeMapping`: the scheme slot each of text1, background1, text2, background2,
+    /// accent1..6, hyperlink and followedHyperlink uses. `None` = the default (same order).
+    pub color_map: Option<[usize; 12]>,
     /// Style id renames (e.g. a localized default paragraph style id → `Normal`).
     pub alias: HashMap<String, String>,
 }
@@ -30,31 +37,82 @@ impl PropCtx {
         (!f.is_empty()).then(|| f.clone())
     }
 
+    /// The theme colour `e` names in `attr` (`w:themeColor`, `w:themeFill`), through the colour
+    /// scheme mapping, with its `tint` and `shade` (hex bytes) applied to the HSL luminance as
+    /// Word does. When given it supersedes the fixed colour; `None` leaves the fixed one.
+    fn theme_color(&self, e: &El, attr: &str, tint: &str, shade: &str) -> Option<Rgb> {
+        let logical = |i: usize| self.color_map.and_then(|m| m.get(i).copied()).unwrap_or(i);
+        let slot = match e.attr(attr)? {
+            "dark1" => 0,
+            "light1" => 1,
+            "dark2" => 2,
+            "light2" => 3,
+            "text1" => logical(0),
+            "background1" => logical(1),
+            "text2" => logical(2),
+            "background2" => logical(3),
+            "accent1" => logical(4),
+            "accent2" => logical(5),
+            "accent3" => logical(6),
+            "accent4" => logical(7),
+            "accent5" => logical(8),
+            "accent6" => logical(9),
+            "hyperlink" => logical(10),
+            "followedHyperlink" => logical(11),
+            _ => return None,
+        };
+        let mut c = *self.theme_colors.get(slot)?;
+        let byte = |a: &str| e.attr(a).and_then(|v| u8::from_str_radix(v.trim(), 16).ok()).map(|v| f64::from(v) / 255.0);
+        if let Some(t) = byte(tint) {
+            c = adjust_lum(c, |l| l * t + (1.0 - t));
+        }
+        if let Some(s) = byte(shade) {
+            c = adjust_lum(c, |l| l * s);
+        }
+        Some(c)
+    }
+
+    /// `w:shd`: its fill colour (a theme fill first), or a solid pattern's colour.
+    pub fn shd_fill(&self, e: &El) -> Option<Rgb> {
+        if let Some(c) = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade") {
+            return Some(c);
+        }
+        // A solid pattern without a fill is painted in its pattern colour, a theme one first.
+        if e.attr("w:val") == Some("solid")
+            && e.attr("w:fill").and_then(Rgb::parse).is_none()
+            && let Some(c) = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade")
+        {
+            return Some(c);
+        }
+        shd_fill(e)
+    }
+
     pub fn rpr(&self, e: &El) -> CharProps {
         let mut c = CharProps::default();
         for k in e.els() {
             match k.name.as_str() {
                 "w:rStyle" => c.style = k.attr("w:val").filter(|v| !v.is_empty()).map(|v| self.style_id(v)),
                 "w:rFonts" => {
-                    c.font = k
-                        .attr("w:ascii")
-                        .or_else(|| k.attr("w:hAnsi"))
-                        .filter(|f| !f.is_empty())
-                        .map(str::to_string)
-                        .or_else(|| k.attr("w:asciiTheme").or_else(|| k.attr("w:hAnsiTheme")).and_then(|t| self.theme_font(t)))
-                        .or_else(|| {
-                            // `w:eastAsia` and `w:cs` name fonts for other scripts; they stand in for the
-                            // Latin font only when the run is hinted as that script. Otherwise the Latin
-                            // font is inherited (a Normal style with only `w:eastAsia`/`w:cs` keeps the
-                            // `docDefaults` font, as in Word).
-                            match k.attr("w:hint") {
-                                Some("eastAsia") => k.attr("w:eastAsia"),
-                                Some("cs") => k.attr("w:cs"),
-                                _ => None,
-                            }
-                            .filter(|f| !f.is_empty())
-                            .map(str::to_string)
-                        });
+                    // A theme font supersedes the fixed font beside it (`w:asciiTheme` over
+                    // `w:ascii`, `w:hAnsiTheme` over `w:hAnsi`).
+                    let named = |a: &str| k.attr(a).filter(|f| !f.is_empty()).map(str::to_string);
+                    let themed = |a: &str| k.attr(a).and_then(|t| self.theme_font(t));
+                    c.font =
+                        themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi")).or_else(
+                            || {
+                                // `w:eastAsia` and `w:cs` name fonts for other scripts; they stand in for the
+                                // Latin font only when the run is hinted as that script. Otherwise the Latin
+                                // font is inherited (a Normal style with only `w:eastAsia`/`w:cs` keeps the
+                                // `docDefaults` font, as in Word).
+                                match k.attr("w:hint") {
+                                    Some("eastAsia") => k.attr("w:eastAsia"),
+                                    Some("cs") => k.attr("w:cs"),
+                                    _ => None,
+                                }
+                                .filter(|f| !f.is_empty())
+                                .map(str::to_string)
+                            },
+                        );
                     // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
                     // left to inherit: the theme's per-script fonts aren't read.
                     c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
@@ -76,10 +134,11 @@ impl PropCtx {
                 "w:vanish" => c.hidden = Some(on_off(k)),
                 "w:rtl" => c.rtl = Some(on_off(k)),
                 "w:color" => {
-                    c.color = match k.attr("w:val") {
-                        Some(v) if v.eq_ignore_ascii_case("auto") => Some(TextColor::Auto),
-                        Some(v) => Rgb::parse(v).map(TextColor::Rgb),
-                        None => None,
+                    c.color = match (self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade"), k.attr("w:val")) {
+                        (Some(t), _) => Some(TextColor::Rgb(t)),
+                        (None, Some(v)) if v.eq_ignore_ascii_case("auto") => Some(TextColor::Auto),
+                        (None, Some(v)) => Rgb::parse(v).map(TextColor::Rgb),
+                        (None, None) => None,
                     }
                 }
                 "w:spacing" => c.spacing = tw(k, "w:val").map(|v| v.clamp(-1584.0, 1584.0)),
@@ -95,10 +154,11 @@ impl PropCtx {
                     } else {
                         c.underline = Some(Underline::Single);
                     }
-                    c.underline_color = k.attr("w:color").and_then(Rgb::parse);
+                    c.underline_color =
+                        self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| k.attr("w:color").and_then(Rgb::parse));
                 }
                 "w:bdr" => c.border = Some(border(k)),
-                "w:shd" => c.shading = shd_fill(k),
+                "w:shd" => c.shading = self.shd_fill(k),
                 "w:vertAlign" => {
                     c.vert_align = k.attr("w:val").map(|v| match v {
                         "superscript" => VertAlign::Superscript,
@@ -161,7 +221,7 @@ impl PropCtx {
                     }
                 }
                 "w:pBdr" => p.borders = Some(borders(k)),
-                "w:shd" => p.shading = shd_fill(k),
+                "w:shd" => p.shading = self.shd_fill(k),
                 "w:tabs" => {
                     let tabs: Vec<TabStop> = k.children("w:tab").take(64).filter_map(tab_stop).collect();
                     p.tabs = Some(tabs);
@@ -236,8 +296,8 @@ fn tab_stop(t: &El) -> Option<TabStop> {
     Some(TabStop { pos, align, leader })
 }
 
-/// `w:shd/@w:fill` (a solid fill colour; `auto` = none).
-pub fn shd_fill(e: &El) -> Option<Rgb> {
+/// `w:shd/@w:fill` (a solid fill colour; `auto` = none), ignoring theme fills ([`PropCtx::shd_fill`]).
+fn shd_fill(e: &El) -> Option<Rgb> {
     let fill = e.attr("w:fill").and_then(Rgb::parse);
     if fill.is_some() {
         return fill;
@@ -303,7 +363,7 @@ impl PropCtx {
                 "w:tblCellSpacing" => t.cell_spacing = tw(k, "w:w"),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
                 "w:tblBorders" => t.borders = Some(borders(k)),
-                "w:shd" => t.shading = shd_fill(k),
+                "w:shd" => t.shading = self.shd_fill(k),
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
                 "w:tblLook" => t.look = look(k),
@@ -378,7 +438,7 @@ pub fn trpr(e: &El) -> RowProps {
 }
 
 /// `w:tcPr`; returns the props and whether the cell is a legacy `hMerge` continuation.
-pub fn tcpr(e: &El) -> (CellProps, bool) {
+pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
     let mut c = CellProps { span: 1, ..Default::default() };
     let mut hcont = false;
     for k in e.els() {
@@ -397,7 +457,7 @@ pub fn tcpr(e: &El) -> (CellProps, bool) {
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
             "w:tcBorders" => c.borders = Some(borders(k)),
-            "w:shd" => c.shading = shd_fill(k),
+            "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:tcMar" => c.margins = Some(margins(k)),
             "w:textDirection" => c.text_direction = TextDirection::from_ooxml(k.attr("w:val").unwrap_or("")),

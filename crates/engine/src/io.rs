@@ -107,6 +107,43 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>) -> Resu
     Ok((doc, false))
 }
 
+/// The narrowest text width of the document's sections, points: what a picture must fit.
+pub(crate) fn text_width(doc: &Document) -> f32 {
+    doc.sections().iter().map(|(_, sp)| sp.text_width()).fold(f32::INFINITY, f32::min).clamp(36.0, 4000.0)
+}
+
+/// Shrink inline pictures wider than `max_w` to it, keeping their proportions. Layout keeps a
+/// picture's size (as Word does), so formats whose pictures come at their pixel size (HTML,
+/// Markdown, ODT, RTF) are fitted when they are read, as Insert › Pictures does.
+pub(crate) fn fit_block_pictures(b: &mut wordcraft_doc::Block, max_w: f32) {
+    crate::cmd::paste::each_para(b, 0, &mut |p| {
+        let mut changed = false;
+        for o in &mut p.objects {
+            if let wordcraft_doc::InlineObject::Image { w, h, float, .. } = o
+                && float.wrap == wordcraft_doc::para::Wrap::Inline
+                && w.is_finite()
+                && *w > max_w
+            {
+                let k = max_w / *w;
+                *w = max_w;
+                *h = (*h * k).max(1.0);
+                changed = true;
+            }
+        }
+        if changed {
+            p.touch();
+        }
+    });
+}
+
+/// [`fit_block_pictures`] for a whole document read from a file, against its own text width.
+pub(crate) fn fit_pictures(doc: &mut Document) {
+    let max_w = text_width(doc);
+    for b in &mut doc.body {
+        fit_block_pictures(std::sync::Arc::make_mut(b), max_w);
+    }
+}
+
 /// Serialise a document; `name` gives the format by extension.
 pub fn save_bytes(name: &str, doc: &Document) -> Result<Vec<u8>, String> {
     let ext = ext_of(name);
@@ -147,6 +184,7 @@ pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<
         // Pictures referenced by a relative path load from beside the HTML file.
         let images = LocalImages::new(path.parent().unwrap_or(std::path::Path::new("")));
         let mut doc = wordcraft_formats::html::import_with(&wordcraft_formats::html::decode(&bytes), &|src| images.load(src));
+        fit_pictures(&mut doc);
         doc.ensure_nonempty();
         return Ok((doc, false));
     }

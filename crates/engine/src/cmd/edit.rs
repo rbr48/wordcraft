@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::{Pos, StoryRef};
 
-use super::{delete_selection, pos_json, sel_result};
+use super::{delete_selection, find_pattern, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 fn has_sel(s: &Session) -> Option<&'static str> {
@@ -59,16 +59,19 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.find", "Find", "Home › Editing", find)
             .key("Mod+F")
-            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
+            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "matchPrefix"?: bool, "matchSuffix"?: bool, "ignorePunct"?: bool, "ignoreSpace"?: bool, "wildcards"?: bool, "special"?: bool (^p ^t ^# … codes, default true), "regex"?: bool}"#)
             .pure(),
         CommandSpec::new("edit.advancedFind", "Advanced Find", "Home › Editing › Find", advanced_find)
-            .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool, "in"?: "main|selection", "highlight"?: bool}"#)
+            .params(r#"{"text"?: string, …options of edit.find, "in"?: "main|selection", "highlight"?: bool}"#)
             .pure(),
-        CommandSpec::new("edit.findNext", "Find Next", "Home › Editing › Find", |s, _| step(s, 1)).key("Mod+G / F3").pure(),
-        CommandSpec::new("edit.findPrevious", "Find Previous", "Home › Editing › Find", |s, _| step(s, -1)).key("Mod+Shift+G").pure(),
-        CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace).key("Mod+H").params(r#"{"text": string, "with": string}"#),
+        CommandSpec::new("edit.findNext", "Find Next", "Home › Editing › Find", |s, _| step(s, 1)).key("Mod+G / F3 / Mod+PageDown").pure(),
+        CommandSpec::new("edit.findPrevious", "Find Previous", "Home › Editing › Find", |s, _| step(s, -1))
+            // Elsewhere Ctrl+Shift+G is Word Count; Ctrl+Page Up/Down browse the find results.
+            .key(super::mac_or("Mod+Shift+G / Mod+PageUp", "Mod+PageUp"))
+            .pure(),
+        CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace).key("Mod+H").params(r#"{"text": string, "with": string, …options of edit.replaceAll}"#),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards), …options of edit.find}"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "bookmark"?: string, "paragraph"?: n}"#)
@@ -265,46 +268,153 @@ fn paste_text(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// One match: its range and, when asked for, the Replace with text filled in for it.
+pub(crate) struct Found {
+    pub a: Pos,
+    pub b: Pos,
+    pub rep: Option<String>,
+}
+
+/// A stretch of searched text: `len` bytes from `hay` are paragraph `para`'s bytes from `raw`.
+/// A paragraph mark is a one-byte stretch at the paragraph's end (`mark`).
+struct Seg {
+    hay: usize,
+    para: usize,
+    raw: usize,
+    len: usize,
+    mark: bool,
+}
+
 /// All matches of the find state in the current story. Text marked deleted by
 /// Track Changes is no longer part of the document, so the search reads each
 /// paragraph without it: a match lies within one stretch of live text, and word
 /// boundaries and anchors see the neighbouring live text, not the deleted text.
 /// Otherwise Replace would find its own deleted text again.
 pub(crate) fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, CmdError> {
+    Ok(search_full(s, story, false)?.into_iter().map(|f| (f.a, f.b)).collect())
+}
+
+fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
+    find_pattern::Opts {
+        match_case: f.match_case,
+        whole_word: f.whole_word,
+        prefix: f.match_prefix,
+        suffix: f.match_suffix,
+        ignore_punct: f.ignore_punct,
+        ignore_space: f.ignore_space,
+        wildcards: f.wildcards,
+        regex: f.regex,
+        literal: f.literal,
+    }
+}
+
+/// [`search`], with the Replace with text of each match when `with_rep` (special codes, `^&`,
+/// wildcard groups). A pattern that can match a paragraph mark (`^p`) reads runs of sibling
+/// paragraphs as one text with a mark between them; otherwise each paragraph is read alone.
+pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found>, CmdError> {
     use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
     if f.query.is_empty() {
         return Ok(Vec::new());
     }
-    let pat = if f.regex { f.query.clone() } else { regex::escape(&f.query) };
-    let pat = if f.whole_word { format!(r"\b{pat}\b") } else { pat };
+    let opts = find_opts(f);
+    let c = find_pattern::compile(&f.query, &opts).map_err(CmdError::Params)?;
     let re = meta::Regex::builder()
-        .syntax(syntax::Config::new().case_insensitive(!f.match_case))
+        .syntax(syntax::Config::new().case_insensitive(c.case_insensitive))
         .configure(meta::Config::new().nfa_size_limit(Some(1 << 20)))
-        .build(&pat)
+        .build(&c.pattern)
         .map_err(|e| CmdError::Params(format!("bad pattern: {e}")))?;
-    let mut out = Vec::new();
-    for path in s.doc.para_paths(story) {
-        let Some(p) = s.doc.para(story, &path) else { continue };
-        // The paragraph as it reads, and its stretches of live text as
-        // (start in `live`, start in the paragraph, length).
-        let mut live = String::new();
-        let mut spans: Vec<(usize, usize, usize)> = Vec::new();
-        for (r, c) in p.run_ranges() {
-            let Some(t) = p.text.get(r.clone()).filter(|_| c.del.is_none()) else { continue };
-            match spans.last_mut() {
-                Some((_, raw, n)) if *raw + *n == r.start => *n += t.len(),
-                _ => spans.push((live.len(), r.start, t.len())),
-            }
-            live.push_str(t);
+    let pieces = with_rep.then(|| find_pattern::parse_replace(&f.replace, &opts));
+    let paths = s.doc.para_paths(story);
+    // Paragraphs read as one text: consecutive siblings when the pattern spans paragraphs.
+    let mut chunks: Vec<std::ops::Range<usize>> = Vec::new();
+    for i in 0..paths.len() {
+        let joins =
+            c.spans_paras && i > 0 && paths.get(i - 1).zip(paths.get(i)).is_some_and(|(x, y)| x.parent() == y.parent() && x.last() + 1 == y.last());
+        match chunks.last_mut() {
+            Some(r) if joins => r.end = i + 1,
+            _ => chunks.push(i..i + 1),
         }
-        for (at, raw, n) in spans {
-            for m in re.find_iter(Input::new(&live).range(at..at + n)) {
+    }
+    let mut out = Vec::new();
+    let mut caps = re.create_captures();
+    for chunk in chunks {
+        let mut hay = String::new();
+        let mut segs: Vec<Seg> = Vec::new();
+        // Where the live text breaks (tracked-deleted text, or a paragraph edge when not spanning).
+        let mut cuts: Vec<usize> = Vec::new();
+        let last = chunk.end.saturating_sub(1);
+        for i in chunk {
+            let Some(p) = paths.get(i).and_then(|path| s.doc.para(story, path)) else {
+                cuts.push(hay.len());
+                continue;
+            };
+            let mut expect = 0;
+            for (r, ch) in p.run_ranges() {
+                let Some(t) = p.text.get(r.clone()).filter(|_| ch.del.is_none()) else { continue };
+                if t.is_empty() {
+                    continue;
+                }
+                if r.start != expect {
+                    cuts.push(hay.len());
+                }
+                match segs.last_mut() {
+                    Some(sg) if !sg.mark && sg.para == i && sg.raw + sg.len == r.start => sg.len += t.len(),
+                    _ => segs.push(Seg { hay: hay.len(), para: i, raw: r.start, len: t.len(), mark: false }),
+                }
+                hay.push_str(t);
+                expect = r.end;
+            }
+            if i < last {
+                if expect != p.text.len() {
+                    cuts.push(hay.len());
+                }
+                segs.push(Seg { hay: hay.len(), para: i, raw: p.text.len(), len: 1, mark: true });
+                hay.push(if p.section.is_some() { find_pattern::SECT_MARK } else { find_pattern::PARA_MARK });
+            }
+        }
+        let pos_of = |x: usize, end: bool| -> Option<Pos> {
+            let k = segs.partition_point(|sg| if end { sg.hay + sg.len < x } else { sg.hay + sg.len <= x });
+            let sg = segs.get(k)?;
+            if (end && sg.hay >= x) || (!end && sg.hay > x) {
+                return None;
+            }
+            if sg.mark && x > sg.hay {
+                let path = paths.get(sg.para)?;
+                return Some(Pos { story, path: path.with_last(path.last() + 1), off: 0 });
+            }
+            Some(Pos { story, path: paths.get(sg.para)?.clone(), off: sg.raw + (x - sg.hay) })
+        };
+        cuts.push(hay.len());
+        let mut from = 0;
+        for cut in cuts {
+            if cut <= from {
+                continue;
+            }
+            let mut input = Input::new(&hay).range(from..cut);
+            from = cut;
+            loop {
+                re.search_captures(&input, &mut caps);
+                let Some(m) = caps.get_match() else { break };
+                // Step past an empty match so the search moves on.
+                let next = if m.is_empty() {
+                    hay.get(m.end()..).and_then(|t| t.chars().next()).map_or(m.end() + 1, |c| m.end() + c.len_utf8())
+                } else {
+                    m.end()
+                };
+                if next > input.end() {
+                    break;
+                }
+                input.set_start(next);
                 if m.is_empty() {
                     continue;
                 }
-                let (a, b) = (raw + m.start().saturating_sub(at), raw + m.end().saturating_sub(at));
-                out.push((Pos { story, path: path.clone(), off: a }, Pos { story, path: path.clone(), off: b }));
+                let (Some(a), Some(b)) = (pos_of(m.start(), false), pos_of(m.end(), true)) else { continue };
+                let rep = pieces.as_ref().map(|pc| {
+                    let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
+                    find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
+                });
+                out.push(Found { a, b, rep });
                 if out.len() >= 100_000 {
                     return Ok(out);
                 }
@@ -328,6 +438,24 @@ fn read_opts(s: &mut Session, v: &Value) {
     }
     if let Some(b) = p::bool(v, "regex") {
         s.find.regex = b;
+    }
+    if let Some(b) = p::bool(v, "wildcards") {
+        s.find.wildcards = b;
+    }
+    if let Some(b) = p::bool(v, "special") {
+        s.find.literal = !b;
+    }
+    if let Some(b) = p::bool(v, "matchPrefix") {
+        s.find.match_prefix = b;
+    }
+    if let Some(b) = p::bool(v, "matchSuffix") {
+        s.find.match_suffix = b;
+    }
+    if let Some(b) = p::bool(v, "ignorePunct") {
+        s.find.ignore_punct = b;
+    }
+    if let Some(b) = p::bool(v, "ignoreSpace") {
+        s.find.ignore_space = b;
     }
     if let Some(t) = p::str(v, "with") {
         s.find.replace = t.to_string();
@@ -408,25 +536,25 @@ fn step(s: &mut Session, dir: i64) -> CmdResult {
 fn replace(s: &mut Session, v: &Value) -> CmdResult {
     read_opts(s, v);
     let story = s.sel.focus.story;
-    let results = search(s, story)?;
+    let results = search_full(s, story, true)?;
     let (a, b) = s.sel.ordered();
     // Replace the current match if selected, then move to the next.
-    if results.iter().any(|(x, y)| *x == a && *y == b) {
-        let with = s.find.replace.clone();
-        super::type_text(s, &with)?;
+    if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
+        super::type_text(s, &f.rep.unwrap_or_default())?;
     }
     let _ = step(s, 1);
     Ok(json!({"remaining": search(s, story)?.len()}))
 }
 
+/// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
+/// the replacement (`^p`) splits the paragraph.
 fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     read_opts(s, v);
     let story = s.sel.focus.story;
-    let results = search(s, story)?;
-    let with = s.find.replace.clone();
+    let results = search_full(s, story, true)?;
     let n = results.len();
-    // Replace from the end so earlier positions stay valid.
-    for (a, b) in results.into_iter().rev() {
+    for Found { a, b, rep } in results.into_iter().rev() {
+        let with = rep.unwrap_or_default();
         if s.doc.settings.track_changes {
             // Same path as a single replace, so the change is a reviewable revision.
             s.sel = Selection { anchor: a, focus: b };
@@ -434,8 +562,15 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
             continue;
         }
         let props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
-        s.doc.delete_range(&a, &b)?;
-        s.doc.insert_text(&a, &with, &props)?;
+        let mut at = s.doc.delete_range(&a, &b)?;
+        for (k, part) in with.split(['\r', '\u{2029}']).enumerate() {
+            if k > 0 {
+                at = s.doc.split_paragraph(&at)?;
+            }
+            if !part.is_empty() {
+                at = s.doc.insert_text(&at, part, &props)?;
+            }
+        }
     }
     s.status = format!("All done. We made {n} replacements.");
     Ok(json!({"replaced": n}))

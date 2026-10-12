@@ -31,14 +31,60 @@ pub enum IssueKind {
     Grammar,
 }
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Incremented every time a word is added or removed from the custom dictionary.
+pub static DICTIONARY_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 fn user_words() -> &'static RwLock<HashSet<String>> {
     static U: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
     U.get_or_init(|| RwLock::new(HashSet::new()))
 }
 
+fn ignored_words() -> &'static RwLock<HashSet<String>> {
+    static I: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
+    I.get_or_init(|| RwLock::new(HashSet::new()))
+}
+
+/// Longest custom-dictionary word kept, in characters (mirrors `file.options` validation).
+pub const MAX_CUSTOM_WORD_CHARS: usize = 64;
+/// Most custom-dictionary words read from one file (caps a hostile file).
+const MAX_CUSTOM_WORDS: usize = 100_000;
+/// Largest custom-dictionary file read, in bytes (caps a hostile file).
+const MAX_CUSTOM_FILE_BYTES: u64 = 1_000_000;
+
+/// `w` as a custom-dictionary word: trimmed and lower-cased, or `None` when it isn't a single
+/// word of at most [`MAX_CUSTOM_WORD_CHARS`] characters (empty, spaces, control characters, or
+/// bytes that weren't UTF-8).
+///
+/// Adding and loading both use it, so a word that can be added is never dropped on the next load.
+pub fn custom_word(w: &str) -> Option<String> {
+    let w = w.trim();
+    if w.is_empty()
+        || w.chars().count() > MAX_CUSTOM_WORD_CHARS
+        || w.chars().any(|c| c.is_whitespace() || c.is_control() || c == char::REPLACEMENT_CHARACTER)
+    {
+        return None;
+    }
+    Some(w.to_lowercase())
+}
+
 /// Add a word to the user dictionary ("Add to Dictionary").
 pub fn add_word(w: &str) {
-    user_words().write().unwrap_or_else(|e| e.into_inner()).insert(w.to_lowercase());
+    if let Some(w) = custom_word(w)
+        && user_words().write().unwrap_or_else(|e| e.into_inner()).insert(w)
+    {
+        DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Remove a word from the user dictionary.
+pub fn remove_word(w: &str) -> bool {
+    let removed = user_words().write().unwrap_or_else(|e| e.into_inner()).remove(&w.to_lowercase());
+    if removed {
+        DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
+    removed
 }
 
 /// Words in the user dictionary.
@@ -46,6 +92,89 @@ pub fn user_dictionary() -> Vec<String> {
     let mut v: Vec<String> = user_words().read().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect();
     v.sort();
     v
+}
+
+/// Add a word to the session-only ignore list ("Ignore All").
+pub fn ignore_word(w: &str) {
+    ignored_words().write().unwrap_or_else(|e| e.into_inner()).insert(w.to_lowercase());
+}
+
+/// The valid words of the custom-dictionary file at `path`, reading at most
+/// [`MAX_CUSTOM_FILE_BYTES`] of it and keeping at most [`MAX_CUSTOM_WORDS`]. A missing or
+/// unreadable file reads as no words.
+fn read_dictionary_file(path: &std::path::Path) -> Vec<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    let Ok(file) = std::fs::File::open(path) else { return Vec::new() };
+    // `take` bounds the read itself, so a huge file is never read whole.
+    if file.take(MAX_CUSTOM_FILE_BYTES).read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    // Lossy: a cut multi-byte tail becomes U+FFFD and is skipped by validation below,
+    // instead of discarding the whole file.
+    String::from_utf8_lossy(&bytes).lines().filter_map(custom_word).take(MAX_CUSTOM_WORDS).collect()
+}
+
+/// Read the user dictionary from `path` into the in-memory dictionary.
+pub fn load_user_dictionary(path: &std::path::Path) -> Vec<String> {
+    let words = read_dictionary_file(path);
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let mut set = user_words().write().unwrap_or_else(|e| e.into_inner());
+    let mut added = Vec::new();
+    for w in words {
+        if set.len() >= MAX_CUSTOM_WORDS {
+            break;
+        }
+        if set.insert(w.clone()) {
+            added.push(w);
+        }
+    }
+    if !added.is_empty() {
+        DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
+    added
+}
+
+/// Save the user dictionary to `path`, merging with words already on disk and leaving `removed`
+/// out. The file is replaced atomically.
+pub fn save_user_dictionary(path: &std::path::Path, removed: &[String]) -> std::io::Result<()> {
+    let removed: HashSet<String> = removed.iter().map(|w| w.to_lowercase()).collect();
+    let on_disk = read_dictionary_file(path);
+    {
+        let mut set = user_words().write().unwrap_or_else(|e| e.into_inner());
+        let mut changed = false;
+        for w in on_disk {
+            if set.len() >= MAX_CUSTOM_WORDS {
+                break;
+            }
+            if !removed.contains(&w) && set.insert(w) {
+                changed = true;
+            }
+        }
+        for w in &removed {
+            changed |= set.remove(w);
+        }
+        if changed {
+            DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let mut out = String::new();
+    for w in user_dictionary() {
+        out.push_str(&w);
+        out.push('\n');
+    }
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "custom-dictionary.txt".into());
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    let written = std::fs::write(&tmp, out).and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// Common words the source list lacks (modern vocabulary, contractions).
@@ -133,7 +262,7 @@ fn known_core(w: &str) -> bool {
     if d.get(w).is_some() || EXTRA.contains(&w) || COMMON.split(' ').any(|c| c == w) {
         return true;
     }
-    if user_words().read().unwrap_or_else(|e| e.into_inner()).contains(w) {
+    if user_words().read().unwrap_or_else(|e| e.into_inner()).contains(w) || ignored_words().read().unwrap_or_else(|e| e.into_inner()).contains(w) {
         return true;
     }
     // Inflections.
@@ -630,6 +759,93 @@ mod tests {
         assert!(!is_correct("zxqwordcrafty"));
         add_word("zxqwordcrafty");
         assert!(is_correct("zxqwordcrafty"));
+    }
+
+    /// #40: the user dictionary survives a save and a fresh load.
+    #[test]
+    fn user_dictionary_persists_through_a_file() {
+        let dir = std::env::temp_dir().join(format!("wc-dict-{}-{}", std::process::id(), "persist"));
+        let _ = std::fs::remove_dir_all(&dir);
+        // The folder is created on the first save.
+        let path = dir.join("sub/custom-dictionary.txt");
+        add_word("zxqpersistone");
+        add_word("zxqpersisttwo");
+        save_user_dictionary(&path, &[]).expect("save works");
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.lines().any(|w| w == "zxqpersistone") && saved.lines().any(|w| w == "zxqpersisttwo"), "{saved}");
+        // Written atomically: no temporary file is left beside it.
+        let names: Vec<_> = std::fs::read_dir(dir.join("sub")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["custom-dictionary.txt"]);
+        remove_word("zxqpersistone");
+        assert!(!is_correct("zxqpersistone"));
+        load_user_dictionary(&path);
+        assert!(is_correct("zxqpersistone"), "loading brings the word back");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #40: a hostile file is capped: invalid lines are skipped, and only the first megabyte is read.
+    #[test]
+    fn hostile_dictionary_files_are_capped() {
+        let dir = std::env::temp_dir().join(format!("wc-dict-{}-{}", std::process::id(), "hostile"));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("custom-dictionary.txt");
+        let mut hostile = vec![0xff, 0xfe, b'\n'];
+        hostile.extend(b"zxqhostileok\n  zxqhostiletrim  \nzxq hostile space\nzxq\x07bell\n");
+        hostile.extend("zxq".repeat(30).bytes()); // 90 characters: too long
+        hostile.push(b'\n');
+        // Pad past the 1 MB cap with blank lines; the word after it is never read.
+        hostile.resize(1_000_100, b'\n');
+        hostile.extend(b"zxqhostilepastcap\n");
+        std::fs::write(&path, &hostile).unwrap();
+        let added = load_user_dictionary(&path);
+        assert!(added.contains(&"zxqhostileok".to_string()) && added.contains(&"zxqhostiletrim".to_string()), "{added:?}");
+        assert!(!added.iter().any(|w| w.contains("space") || w.contains("bell") || w.chars().count() > MAX_CUSTOM_WORD_CHARS), "{added:?}");
+        assert!(!is_correct("zxqhostilepastcap"), "the file is read only up to the cap");
+        assert_eq!(read_dictionary_file(&path).len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #40: saving merges in words another process saved, and leaves out the ones just removed.
+    #[test]
+    fn saving_merges_with_the_file() {
+        let dir = std::env::temp_dir().join(format!("wc-dict-{}-{}", std::process::id(), "merge"));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("custom-dictionary.txt");
+        std::fs::write(&path, "zxqmergeother\nzxqmergegone\n").unwrap();
+        add_word("zxqmergemine");
+        save_user_dictionary(&path, &["zxqmergegone".to_string()]).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.lines().any(|w| w == "zxqmergeother"), "the other process's word is kept: {saved}");
+        assert!(saved.lines().any(|w| w == "zxqmergemine"), "{saved}");
+        assert!(!saved.lines().any(|w| w == "zxqmergegone"), "a removed word stays out: {saved}");
+        assert!(is_correct("zxqmergeother") && !is_correct("zxqmergegone"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Ignore All lasts for the session: the word is accepted but isn't in the dictionary.
+    #[test]
+    fn ignored_words_are_not_dictionary_words() {
+        assert!(!is_correct("zxqignoredword"));
+        ignore_word("ZxqIgnoredWord");
+        assert!(is_correct("zxqignoredword"));
+        assert!(!user_dictionary().contains(&"zxqignoredword".to_string()));
+    }
+
+    #[test]
+    fn custom_words_are_single_short_words() {
+        assert_eq!(custom_word("  Hello "), Some("hello".into()));
+        for bad in ["", "   ", "two words", "tab\tbed", "bell\u{7}", "bad\u{FFFD}", &"x".repeat(MAX_CUSTOM_WORD_CHARS + 1)] {
+            assert_eq!(custom_word(bad), None, "{bad:?}");
+        }
+        assert!(custom_word(&"é".repeat(MAX_CUSTOM_WORD_CHARS)).is_some(), "the cap counts characters, not bytes");
+    }
+
+    /// #40: a missing file loads as empty, never an error.
+    #[test]
+    fn missing_dictionary_file_loads_empty() {
+        let path = std::env::temp_dir().join(format!("wc-dict-{}-missing.txt", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        assert!(load_user_dictionary(&path).is_empty());
     }
 
     #[test]

@@ -120,6 +120,21 @@ fn save_prefs(app: &WordApp) {
     }
 }
 
+/// `custom-dictionary.txt` in the settings folder: the words Add to Dictionary kept (#40).
+fn user_dict_path() -> Option<std::path::PathBuf> {
+    wordcraft_control_key::settings_dir().map(|b| b.join(wordcraft_engine::Session::USER_DICT_FILE))
+}
+
+fn load_user_dictionary(app: &mut WordApp) {
+    if !prefs_enabled() {
+        return;
+    }
+    if let Some(p) = user_dict_path() {
+        wordcraft_proof::load_user_dictionary(&p);
+        app.session.user_dict_path = Some(p);
+    }
+}
+
 /// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
 /// through the system's PDF viewer (`print`, #15), and pictures on the system clipboard (#45).
 fn services(file_dialog: file_dialogs::Hook) -> Services {
@@ -240,6 +255,7 @@ fn main() -> eframe::Result {
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut app = WordApp::new(Session::new(doc), services(file_dialog));
             load_prefs(&mut app);
+            load_user_dictionary(&mut app);
             app.ui.window = restored;
             app.integrated_titlebar = cfg!(target_os = "macos");
             let mut key_file = None;

@@ -136,6 +136,14 @@ pub struct FindState {
     pub match_case: bool,
     pub whole_word: bool,
     pub regex: bool,
+    /// Word's "Use wildcards" (#543).
+    pub wildcards: bool,
+    /// Take Find what literally: no `^` codes (`special: false`).
+    pub literal: bool,
+    pub match_prefix: bool,
+    pub match_suffix: bool,
+    pub ignore_punct: bool,
+    pub ignore_space: bool,
     /// Matches from the last search: (start, end).
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,
@@ -201,6 +209,11 @@ pub struct Session {
     pub pending: Option<CharProps>,
     pub path: Option<std::path::PathBuf>,
     pub dirty: bool,
+    /// Where the custom dictionary is kept on disk, if the host wired one up. Only the desktop
+    /// app does: headless sessions (MCP, `wordcraft-cli run`), tests and the web build leave
+    /// `None`, so an agent's words stay in memory and never change the person's dictionary.
+    /// Add to Dictionary and File › Options › Proofing save through it (#40).
+    pub user_dict_path: Option<std::path::PathBuf>,
     pub clipboard: Option<Fragment>,
     /// Plain text mirror of the clipboard (for the system clipboard).
     pub clipboard_text: String,
@@ -243,6 +256,11 @@ pub struct Session {
     pub macros: std::collections::BTreeMap<String, Vec<(String, Value)>>,
     pub autocorrect_on: bool,
     pub autocorrect_user: Vec<(String, String)>,
+    pub autocorrect_two_initial_caps: bool,
+    pub autocorrect_caps_lock: bool,
+    pub autocorrect_cap_sentences: bool,
+    pub autocorrect_cap_cells: bool,
+    pub autocorrect_initial_caps_exceptions: Vec<String>,
     /// Saved versions: (label, date, document).
     pub versions: Vec<(String, String, Document)>,
     /// Quick Parts / AutoText entries.
@@ -313,6 +331,20 @@ impl Default for Prefs {
 const MAX_UNDO: usize = 500;
 
 impl Session {
+    /// File name of the persisted custom dictionary inside the settings folder.
+    pub const USER_DICT_FILE: &str = "custom-dictionary.txt";
+
+    /// Save the custom dictionary through [`Session::user_dict_path`], if the host wired one up,
+    /// with `removed` (words just taken out) left out of the merge with the file. A failed save
+    /// keeps the words in memory and never fails the command (#40).
+    pub(crate) fn persist_user_dictionary(&self, removed: &[String]) {
+        if let Some(path) = self.user_dict_path.as_deref()
+            && let Err(e) = wordcraft_proof::save_user_dictionary(path, removed)
+        {
+            log::warn!("custom dictionary: save failed: {e}");
+        }
+    }
+
     pub fn new(doc: Document) -> Self {
         let start = doc.start_of(StoryRef::Body);
         Session {
@@ -321,6 +353,7 @@ impl Session {
             view: ViewState::default(),
             pending: None,
             path: None,
+            user_dict_path: None,
             dirty: false,
             clipboard: None,
             clipboard_text: String::new(),
@@ -347,6 +380,11 @@ impl Session {
             macros: Default::default(),
             autocorrect_on: true,
             autocorrect_user: Vec::new(),
+            autocorrect_two_initial_caps: true,
+            autocorrect_caps_lock: true,
+            autocorrect_cap_sentences: true,
+            autocorrect_cap_cells: true,
+            autocorrect_initial_caps_exceptions: Vec::new(),
             versions: Vec::new(),
             building_blocks: Default::default(),
             autosave: true,
