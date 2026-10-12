@@ -543,6 +543,59 @@ impl Table {
     pub fn total_width(&self) -> f32 {
         self.grid.iter().sum()
     }
+
+    /// Give every paragraph in the table (nested tables included) a new revision, so the layout
+    /// lays them out again. Walks this table alone, not the story around it.
+    pub fn touch_paragraphs(&mut self) {
+        touch_rows(&mut self.rows, 0);
+    }
+
+    /// Where the text of cell `c` in row `r` ends: the path below the table to its last paragraph
+    /// (`[r, c, block, …]`, through nested tables) and that paragraph's length.
+    pub fn cell_end(&self, r: usize, c: usize) -> Option<(Vec<u32>, usize)> {
+        let cell = self.rows.get(r)?.cells.get(c)?;
+        let (mut path, len) = blocks_end(&cell.blocks, 0)?;
+        path.splice(0..0, [r as u32, c as u32]);
+        Some((path, len))
+    }
+}
+
+/// How deep nested tables are followed, as `Document::para_paths` follows them.
+const NEST_LIMIT: usize = 16;
+
+fn touch_rows(rows: &mut [Row], depth: usize) {
+    if depth > NEST_LIMIT {
+        return;
+    }
+    for cell in rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+        for b in &mut cell.blocks {
+            match std::sync::Arc::make_mut(b) {
+                crate::Block::Para(p) => p.touch(),
+                crate::Block::Table(t) => touch_rows(&mut t.rows, depth + 1),
+            }
+        }
+    }
+}
+
+/// The last paragraph of a block list (`[block, …]`) and its length.
+fn blocks_end(blocks: &Blocks, depth: usize) -> Option<(Vec<u32>, usize)> {
+    if depth > NEST_LIMIT {
+        return None;
+    }
+    blocks.iter().enumerate().rev().find_map(|(bi, b)| {
+        let (mut path, len) = match &**b {
+            crate::Block::Para(p) => (Vec::new(), p.len()),
+            crate::Block::Table(t) => t.rows.iter().enumerate().rev().find_map(|(r, row)| {
+                row.cells.iter().enumerate().rev().find_map(|(c, cell)| {
+                    let (mut path, len) = blocks_end(&cell.blocks, depth + 1)?;
+                    path.splice(0..0, [r as u32, c as u32]);
+                    Some((path, len))
+                })
+            })?,
+        };
+        path.insert(0, bi as u32);
+        Some((path, len))
+    })
 }
 
 #[cfg(test)]
@@ -663,6 +716,32 @@ mod tests {
         t.split_cell(0, 1, 2);
         assert_eq!(t.rows[0].cells.len(), 3);
         assert_eq!(t.rows[0].cells.iter().map(Cell::span).sum::<usize>(), t.cols());
+    }
+
+    #[test]
+    fn cell_end_finds_the_last_paragraph_through_nested_tables() {
+        let mut t = Table::new(1, 2, 200.0);
+        let mut inner = Table::new(2, 2, 100.0);
+        inner.rows[1].cells[1].blocks = vec![para_block(Paragraph::with_text("deep", Default::default()))];
+        t.rows[0].cells[1].blocks.push(std::sync::Arc::new(crate::Block::Table(inner)));
+        assert_eq!(t.cell_end(0, 0), Some((vec![0, 0, 0], 0)));
+        assert_eq!(t.cell_end(0, 1), Some((vec![0, 1, 1, 1, 1, 0], 4)));
+        assert_eq!(t.cell_end(0, 9), None);
+    }
+
+    #[test]
+    fn touching_a_table_gives_every_paragraph_a_new_revision() {
+        let mut t = Table::new(2, 2, 200.0);
+        let mut inner = Table::new(1, 1, 100.0);
+        let rev = |t: &Table| t.rows[1].cells[1].blocks[0].as_para().map(|p| p.rev);
+        inner.rows[0].cells[0].blocks = vec![para_block(Paragraph::new())];
+        t.rows[0].cells[0].blocks.push(std::sync::Arc::new(crate::Block::Table(inner)));
+        let before = rev(&t);
+        let nested = |t: &Table| t.rows[0].cells[0].blocks[1].as_table().and_then(|x| x.rows[0].cells[0].blocks[0].as_para().map(|p| p.rev));
+        let nested_before = nested(&t);
+        t.touch_paragraphs();
+        assert_ne!(rev(&t), before);
+        assert_ne!(nested(&t), nested_before);
     }
 
     #[test]
