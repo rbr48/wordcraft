@@ -1370,3 +1370,24 @@
 	Transliterate Bangla	Transliteracija bengalskog
 	View Side by Side	Prikaži uporedo
 	Table Positioning	Pozicioniranje tabele
+	Allow overlap with other floating tables	Dozvoli preklapanje sa drugim plutajućim tabelama
+	Allow spacing between cells:	Dozvoli razmak između ćelija:
+	Ascending	Rastuće
+	Click a cell border to paint it with the pen. Esc stops.	Kliknite na ivicu ćelije da je obojite olovkom. Esc zaustavlja.
+	Colour:	Boja:
+	Commas	Zarezi
+	Delete entire column	Obriši celu kolonu
+	Delete entire row	Obriši ceo red
+	Descending	Opadajuće
+	Describes the table for screen readers	Opisuje tabelu za čitače ekrana
+	Float the table: text wraps around it	Učini tabelu plutajućom: tekst se prelama oko nje
+	Header row	Red zaglavlja
+	Merge cells before split	Spoji ćelije pre podele
+	No Colour	Bez boje
+	No colour	Bez boje
+	Other:	Drugo:
+	Paragraph marks	Oznake pasusa
+	Paste function:	Nalepi funkciju:
+	Position:	Položaj:
+	Shift cells left	Pomeri ćelije ulevo
+	Shift cells up	Pomeri ćelije nagore

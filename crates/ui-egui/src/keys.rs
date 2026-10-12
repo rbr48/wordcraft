@@ -637,7 +637,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     && let Some(t) = r.get("text").and_then(Value::as_str)
                     && !t.is_empty()
                 {
-                    ctx.copy_text(t.to_string());
+                    crate::copy_to_clipboard(ctx, app, t);
                 }
             }
             egui::Event::Key { key, pressed: true, modifiers, .. } => {

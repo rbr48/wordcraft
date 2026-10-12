@@ -448,6 +448,32 @@ fn tables_lay_out_cells() {
     assert!(l.cell_at(0, c.x, c.top + 2.0).is_some());
 }
 
+/// A 3×2 table whose first column is one merge over its three rows: a click in any of the merged
+/// rows, the lower ones included, is on the restart cell (row 0, cell 0); the rows below have no
+/// cell of their own there.
+#[test]
+fn a_vertical_merge_is_hit_through_its_restart_in_every_row() {
+    use wordcraft_doc::props::VMerge;
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(3, 2, 300.0);
+    t.rows[0].cells[0].props.vmerge = VMerge::Restart;
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("merged", Default::default()))];
+    for r in 1..3 {
+        t.rows[r].cells[0].props.vmerge = VMerge::Continue;
+    }
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let x = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, row: 0, cell: 0, .. } = i { Some(rect.x + 2.0) } else { None }).unwrap();
+    let continuation_cells = l.pages[0].items.iter().filter(|i| matches!(i, Placed::Cell { row, cell: 0, .. } if *row > 0)).count();
+    assert_eq!(continuation_cells, 0, "the covered rows have no cell target of their own");
+    for r in 0..3 {
+        let pos = Pos { story: StoryRef::Body, path: Path(vec![1, r, 1, 0]), off: 0 };
+        let y = l.caret(&pos).unwrap().top + 2.0;
+        let hit = l.cell_at(0, x, y).unwrap_or_else(|| panic!("row {r} at y {y} hits nothing"));
+        assert_eq!((hit.2, hit.3), (0, 0), "row {r} hits the restart");
+    }
+}
+
 /// A 1×3 table after "before" whose middle cell holds `text` running `dir`.
 fn turned_table(dir: TextDirection, text: &str, row: Option<f32>) -> Document {
     let mut d = Document::from_text("before\nafter");

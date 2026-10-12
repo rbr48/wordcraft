@@ -1420,6 +1420,14 @@ pub fn export(doc: &Document) -> String {
     export_flow(&flow, doc.styles.default_chr.lang.as_deref().unwrap_or("en"))
 }
 
+/// The body of `doc` as HTML, without the page around it: what a copy puts on the clipboard.
+pub fn export_fragment(doc: &Document) -> String {
+    let flow = model::from_doc(doc);
+    let mut out = String::new();
+    blocks_html(&flow.blocks, &mut out, 0);
+    out
+}
+
 pub fn export_flow(flow: &Flow, lang: &str) -> String {
     let m = &flow.meta;
     let mut out = String::new();

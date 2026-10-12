@@ -96,6 +96,14 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
     Ok(json!({"text": s.clipboard_text}))
 }
 
+/// The body of a copied fragment as HTML: what goes on the system clipboard beside its plain text,
+/// so a paste into another program keeps the formatting and the tables' merges.
+pub fn fragment_html(f: &Fragment) -> String {
+    let mut d = wordcraft_doc::Document::new();
+    d.body = f.blocks.iter().cloned().map(std::sync::Arc::new).collect();
+    wordcraft_formats::html::export_fragment(&d)
+}
+
 fn cut(s: &mut Session, v: &Value) -> CmdResult {
     let r = copy(s, v)?;
     delete_selection(s)?;

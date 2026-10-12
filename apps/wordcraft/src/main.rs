@@ -127,7 +127,19 @@ fn services(file_dialog: file_dialogs::Hook) -> Services {
         file_dialog: Some(file_dialog),
         print: Some(print::hook()),
         clipboard_picture: Some(Box::new(clipboard_picture)),
+        clipboard_html: Some(Box::new(clipboard_html)),
         ..Default::default()
+    }
+}
+
+/// A copy's HTML and plain text on the system clipboard together. False when the clipboard refused.
+fn clipboard_html(text: &str, html: &str) -> bool {
+    match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_html(html, Some(text))) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("clipboard: {e}");
+            false
+        }
     }
 }
 

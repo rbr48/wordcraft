@@ -644,13 +644,28 @@ fn row(s: &mut Session, below: bool) -> CmdResult {
     let (at, like) = if below { (last + 1, last) } else { (first, first) };
     let story = s.sel.focus.story;
     let t = s.doc.table_mut(story, &tp)?;
+    refuse_rows_in_merged_table(t)?;
     if t.rows.len() + n > wordcraft_doc::table::MAX_ROWS {
         return Err(CmdError::Failed(format!("a table can't have more than {} rows", wordcraft_doc::table::MAX_ROWS)));
     }
+    // A row inserted above a header row is a header too (Word keeps the heading on both rows).
+    let header = !below && t.rows.get(first).is_some_and(|x| x.props.header);
     for _ in 0..n {
         t.insert_row(at, like);
+        if header && let Some(x) = t.rows.get_mut(at) {
+            x.props.header = true;
+        }
     }
     fix_caret(s, &tp, at, c)
+}
+
+/// Word refuses to insert or delete rows in a table with vertically merged cells ("Cannot access
+/// individual rows in this collection because the table has vertically merged cells").
+fn refuse_rows_in_merged_table(t: &Table) -> Result<(), CmdError> {
+    if t.rows.iter().any(|row| row.cells.iter().any(|c| c.props.vmerge != VMerge::None)) {
+        return Err(CmdError::Failed("rows can't be inserted or deleted in a table with vertically merged cells; unmerge them first".into()));
+    }
+    Ok(())
 }
 
 /// Insert Left / Right: one new column per selected grid column, beside the selection's outer
@@ -694,6 +709,7 @@ fn del_row(s: &mut Session, _: &Value) -> CmdResult {
     if rows.len() >= t.rows.len() {
         return del_table(s, &Value::Null);
     }
+    refuse_rows_in_merged_table(t)?;
     for rr in rows.iter().rev() {
         t.delete_row(*rr);
     }
@@ -984,8 +1000,9 @@ fn sort_table(s: &mut Session, v: &Value) -> CmdResult {
         let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
         let skip = usize::from(header.unwrap_or(t.rows.first().is_some_and(|r| r.props.header))).min(t.rows.len());
         let body = t.rows.get(skip..).unwrap_or(&[]);
-        if body.iter().any(|row| row.cells.iter().any(|c| c.props.vmerge != VMerge::None)) {
-            return Err(CmdError::Failed("the rows to sort have a vertically merged cell, which can't move with its row; unmerge it first".into()));
+        // Word refuses to sort any table with merged cells, horizontal spans included.
+        if t.rows.iter().any(|row| row.cells.iter().any(|c| c.props.vmerge != VMerge::None || c.span() > 1)) {
+            return Err(CmdError::Failed("a table with merged cells can't be sorted; unmerge them first".into()));
         }
         // One key per row, from the cell covering the grid column (rows may differ in their cells).
         let mut keyed: Vec<(SortKey, usize)> = body.iter().enumerate().map(|(i, row)| (sort_key(&row_text_at(row, col), text_only), i)).collect();
@@ -1124,8 +1141,7 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     let instr = formula_instr(p::str(v, "formula").unwrap_or("=SUM(ABOVE)"));
     let story = s.sel.focus.story;
     let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
-    let value = super::table_formula::evaluate(t, r, c, &instr)?;
-    let text = super::table_formula::format_result(value);
+    let text = super::table_formula::evaluate_field(t, r, c, &instr)?;
     let props = s.typing_props();
     let at = super::delete_selection(s)?;
     let end = s.doc.insert_object(&at, wordcraft_doc::InlineObject::Field { instr: instr.clone(), result: text.clone(), locked: false }, &props)?;
@@ -1133,11 +1149,15 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"result": text, "formula": instr}))
 }
 
-/// A formula as a field stores it: upper case, with one leading `=`.
+/// A formula as a field stores it: upper case, with one leading `=`. A `\#` numeric picture is
+/// kept as typed.
 pub(crate) fn formula_instr(raw: &str) -> String {
     let body = raw.trim();
     let body = body.strip_prefix('=').unwrap_or(body);
-    format!("={}", body.trim().to_ascii_uppercase())
+    match super::table_formula::split_switch(body) {
+        (formula, Some(switch)) => format!("={} {switch}", formula.trim().to_ascii_uppercase()),
+        (formula, None) => format!("={}", formula.trim().to_ascii_uppercase()),
+    }
 }
 
 /// Table Layout › Rows & Columns › Delete › Delete Cells. `shift` `left` (the default) removes the

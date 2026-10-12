@@ -1373,3 +1373,24 @@
 	Transliterate Bangla	Translitereeri bengali
 	View Side by Side	Vaata kõrvuti
 	Table Positioning	Tabeli asend
+	Allow overlap with other floating tables	Luba kattuda teiste ujuvate tabelitega
+	Allow spacing between cells:	Luba lahtrite vahele ruumi:
+	Ascending	Kasvav
+	Click a cell border to paint it with the pen. Esc stops.	Lahtri serva klõpsamine värvib selle pliiatsiga. Esc lõpetab.
+	Colour:	Värv:
+	Commas	Komad
+	Delete entire column	Kustuta kogu veerg
+	Delete entire row	Kustuta kogu rida
+	Descending	Kahanev
+	Describes the table for screen readers	Kirjeldab tabelit ekraanilugejatele
+	Float the table: text wraps around it	Ujuv tabel: tekst mähib selle ümber
+	Header row	Päisereida
+	Merge cells before split	Ühenda lahtrid enne jagamist
+	No Colour	Värvi pole
+	No colour	Värvi pole
+	Other:	Muu:
+	Paragraph marks	Lõigumärgid
+	Paste function:	Kleebi funktsioon:
+	Position:	Asend:
+	Shift cells left	Nihuta lahtrid vasakule
+	Shift cells up	Nihuta lahtrid üles

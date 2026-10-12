@@ -325,3 +325,29 @@ Every item above is addressed in the working tree (not committed). Tests: 72 tab
 - New strings use the English text. Only "Table Positioning" is in the nine catalogs; the other new labels fall back to English.
 - Not checked against Word: the paste rules above (rows versus nested, and overwrite), the sort refusal for merged cells, and Distribute Rows' averaging.
 - The cell-spacing gap is applied between rows. Vertical merges draw across the gap.
+
+## Second pass (open items, 2026-10-12)
+
+Every open item from the final status above was worked on in the working tree (not committed). Word was asked about the row and sort rules through COM on synthetic documents; the clipboard and the picture formats were not checked in another program or in Word.
+
+| Item | Result |
+|---|---|
+| Insert Above on a header row | Fixed. The new top row is a header too, as Word keeps the heading on both rows (Word-verified). Insert Below stays body text. |
+| Delete Columns removes rows | Fixed. A row whose only cell fell in the deleted column stays as one empty cell across the grid. The table is removed only when every column goes. |
+| Row insert and delete in a table with vertical merges | Refused with a message. Word refuses them (`Cannot access individual rows in this collection because the table has vertically merged cells.`, Word-verified through COM). Behaviour change: unmerge first. |
+| Sort with merged cells | Any merged cell, vertical or horizontal, refuses the sort (Word-verified: `Cannot sort a table containing merged cells.`). |
+| Copy to other programs | Copy and Cut put the copied content's HTML on the system clipboard, beside the plain text (`arboard` `set_html`; Ctrl+C and Ctrl+X, the ribbon's Copy button, and the context menu). The context menu's Cut used to skip the system clipboard; it now writes it. Not done: RTF. On Windows it needs a custom clipboard format, so `clipboard-win` would become a direct dependency of `apps/wordcraft`. It is already in `Cargo.lock` through `arboard`; that needs approval. |
+| Column grid from the cells | Fixed in layout (a grid that doesn't match the cells) and in .docx reading (no `tblGrid`). Columns take the widths the cells state. A spanning cell's width is shared over the columns it spans where none has its own. Columns no cell states take the average of the rest. |
+| Hit area of a vertical merge | Fixed. A merged cell is one target spanning its rows, gaps included. The rows it covers have none of their own, so a click in any merged row finds the restart cell (`layout::tests::a_vertical_merge_is_hit_through_its_restart_in_every_row`). |
+| Cell spacing and merged fills | Fixed. A merged cell's fill is drawn per row, so the gaps between its rows stay unfilled. Its content is aligned over the rows' heights without the gaps. |
+| Delete Cells, shift up, a bottom cell in the middle of its row | Still refused with a message. The model has no gridBefore or gridAfter, so removing it would leave a gap. Needs a model change. |
+| Formula functions | Added IF, AND, OR, NOT, TRUE, FALSE and DEFINED, with the comparisons `=`, `<>`, `<`, `<=`, `>`, `>=` (they don't chain). IF works out only the branch it takes. |
+| Formula number format (`\#`) | Added. A quoted or single-word picture (`#,##0.00`, `0%`, `$#,##0;($#,##0)`). Sections split by `;` give the positive, negative and zero forms. Not checked against Word's picture rules. |
+| Markdown export of merged tables | A table with merged cells is written as HTML (`colspan`, `rowspan`). Other tables stay GFM pipe tables. |
+| Translations | The 21 strings this branch added to the dialogs are in all nine catalogs. Their translations are mine, not a translator's. The untranslated-text audit (`untranslated_interface_text`) is ignored by default and was not re-run. |
+| Interface tests | Added for the Sort dialog (sorts descending, keeps the header) and the Formula dialog (shows its function list). Not yet: the Border Painter, the pen, the Borders and Shading dialog. |
+| Timing and hostile input | A 1500 × 12 table is sorted, summed and laid out under a 60 s bound. A 1000 × 20 table gets a column. Every `table.*` command runs with junk parameters inside a table, and the merges stay valid. |
+
+**Behaviour changes to check.** Row insert and delete are refused in tables with vertical merges, and sort is refused in any table with a merged cell. Deleting the last column of a table whose only row empties keeps the row (`tests::deleting_the_last_cell_column_keeps_the_rows` replaces the test that expected the table to go).
+
+**Still open.** RTF on the clipboard (needs the dependency decision above). Delete Cells in the middle of a row (model change). Interface tests for the Border Painter, the pen and Borders and Shading. The untranslated-text audit has not been re-run for the new dialogs. The number-format picture rules are not checked against Word.

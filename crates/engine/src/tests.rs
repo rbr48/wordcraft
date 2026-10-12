@@ -2799,10 +2799,11 @@ fn builtin_table_styles_marked_custom_in_a_docx_cant_be_deleted() {
     assert!(s.doc.styles.get(&id).is_some(), "the table's style still exists");
 }
 
-/// Delete Cells can leave a row shorter than the table grid; Delete Columns then removed that row's
-/// only cell and every row with it, leaving a table block with no rows.
+/// Delete Cells can leave a row shorter than the table grid; Delete Columns then emptied that row.
+/// The row stays, as one empty cell across the grid: deleting a column never removes a row, and the
+/// table is removed only when every column goes.
 #[test]
-fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
+fn deleting_the_last_cell_column_keeps_the_rows() {
     let mut s = s();
     run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
     run(&mut s, "table.deleteCells", json!({}));
@@ -2812,7 +2813,8 @@ fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
             assert!(!t.rows.is_empty(), "table without rows");
         }
     }
-    assert!(s.doc.body.iter().all(|b| b.as_table().is_none()), "an emptied table is removed");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).expect("the table stays");
+    assert_eq!((t.rows.len(), t.grid.len()), (1, 1));
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
 }

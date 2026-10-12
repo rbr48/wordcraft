@@ -288,8 +288,8 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
                 if let Some((tp, r, c)) = path.cell()
                     && let Some(t) = s.doc.table(StoryRef::Body, &tp)
                 {
-                    let text = match super::table_formula::evaluate(t, r, c, instr) {
-                        Ok(v) => super::table_formula::format_result(v),
+                    let text = match super::table_formula::evaluate_field(t, r, c, instr) {
+                        Ok(text) => text,
                         Err(e) => format!("!{e}"),
                     };
                     updates.push((k, text));

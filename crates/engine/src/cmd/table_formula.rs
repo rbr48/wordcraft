@@ -15,6 +15,8 @@ use crate::CmdError;
 
 /// The longest formula accepted, in bytes.
 pub const MAX_FORMULA: usize = 512;
+/// The longest numeric picture (`\#` switch) used, in characters.
+const MAX_PICTURE: usize = 64;
 /// The deepest nesting of parentheses, function calls and unary signs.
 const MAX_DEPTH: usize = 32;
 
@@ -26,7 +28,7 @@ pub fn evaluate(t: &Table, r: usize, c: usize, formula: &str) -> Result<f64, Cmd
     let body = formula.trim();
     let body = body.strip_prefix('=').unwrap_or(body);
     let mut parser = Parser { toks: tokenize(body)?, pos: 0, depth: 0 };
-    let expr = parser.expr()?;
+    let expr = parser.compare()?;
     if parser.pos != parser.toks.len() {
         return Err(syntax("unexpected text after the formula".into()));
     }
@@ -40,6 +42,100 @@ pub fn evaluate(t: &Table, r: usize, c: usize, formula: &str) -> Result<f64, Cmd
 /// The text a formula result shows: a whole number as is, otherwise two decimals.
 pub fn format_result(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v:.2}") }
+}
+
+/// The text a formula field shows: its result under its `\#` numeric picture when it has one (see
+/// [`format_picture`]), otherwise as [`format_result`] shows it.
+pub fn evaluate_field(t: &Table, r: usize, c: usize, instr: &str) -> Result<String, CmdError> {
+    let (formula, switch) = split_switch(instr);
+    let value = evaluate(t, r, c, formula)?;
+    Ok(match switch.and_then(picture_of) {
+        Some(picture) => format_picture(value, &picture),
+        None => format_result(value),
+    })
+}
+
+/// Splits a field's `\#` switch off its formula: `=SUM(ABOVE) \# "0.00"` gives the formula and the
+/// switch text (from the `\#` on).
+pub fn split_switch(instr: &str) -> (&str, Option<&str>) {
+    match instr.find("\\#") {
+        Some(at) => (instr[..at].trim_end(), Some(&instr[at..])),
+        None => (instr, None),
+    }
+}
+
+/// The picture a `\#` switch names: a quoted one (`"#,##0.00"`) or a single word.
+fn picture_of(switch: &str) -> Option<String> {
+    let rest = switch.strip_prefix("\\#")?.trim_start();
+    let picture = match rest.strip_prefix('"') {
+        Some(quoted) => quoted.split('"').next().unwrap_or_default(),
+        None => rest.split_whitespace().next().unwrap_or_default(),
+    };
+    let picture: String = picture.chars().take(MAX_PICTURE).collect();
+    (!picture.is_empty()).then_some(picture)
+}
+
+/// The text of `value` under a numeric picture, as Word's `\#` pictures read: `0` is a digit that
+/// always shows, `#` one that shows when it has a value, `,` groups thousands, `.` marks the
+/// decimals, `%` multiplies by 100, and anything else shows as it is. Sections split by `;` give the
+/// positive, negative and zero forms; with one section a negative value takes a `-` in front.
+pub fn format_picture(value: f64, picture: &str) -> String {
+    let sections: Vec<&str> = picture.split(';').collect();
+    let (section, x, minus) = if value < 0.0 && sections.len() >= 2 {
+        (sections[1], -value, false)
+    } else if value == 0.0 && sections.len() >= 3 {
+        (sections[2], 0.0, false)
+    } else {
+        (sections[0], value.abs(), value < 0.0)
+    };
+    let Some(start) = section.find(['#', '0']) else { return section.to_string() };
+    let rest = &section[start..];
+    let len = rest.find(|c: char| !matches!(c, '#' | '0' | ',' | '.')).unwrap_or(rest.len());
+    let (core, suffix) = rest.split_at(len);
+    let prefix = &section[..start];
+    let x = if prefix.contains('%') || suffix.contains('%') { x * 100.0 } else { x };
+    let (int_pic, frac_pic) = match core.split_once('.') {
+        Some((int_pic, frac_pic)) => (int_pic, Some(frac_pic)),
+        None => (core, None),
+    };
+    let min_int = int_pic.matches('0').count().min(MAX_PICTURE);
+    let max_frac = frac_pic.map_or(0, |f| f.matches(['0', '#']).count()).min(15);
+    let min_frac = frac_pic.map_or(0, |f| f.matches('0').count()).min(max_frac);
+    let scale = 10f64.powi(max_frac as i32);
+    let rounded = (x * scale).round() / scale;
+    if !rounded.is_finite() {
+        return format_result(value);
+    }
+    let digits = format!("{:.*}", max_frac, rounded);
+    let (whole, decimals) = match digits.split_once('.') {
+        Some((whole, decimals)) => (whole.to_string(), decimals.to_string()),
+        None => (digits.clone(), String::new()),
+    };
+    let whole = if whole == "0" && min_int == 0 { String::new() } else { format!("{whole:0>min_int$}") };
+    let whole = if int_pic.contains(',') { group_thousands(&whole) } else { whole };
+    let mut decimals = decimals;
+    while decimals.len() > min_frac && decimals.ends_with('0') {
+        decimals.pop();
+    }
+    let mut body = whole;
+    if !decimals.is_empty() {
+        body.push('.');
+        body.push_str(&decimals);
+    }
+    let sign = if minus && rounded != 0.0 { "-" } else { "" };
+    format!("{sign}{prefix}{body}{suffix}")
+}
+
+/// `1234567` → `1,234,567`.
+fn group_thousands(digits: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// A cell's number as a formula or a sort key reads it: surrounding spaces, currency signs,
@@ -79,6 +175,8 @@ enum Tok {
     /// A name: a function, a keyword or a cell reference (letters then digits), upper-cased.
     Name(String),
     Op(char),
+    /// A comparison: `=`, `<>`, `<`, `<=`, `>` or `>=`.
+    Cmp(&'static str),
 }
 
 fn tokenize(s: &str) -> Result<Vec<Tok>, CmdError> {
@@ -113,6 +211,21 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, CmdError> {
         } else if matches!(ch, '+' | '-' | '*' | '/' | '^' | '(' | ')' | ',' | ':') {
             out.push(Tok::Op(ch));
             chars.next();
+        } else if matches!(ch, '<' | '>' | '=') {
+            chars.next();
+            let next = chars.peek().copied();
+            let (op, longer) = match (ch, next) {
+                ('<', Some('=')) => ("<=", true),
+                ('<', Some('>')) => ("<>", true),
+                ('>', Some('=')) => (">=", true),
+                ('<', _) => ("<", false),
+                ('>', _) => (">", false),
+                _ => ("=", false),
+            };
+            if longer {
+                chars.next();
+            }
+            out.push(Tok::Cmp(op));
         } else {
             return Err(syntax(format!("`{ch}` isn't part of a formula")));
         }
@@ -139,6 +252,8 @@ enum Expr {
     Side(Side),
     Neg(Box<Expr>),
     Bin(char, Box<Expr>, Box<Expr>),
+    /// A comparison: 1 when it holds, 0 when it doesn't.
+    Cmp(&'static str, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
 }
 
@@ -168,6 +283,15 @@ impl Parser {
 
     fn leave(&mut self) {
         self.depth = self.depth.saturating_sub(1);
+    }
+
+    /// The loosest level: one comparison of two sums (comparisons don't chain).
+    fn compare(&mut self) -> Result<Expr, CmdError> {
+        let lhs = self.expr()?;
+        let Some(Tok::Cmp(op)) = self.toks.get(self.pos).cloned() else { return Ok(lhs) };
+        self.pos += 1;
+        let rhs = self.expr()?;
+        Ok(Expr::Cmp(op, Box::new(lhs), Box::new(rhs)))
     }
 
     fn expr(&mut self) -> Result<Expr, CmdError> {
@@ -231,7 +355,7 @@ impl Parser {
             Tok::Num(x) => Ok(Expr::Num(x)),
             Tok::Op('(') => {
                 self.enter()?;
-                let inner = self.expr()?;
+                let inner = self.compare()?;
                 if !self.eat_op(')') {
                     return Err(syntax("a `(` is missing its `)`".into()));
                 }
@@ -244,7 +368,7 @@ impl Parser {
                     let mut args = Vec::new();
                     if !self.eat_op(')') {
                         loop {
-                            args.push(self.expr()?);
+                            args.push(self.compare()?);
                             if self.eat_op(')') {
                                 break;
                             }
@@ -266,6 +390,10 @@ impl Parser {
                 if let Some(side) = side {
                     return Ok(Expr::Side(side));
                 }
+                // TRUE and FALSE need no parentheses.
+                if matches!(name.as_str(), "TRUE" | "FALSE") {
+                    return Ok(Expr::Call(name, Vec::new()));
+                }
                 let (row, col) = cell_ref(&name).ok_or_else(|| syntax(format!("`{name}` isn't a cell reference or a function")))?;
                 if self.eat_op(':') {
                     let Some(Tok::Name(other)) = self.toks.get(self.pos).cloned() else {
@@ -278,6 +406,7 @@ impl Parser {
                 Ok(Expr::Cell(row, col, name))
             }
             Tok::Op(c) => Err(syntax(format!("`{c}` is in the wrong place"))),
+            Tok::Cmp(op) => Err(syntax(format!("`{op}` is in the wrong place"))),
         }
     }
 }
@@ -349,8 +478,25 @@ fn eval(e: &Expr, here: &Here) -> Result<Val, CmdError> {
                 }
             })
         }
+        Expr::Cmp(op, a, b) => {
+            let (x, y) = (scalar(eval(a, here)?)?, scalar(eval(b, here)?)?);
+            let holds = match *op {
+                "=" => x == y,
+                "<>" => x != y,
+                "<" => x < y,
+                "<=" => x <= y,
+                ">" => x > y,
+                _ => x >= y,
+            };
+            Val::Num(truth(holds))
+        }
         Expr::Call(name, args) => Val::Num(call(name, args, here)?),
     })
+}
+
+/// A truth value as a formula reads it: 1 for true, 0 for false.
+fn truth(holds: bool) -> f64 {
+    if holds { 1.0 } else { 0.0 }
 }
 
 /// A value that must be one number (arithmetic and single-argument functions).
@@ -426,10 +572,40 @@ fn one(name: &str, args: &[Expr], here: &Here) -> Result<f64, CmdError> {
 }
 
 fn call(name: &str, args: &[Expr], here: &Here) -> Result<f64, CmdError> {
-    if args.is_empty() && matches!(name, "SUM" | "COUNT" | "AVERAGE" | "MAX" | "MIN" | "PRODUCT" | "ABS" | "INT" | "SIGN" | "ROUND" | "MOD") {
+    let needs_one = matches!(
+        name,
+        "SUM" | "COUNT" | "AVERAGE" | "MAX" | "MIN" | "PRODUCT" | "ABS" | "INT" | "SIGN" | "ROUND" | "MOD" | "AND" | "OR" | "NOT" | "IF" | "DEFINED"
+    );
+    if args.is_empty() && needs_one {
         return Err(syntax(format!("{name}() needs an argument")));
     }
     match name {
+        "TRUE" | "FALSE" if args.is_empty() => Ok(truth(name == "TRUE")),
+        "TRUE" | "FALSE" => Err(CmdError::Failed(format!("{name} takes no arguments"))),
+        "NOT" => Ok(truth(one(name, args, here)? == 0.0)),
+        "AND" | "OR" => {
+            let v = gather(args, here)?;
+            if v.is_empty() {
+                return Err(CmdError::Failed(format!("{name} has no numbers to test")));
+            }
+            Ok(truth(if name == "AND" { v.iter().all(|x| *x != 0.0) } else { v.iter().any(|x| *x != 0.0) }))
+        }
+        // Only the branch taken is worked out, so an error in the other one doesn't count.
+        "IF" => match args {
+            [cond, yes, no] => {
+                if scalar(eval(cond, here)?)? != 0.0 {
+                    scalar(eval(yes, here)?)
+                } else {
+                    scalar(eval(no, here)?)
+                }
+            }
+            _ => Err(CmdError::Failed("IF takes three arguments: a condition, the value when it is true, and the value when it is false".into())),
+        },
+        // DEFINED(cell) is 1 when the cell holds a value the formula can read, 0 when it doesn't.
+        "DEFINED" => match args {
+            [a] => Ok(truth(eval(a, here).is_ok())),
+            _ => Err(CmdError::Failed("DEFINED takes one argument".into())),
+        },
         "SUM" => Ok(gather(args, here)?.iter().sum()),
         "COUNT" => Ok(gather(args, here)?.len() as f64),
         "AVERAGE" => {
@@ -565,5 +741,69 @@ mod tests {
         assert_eq!(parse_number("1a"), None);
         assert_eq!(parse_number("inf"), None);
         assert_eq!(parse_number(""), None);
+    }
+
+    #[test]
+    fn comparisons_give_one_or_zero_and_do_not_chain() {
+        let t = table(&[&["5"], &["3"]]);
+        assert_eq!(ev(&t, 1, 0, "=A1>A2"), Ok(1.0));
+        assert_eq!(ev(&t, 1, 0, "=A1<=A2"), Ok(0.0));
+        assert_eq!(ev(&t, 1, 0, "=A1<>A2"), Ok(1.0));
+        assert_eq!(ev(&t, 1, 0, "=A2>=3"), Ok(1.0));
+        assert_eq!(ev(&t, 1, 0, "=A1=5"), Ok(1.0));
+        assert_eq!(ev(&t, 1, 0, "=A1<A2<1"), Err(CmdError::Failed("syntax error: unexpected text after the formula".into())));
+    }
+
+    #[test]
+    fn if_and_or_not_and_the_truth_values() {
+        let t = table(&[&["5", "x"], &["3", ""]]);
+        assert_eq!(ev(&t, 1, 0, "=IF(A1>A2, 10, 20)"), Ok(10.0));
+        assert_eq!(ev(&t, 1, 0, "=IF(A1<A2, 10, 20)"), Ok(20.0));
+        assert_eq!(ev(&t, 1, 0, "=IF(A1>A2, 1, B1+1)"), Ok(1.0), "the branch not taken is not worked out");
+        assert!(ev(&t, 1, 0, "=IF(A1<A2, 1, B1+1)").is_err(), "the branch taken is");
+        assert_eq!(ev(&t, 1, 0, "=AND(A1>1, A2>1)"), Ok(1.0));
+        assert_eq!(ev(&t, 1, 0, "=AND(A1>1, A2>4)"), Ok(0.0));
+        assert_eq!(ev(&t, 1, 0, "=OR(A1<1, A2>1)"), Ok(1.0));
+        assert_eq!(ev(&t, 1, 0, "=OR(A1<1, A2<1)"), Ok(0.0));
+        assert_eq!(ev(&t, 1, 0, "=NOT(A1<1)"), Ok(1.0));
+        assert_eq!(ev(&t, 1, 0, "=TRUE"), Ok(1.0));
+        assert_eq!(ev(&t, 1, 0, "=FALSE()"), Ok(0.0));
+        assert!(ev(&t, 1, 0, "=TRUE(1)").is_err());
+        assert!(ev(&t, 1, 0, "=IF(A1>A2, 1)").is_err(), "IF takes its three arguments");
+        assert!(ev(&t, 1, 0, "=AND()").is_err());
+    }
+
+    #[test]
+    fn defined_says_whether_a_cell_holds_a_value() {
+        let t = table(&[&["5", "x", ""]]);
+        assert_eq!(ev(&t, 0, 0, "=DEFINED(A1)"), Ok(1.0));
+        assert_eq!(ev(&t, 0, 0, "=DEFINED(B1)"), Ok(0.0), "text isn't a value");
+        assert_eq!(ev(&t, 0, 0, "=DEFINED(C1)"), Ok(0.0), "an empty cell isn't");
+        assert_eq!(ev(&t, 0, 0, "=IF(DEFINED(C1), C1, 7)"), Ok(7.0));
+    }
+
+    #[test]
+    fn a_numeric_picture_formats_the_result() {
+        assert_eq!(format_picture(1234.5, "#,##0.00"), "1,234.50");
+        assert_eq!(format_picture(0.256, "0%"), "26%");
+        assert_eq!(format_picture(2.0, "#.##"), "2");
+        assert_eq!(format_picture(0.05, "0.0"), "0.1", "halves round away from zero");
+        assert_eq!(format_picture(-5.0, "$#,##0"), "-$5", "one section: a minus in front");
+        assert_eq!(format_picture(-5.0, "$#,##0.00;($#,##0.00)"), "($5.00)", "the second section is the negative form");
+        assert_eq!(format_picture(0.0, "0.00;-;zero"), "zero");
+        assert_eq!(format_picture(7.0, "000"), "007");
+        assert_eq!(format_picture(-0.001, "0.00"), "0.00", "a rounded zero has no sign");
+    }
+
+    #[test]
+    fn a_field_switch_picks_the_picture_and_the_formula_stays_apart_from_it() {
+        let t = table(&[&["1234.5"], &[""]]);
+        assert_eq!(split_switch("=A1 \\# \"0.00\""), ("=A1", Some("\\# \"0.00\"")));
+        assert_eq!(split_switch("=A1"), ("=A1", None));
+        let shown = |f: &str| evaluate_field(&t, 1, 0, f).unwrap_or_else(|e| panic!("{f}: {e}"));
+        assert_eq!(shown("=A1 \\# \"#,##0.00\""), "1,234.50");
+        assert_eq!(shown("=A1"), "1234.50");
+        assert_eq!(shown("=A1 \\# 0"), "1235", "a bare picture word");
+        assert_eq!(shown("=A1 \\# \"\""), "1234.50", "an empty picture is none");
     }
 }

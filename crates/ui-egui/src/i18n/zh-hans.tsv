@@ -1371,3 +1371,24 @@
 	Transliterate Bangla	音译孟加拉语
 	View Side by Side	并排查看
 	Table Positioning	表格定位
+	Allow overlap with other floating tables	允许与其他浮动表格重叠
+	Allow spacing between cells:	允许单元格之间有间距：
+	Ascending	升序
+	Click a cell border to paint it with the pen. Esc stops.	单击单元格边框即可用画笔绘制。按 Esc 停止。
+	Colour:	颜色：
+	Commas	逗号
+	Delete entire column	删除整列
+	Delete entire row	删除整行
+	Descending	降序
+	Describes the table for screen readers	为屏幕阅读器描述此表格
+	Float the table: text wraps around it	浮动表格：文字环绕表格
+	Header row	标题行
+	Merge cells before split	拆分前合并单元格
+	No Colour	无颜色
+	No colour	无颜色
+	Other:	其他：
+	Paragraph marks	段落标记
+	Paste function:	粘贴函数：
+	Position:	位置：
+	Shift cells left	单元格左移
+	Shift cells up	单元格上移

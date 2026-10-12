@@ -1374,3 +1374,24 @@
 	Transliterate Bangla	Транслитерација бенгалског
 	View Side by Side	Прикажи упоредо
 	Table Positioning	Позиционирање табеле
+	Allow overlap with other floating tables	Дозволи преклапање са другим плутајућим табелама
+	Allow spacing between cells:	Дозволи размак између ћелија:
+	Ascending	Растуће
+	Click a cell border to paint it with the pen. Esc stops.	Кликните на ивицу ћелије да је обојите оловком. Esc зауставља.
+	Colour:	Боја:
+	Commas	Зарези
+	Delete entire column	Обриши целу колону
+	Delete entire row	Обриши цео ред
+	Descending	Опадајуће
+	Describes the table for screen readers	Описује табелу за читаче екрана
+	Float the table: text wraps around it	Учини табелу плутајућом: текст се прелама око ње
+	Header row	Ред заглавља
+	Merge cells before split	Споји ћелије пре поделе
+	No Colour	Без боје
+	No colour	Без боје
+	Other:	Друго:
+	Paragraph marks	Ознаке пасуса
+	Paste function:	Налепи функцију:
+	Position:	Положај:
+	Shift cells left	Помери ћелије улево
+	Shift cells up	Помери ћелије нагоре

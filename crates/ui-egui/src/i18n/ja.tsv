@@ -1360,3 +1360,24 @@
 	Transliterate Bangla	ベンガル語を音訳
 	View Side by Side	並べて比較
 	Table Positioning	表の位置
+	Allow overlap with other floating tables	他の回り込みの表と重なることを許可
+	Allow spacing between cells:	セル間の間隔を許可:
+	Ascending	昇順
+	Click a cell border to paint it with the pen. Esc stops.	セルの罫線をクリックするとペンで描画します。Esc で終了。
+	Colour:	色:
+	Commas	カンマ
+	Delete entire column	列全体を削除
+	Delete entire row	行全体を削除
+	Descending	降順
+	Describes the table for screen readers	スクリーンリーダー向けに表を説明
+	Float the table: text wraps around it	表を回り込みに設定: 文字が周囲を回り込みます
+	Header row	見出し行
+	Merge cells before split	分割の前にセルを結合
+	No Colour	色なし
+	No colour	色なし
+	Other:	その他:
+	Paragraph marks	段落記号
+	Paste function:	関数を貼り付け:
+	Position:	位置:
+	Shift cells left	セルを左にシフト
+	Shift cells up	セルを上にシフト

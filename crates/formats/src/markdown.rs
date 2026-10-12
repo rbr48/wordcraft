@@ -1183,6 +1183,10 @@ fn marker(m: Mark) -> &'static str {
 }
 
 fn table_md(t: &FTable, out: &mut Vec<String>) {
+    // A pipe table can't span cells: a table with merged cells is written as HTML, so the merges survive.
+    if t.rows.iter().any(|r| r.iter().any(|c| c.colspan > 1 || c.rowspan > 1 || c.covered)) {
+        return table_html(t, out);
+    }
     let cols = t.cols().max(1);
     let cell_md = |c: &Cell| -> String {
         let mut parts = Vec::new();
@@ -1228,6 +1232,34 @@ fn table_md(t: &FTable, out: &mut Vec<String>) {
     for r in t.rows.iter().skip(1) {
         out.push(format!("| {} |", row_md(r).join(" | ")));
     }
+}
+
+/// A table with merged cells as an HTML table: `colspan` and `rowspan` carry the merges, and the
+/// cells a vertical merge covers are left out. The cell text is plain, escaped, with line breaks.
+fn table_html(t: &FTable, out: &mut Vec<String>) {
+    out.push("<table>".into());
+    for r in &t.rows {
+        let mut line = String::from("<tr>");
+        for c in r.iter().filter(|c| !c.covered) {
+            let tag = if c.header { "th" } else { "td" };
+            let mut attrs = String::new();
+            if c.colspan > 1 {
+                attrs.push_str(&format!(" colspan=\"{}\"", c.colspan.clamp(1, 63)));
+            }
+            if c.rowspan > 1 {
+                attrs.push_str(&format!(" rowspan=\"{}\"", c.rowspan.clamp(1, 1000)));
+            }
+            let text = escape_html(&c.text()).replace('\n', "<br>");
+            line.push_str(&format!("<{tag}{attrs}>{text}</{tag}>"));
+        }
+        line.push_str("</tr>");
+        out.push(line);
+    }
+    out.push("</table>".into());
+}
+
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 /// Markdown text of a document.
@@ -1411,5 +1443,24 @@ mod tests {
         let FBlock::Para(q) = &back.blocks[0] else { panic!() };
         assert_eq!(q.text(), "1. not a list *really*");
         assert!(q.list.is_none());
+    }
+
+    #[test]
+    fn a_table_with_merged_cells_is_written_as_html_and_a_plain_one_as_pipes() {
+        let text = |s: &str| Cell {
+            blocks: vec![FBlock::Para(Para { inlines: vec![Inline::Text(s.into(), Fmt::default())], ..Default::default() })],
+            ..Default::default()
+        };
+        let merged =
+            FTable { rows: vec![vec![Cell { colspan: 2, ..text("Top & <wide>") }], vec![text("a"), text("b")]], widths: vec![], borderless: false };
+        let mut out = Vec::new();
+        table_md(&merged, &mut out);
+        assert_eq!(out[0], "<table>");
+        assert_eq!(out[1], "<tr><td colspan=\"2\">Top &amp; &lt;wide&gt;</td></tr>");
+        assert_eq!(out[2], "<tr><td>a</td><td>b</td></tr>");
+        let plain = FTable { rows: vec![vec![text("a"), text("b")]], widths: vec![], borderless: false };
+        let mut out = Vec::new();
+        table_md(&plain, &mut out);
+        assert_eq!(out[0], "| a | b |");
     }
 }

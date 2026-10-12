@@ -82,6 +82,22 @@ pub struct Services {
     /// Desktop: the picture on the system clipboard, if any — egui's paste only carries text
     /// (#45). Read when Paste finds no text; see [`paste_picture`].
     pub clipboard_picture: Option<Box<dyn Fn() -> Option<paste_picture::ClipboardPicture>>>,
+    /// Desktop: a copy's plain text and its HTML on the system clipboard together, so other programs
+    /// keep the formatting and the tables' merges (`write(text, html)`). False when the clipboard
+    /// refused; the plain text then goes through egui (see [`copy_to_clipboard`]).
+    pub clipboard_html: Option<Box<dyn Fn(&str, &str) -> bool>>,
+}
+
+/// Puts a copy on the system clipboard: the plain text, with the copied content's HTML beside it
+/// where the platform takes it. Without that, egui's plain-text copy.
+pub(crate) fn copy_to_clipboard(ctx: &egui::Context, app: &WordApp, text: &str) {
+    let written = match (&app.services.clipboard_html, &app.session.clipboard) {
+        (Some(write), Some(fragment)) => write(text, &wordcraft_engine::cmd::edit::fragment_html(fragment)),
+        _ => false,
+    };
+    if !written {
+        ctx.copy_text(text.to_string());
+    }
 }
 
 /// Files delivered asynchronously.

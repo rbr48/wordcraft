@@ -95,6 +95,50 @@ impl Table {
         self.grid.len().max(self.rows.iter().map(|r| r.cells.iter().map(Cell::span).sum::<usize>()).max().unwrap_or(0))
     }
 
+    /// The column widths the cells state, one per grid column (`cols()` of them). A single-column
+    /// cell's width is its column's; a spanning cell's width is shared over the columns it spans
+    /// where none of them has its own. Columns no cell states get the average of the others.
+    /// `None` when no cell states a width.
+    pub fn grid_from_cell_widths(&self) -> Option<Vec<f32>> {
+        let ncols = self.cols();
+        let stated = |c: &Cell| c.props.width.filter(|w| w.is_finite() && *w > 0.0);
+        let mut known: Vec<Option<f32>> = vec![None; ncols];
+        for row in &self.rows {
+            let mut x = 0;
+            for c in &row.cells {
+                if let Some(w) = stated(c)
+                    && c.span() == 1
+                    && let Some(slot) = known.get_mut(x)
+                    && slot.is_none()
+                {
+                    *slot = Some(w);
+                }
+                x += c.span();
+            }
+        }
+        for row in &self.rows {
+            let mut x = 0;
+            for c in &row.cells {
+                let span = c.span();
+                if let Some(w) = stated(c)
+                    && span > 1
+                    && let Some(cols) = known.get_mut(x..(x + span).min(ncols))
+                    && cols.iter().all(Option::is_none)
+                {
+                    let each = w / cols.len().max(1) as f32;
+                    cols.iter_mut().for_each(|k| *k = Some(each));
+                }
+                x += span;
+            }
+        }
+        let (sum, count) = known.iter().flatten().fold((0.0f32, 0usize), |(s, n), w| (s + w, n + 1));
+        if count == 0 {
+            return None;
+        }
+        let average = sum / count as f32;
+        Some(known.iter().map(|k| k.unwrap_or(average).max(4.0)).collect())
+    }
+
     /// Grid column where cell `c` of row `r` starts.
     pub fn grid_col(&self, r: usize, c: usize) -> usize {
         self.rows.get(r).map(|row| row.cells.iter().take(c).map(Cell::span).sum()).unwrap_or(0)
@@ -257,7 +301,16 @@ impl Table {
                 row.cells.remove(i);
             }
         }
-        self.rows.retain(|r| !r.cells.is_empty());
+        // A row whose only cell was in the deleted column keeps its place as one empty cell across
+        // the grid: deleting a column never removes a row.
+        let width = self.grid.len();
+        for row in &mut self.rows {
+            if row.cells.is_empty() {
+                let mut c = Cell::empty();
+                c.props.span = width as u32;
+                row.cells.push(c);
+            }
+        }
         self.repair_vmerge();
     }
 
@@ -501,6 +554,45 @@ mod tests {
         assert_eq!(t.rows.len(), 2);
         t.delete_row(99);
         t.delete_col(99);
+    }
+
+    #[test]
+    fn deleting_a_column_keeps_a_row_that_ends_up_with_no_cells() {
+        // Row 1 is ragged: its only cell is in column 0, the column being deleted.
+        let mut t = Table::new(2, 2, 200.0);
+        t.rows[1].cells.truncate(1);
+        t.delete_col(0);
+        assert_eq!(t.rows.len(), 2, "the row is kept");
+        assert_eq!(t.grid.len(), 1);
+        let row = &t.rows[1];
+        assert_eq!(row.cells.len(), 1, "as one empty cell across the grid");
+        assert_eq!(row.cells[0].span(), 1);
+        assert!(row.cells[0].blocks.iter().all(|b| b.as_para().is_none_or(|p| p.is_empty())));
+    }
+
+    #[test]
+    fn grid_from_cell_widths_reads_the_widths_the_cells_state() {
+        // A table with no grid and no stated widths (Table::new states every cell's width).
+        fn unstated(cols: usize) -> Table {
+            let mut t = Table::new(2, cols, 300.0);
+            t.grid.clear();
+            t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()).for_each(|c| c.props.width = None);
+            t
+        }
+        // The first row states two of its three widths; the third column takes their average.
+        let mut t = unstated(3);
+        t.rows[0].cells[0].props.width = Some(50.0);
+        t.rows[0].cells[1].props.width = Some(100.0);
+        assert_eq!(t.grid_from_cell_widths(), Some(vec![50.0, 100.0, 75.0]));
+        // A spanning cell's width is shared over the columns it spans where none has its own.
+        let mut u = unstated(3);
+        u.rows[1].cells = vec![Cell::empty(), Cell::empty()];
+        u.rows[1].cells[0].props.span = 2;
+        u.rows[1].cells[0].props.width = Some(200.0);
+        u.rows[1].cells[1].props.width = Some(60.0);
+        assert_eq!(u.grid_from_cell_widths(), Some(vec![100.0, 100.0, 60.0]));
+        // No stated width at all: no grid to read.
+        assert_eq!(unstated(3).grid_from_cell_widths(), None);
     }
 
     #[test]

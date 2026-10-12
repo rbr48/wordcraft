@@ -1014,8 +1014,11 @@ impl Reader<'_> {
             return None;
         }
         if table.grid.is_empty() {
-            let cols = table.cols().clamp(1, MAX_COLS);
-            table.grid = vec![72.0; cols];
+            // No tblGrid: the columns are the widths the cells state, else an even 72pt each.
+            table.grid = table.grid_from_cell_widths().map(|g| g.into_iter().take(MAX_COLS).collect()).unwrap_or_else(|| {
+                let cols = table.cols().clamp(1, MAX_COLS);
+                vec![72.0; cols]
+            });
         }
         Some(table)
     }

@@ -1372,3 +1372,24 @@
 	Transliterate Bangla	Транслітерувати бенгальську
 	View Side by Side	Перегляд поруч
 	Table Positioning	Положення таблиці
+	Allow overlap with other floating tables	Дозволити перекриття з іншими плаваючими таблицями
+	Allow spacing between cells:	Дозволити проміжки між клітинками:
+	Ascending	За зростанням
+	Click a cell border to paint it with the pen. Esc stops.	Клацніть на межу клітинки, щоб намалювати її пером. Esc зупиняє.
+	Colour:	Колір:
+	Commas	Коми
+	Delete entire column	Видалити весь стовпець
+	Delete entire row	Видалити весь рядок
+	Descending	За спаданням
+	Describes the table for screen readers	Описує таблицю для екранних читачів
+	Float the table: text wraps around it	Зробити таблицю плаваючою: текст обтікає її
+	Header row	Рядок заголовка
+	Merge cells before split	Об'єднати клітинки перед поділом
+	No Colour	Без кольору
+	No colour	Без кольору
+	Other:	Інше:
+	Paragraph marks	Знаки абзаців
+	Paste function:	Вставити функцію:
+	Position:	Положення:
+	Shift cells left	Зсунути клітинки ліворуч
+	Shift cells up	Зсунути клітинки вгору

@@ -1906,14 +1906,18 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         }
         ui.separator();
     }
-    item(ui, app, "Cut", "edit.cut", json!({}));
-    if ui.add(egui::Button::new(tl!("Copy")).shortcut_text(crate::widgets::shortcut_text(app, "edit.copy"))).clicked() {
-        if let Ok(r) = app.run("edit.copy", json!({}))
-            && let Some(t) = r.get("text").and_then(|t| t.as_str())
-        {
-            ui.ctx().copy_text(t.to_string());
+    // Cut and Copy put their text on the system clipboard too, with its HTML (as Ctrl+X and Ctrl+C do).
+    for (label, id) in [("Cut", "edit.cut"), ("Copy", "edit.copy")] {
+        let on = crate::widgets::enabled(app, id);
+        if ui.add_enabled(on, egui::Button::new(tl!(label)).shortcut_text(crate::widgets::shortcut_text(app, id))).clicked() {
+            if let Ok(r) = app.run(id, json!({}))
+                && let Some(t) = r.get("text").and_then(|t| t.as_str())
+                && !t.is_empty()
+            {
+                crate::copy_to_clipboard(ui.ctx(), app, t);
+            }
+            ui.close();
         }
-        ui.close();
     }
     item(ui, app, "Paste", "edit.paste", json!({}));
     ui.separator();

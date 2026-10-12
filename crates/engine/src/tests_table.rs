@@ -101,43 +101,54 @@ fn insert_right_adds_one_column_per_selected_column_and_keeps_the_width() {
 }
 
 #[test]
-fn insert_inside_a_merge_splits_it_without_orphans() {
+fn insert_row_in_a_table_with_a_vertical_merge_is_refused_and_changes_nothing() {
     let mut s = s();
     matrix(&mut s);
     run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 0, "r1": 2, "c1": 0}));
     run(&mut s, "table.merge", json!({}));
-    run(&mut s, "table.insertRowBelow", json!({}));
-    assert_merges_valid(table(&s));
+    run(&mut s, "table.selectRow", json!({"path": "1", "row": 2}));
+    assert!(s.run("table.insertRowBelow", &json!({})).is_err(), "Word refuses row inserts over vertical merges");
+    let t = table(&s);
+    assert_eq!(t.rows.len(), 4);
+    assert_merges_valid(t);
 }
 
 #[test]
-fn delete_the_top_row_of_a_merge_keeps_its_text_in_the_row_below() {
+fn delete_row_in_a_table_with_a_vertical_merge_is_refused_and_changes_nothing() {
     let mut s = s();
     matrix(&mut s);
-    // Rows 1 to 3 of column 0 become one cell; deleting row 1 leaves a merge over rows 2 and 3.
+    // Rows 1 to 3 of column 0 become one cell; Word refuses to delete any row of that table.
     run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 0, "r1": 3, "c1": 0}));
     run(&mut s, "table.merge", json!({}));
     run(&mut s, "table.selectRow", json!({"path": "1", "row": 1}));
-    run(&mut s, "table.deleteRow", json!({}));
+    assert!(s.run("table.deleteRow", &json!({})).is_err());
     let t = table(&s);
+    assert_eq!(t.rows.len(), 4);
     assert_merges_valid(t);
-    let merged = cell_text(t, 1, 0);
-    assert!(merged.contains("Row 1") && merged.contains("Row 2") && merged.contains("Row 3"), "merged text kept: {merged:?}");
-    assert_eq!(t.rows.get(1).and_then(|row| row.cells.first()).map(|c| c.props.vmerge), Some(VMerge::Restart));
-    assert_eq!(t.rows.get(2).and_then(|row| row.cells.first()).map(|c| c.props.vmerge), Some(VMerge::Continue));
+    assert!(cell_text(t, 1, 0).contains("Row 3"), "the merged text is untouched");
 }
 
 #[test]
-fn deleting_the_only_row_of_a_merge_leaves_an_ordinary_cell() {
+fn insert_row_above_a_header_row_is_a_header_too() {
     let mut s = s();
     matrix(&mut s);
-    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 0, "r1": 2, "c1": 0}));
-    run(&mut s, "table.merge", json!({}));
-    run(&mut s, "table.selectRow", json!({"path": "1", "row": 1}));
-    run(&mut s, "table.deleteRow", json!({}));
+    run(&mut s, "table.selectRow", json!({"path": "1", "row": 0}));
+    run(&mut s, "table.insertRowAbove", json!({}));
     let t = table(&s);
-    assert_merges_valid(t);
-    assert!(t.rows.iter().all(|row| row.cells.iter().all(|c| c.props.vmerge == VMerge::None)));
+    assert!(t.rows[0].props.header, "the new top row is a header");
+    assert!(t.rows[1].props.header, "the old header row stays a header");
+    assert!(!t.rows[2].props.header, "the body row is not");
+}
+
+#[test]
+fn insert_row_below_a_header_row_is_not_a_header() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRow", json!({"path": "1", "row": 0}));
+    run(&mut s, "table.insertRowBelow", json!({}));
+    let t = table(&s);
+    assert!(t.rows[0].props.header);
+    assert!(!t.rows[1].props.header, "a row inserted below the header is body text");
 }
 
 /// The paragraph in the body whose plain text is `text`.
@@ -306,6 +317,18 @@ fn sort_refuses_rows_with_a_vertical_merge_and_changes_nothing() {
     run(&mut s, "table.merge", json!({}));
     let before = table(&s).clone();
     assert!(s.run("table.sort", &json!({"column": 1})).is_err());
+    assert_eq!(table(&s), &before);
+}
+
+#[test]
+fn sort_refuses_a_table_with_a_horizontal_merge_and_changes_nothing() {
+    let mut s = s();
+    matrix(&mut s);
+    // A merge across two cells of one body row: Word refuses to sort any table with merged cells.
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 2, "c0": 1, "r1": 2, "c1": 2}));
+    run(&mut s, "table.merge", json!({}));
+    let before = table(&s).clone();
+    assert!(s.run("table.sort", &json!({"column": 0})).is_err());
     assert_eq!(table(&s), &before);
 }
 
@@ -658,4 +681,70 @@ fn a_copied_cell_pastes_its_text_into_the_caret_cell() {
     let t = table(&s);
     assert_eq!(tables(&s).len(), 1, "no nested table: the cell's text is pasted");
     assert_eq!(cell_text(t, 3, 3), "91", "the copied text lands at the caret");
+}
+
+/// A `rows` × `cols` table of numbers after the first paragraph, the caret in its first cell.
+fn large_table(rows: usize, cols: usize) -> Session {
+    let mut s = s();
+    let mut t = Table::new(rows, cols, 468.0);
+    for (r, row) in t.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            let text = ((r * 7 + c * 13) % 997).to_string();
+            cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+        }
+    }
+    s.doc.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 0, 0, 0], "off": 0}}));
+    s
+}
+
+/// A large table is sorted, summed and laid out in moderate time. The bound is generous (tests run
+/// unoptimised, on a shared machine); it catches a quadratic step, not a slow one.
+#[test]
+fn a_large_table_is_sorted_summed_and_laid_out_in_moderate_time() {
+    let start = std::time::Instant::now();
+    let mut s = large_table(1500, 12);
+    run(&mut s, "table.sort", json!({"column": 0}));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 1499, 0, 0], "off": 0}}));
+    run(&mut s, "table.formula", json!({"formula": "=SUM(ABOVE)"}));
+    let pages = s.layout().pages.len();
+    let took = start.elapsed();
+    assert_eq!(table(&s).rows.len(), 1500);
+    assert!(pages > 10, "a long table runs over many pages: {pages}");
+    assert!(took.as_secs() < 60, "a 1500 × 12 table took {took:?}");
+}
+
+#[test]
+fn a_wide_large_table_grows_by_a_column_without_losing_rows() {
+    let mut s = large_table(1000, 20);
+    run(&mut s, "table.insertColumnRight", json!({}));
+    let t = table(&s);
+    assert_eq!(t.rows.len(), 1000);
+    assert_eq!(t.grid.len(), 21);
+    assert_merges_valid(t);
+}
+
+/// Every table command with junk parameters, the caret in a table: none panics, and the table keeps
+/// its merges valid. (The registry-wide test runs them with the caret outside any table.)
+#[test]
+fn hostile_table_params_never_panic_inside_a_table() {
+    let reg = crate::cmd::registry();
+    let junk = [
+        json!({"formula": "=IF(", "columns": 1e9, "rows": -5, "column": 99, "row": 4096, "r0": 99, "c0": 99, "r1": -1, "c1": 1e9, "path": "1", "shift": "sideways", "kind": "nope", "text": "\\#\"", "descending": "maybe"}),
+        json!({"formula": "=SUM(ABOVE) \\# \"#,##0.00;(\"", "width": 1e308, "widthPct": -1, "cellSpacing": -1e308, "indent": 1e308, "rowHeight": 0, "columnWidth": 1e9, "cellWidth": -4}),
+        json!({"formula": "=DEFINED(ZZ99)*0", "separator": "\u{0}", "other": "", "choice": 9, "style": "nope", "color": "zz", "fill": "#", "alt": "x"}),
+    ];
+    for spec in reg.all().iter().filter(|spec| spec.id.starts_with("table.")) {
+        for j in &junk {
+            let mut s = s();
+            matrix(&mut s);
+            let _ = s.run(spec.id, j);
+            s.clamp_selection();
+            let _ = s.layout();
+            // A command may take the table away (Delete Table); then there is nothing to check.
+            if let Some(t) = s.doc.body.iter().find_map(|b| b.as_table()) {
+                assert_merges_valid(t);
+            }
+        }
+    }
 }

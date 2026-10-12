@@ -306,8 +306,12 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     // Cell spacing: a gap before every grid column, after the last one, and between rows.
     let gap = t.props.cell_spacing.filter(|g| g.is_finite() && *g > 0.0).map_or(0.0, |g| g.min(1584.0));
     // Column widths.
+    // A grid that doesn't match the cells takes the widths the cells state; without any, the columns
+    // share the width available.
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
         t.grid.iter().map(|w| if w.is_finite() { w.max(4.0) } else { 72.0 }).collect()
+    } else if let Some(g) = t.grid_from_cell_widths().filter(|g| g.len() == ncols) {
+        g
     } else {
         vec![avail / ncols as f32; ncols]
     };
@@ -566,25 +570,35 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         })
         .collect();
     // Second pass: place cells with their row height, fills and borders.
+    // A merged cell's fill goes into each row it covers, so the gaps between its rows stay unfilled.
+    let mut lower: Vec<Vec<Placed>> = (0..rows.len()).map(|_| Vec::new()).collect();
     let mut out = Vec::with_capacity(rows.len());
     for (ri, cells) in rows.into_iter().enumerate() {
         let rh = heights.get(ri).copied().unwrap_or(0.0);
-        let mut items = Vec::new();
+        let mut items = lower.get_mut(ri).map(std::mem::take).unwrap_or_default();
         for (ci, c) in cells.into_iter().enumerate() {
-            // A restart cell spans several rows: its height is their sum.
+            // A restart cell spans several rows: its content is aligned over their heights (the gaps
+            // between them are not part of the cell), and its hit area takes the gaps in too.
             let mut span_h = rh;
+            let mut gaps = 0usize;
             if c.vmerge == VMerge::Restart {
                 let mut k = ri + 1;
                 while cont.get(k).is_some_and(|v| v.contains(&c.g)) {
-                    span_h += heights.get(k).copied().unwrap_or(0.0);
+                    let hk = heights.get(k).copied().unwrap_or(0.0);
+                    span_h += hk;
+                    gaps += 1;
+                    if let Some(f) = c.fill
+                        && let Some(slot) = lower.get_mut(k)
+                    {
+                        slot.push(Placed::Fill { rect: Rect::new(c.x, 0.0, c.w, hk), color: f });
+                    }
                     k += 1;
                 }
             }
-            let rect = Rect::new(c.x, 0.0, c.w, span_h);
             if c.vmerge != VMerge::Continue
                 && let Some(f) = c.fill
             {
-                items.push(Placed::Fill { rect, color: f });
+                items.push(Placed::Fill { rect: Rect::new(c.x, 0.0, c.w, rh), color: f });
             }
             let mut dy = match c.valign {
                 VAlign::Top => 0.0,
@@ -646,7 +660,17 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             if let Some(e) = b.right.filter(Border::is_visible) {
                 items.push(Placed::Rule { x0: x1, y0, x1, y1, border: e });
             }
-            items.push(Placed::Cell { rect: Rect::new(c.x, 0.0, c.w, rh), table: wordcraft_doc::Path(path.to_vec()), row: ri, cell: ci, story });
+            // A merged cell is one target, found through its restart: the rows it covers below have none.
+            if c.vmerge != VMerge::Continue {
+                let hit_h = span_h + gaps as f32 * gap;
+                items.push(Placed::Cell {
+                    rect: Rect::new(c.x, 0.0, c.w, hit_h),
+                    table: wordcraft_doc::Path(path.to_vec()),
+                    row: ri,
+                    cell: ci,
+                    story,
+                });
+            }
         }
         // Each row carries the gap below it; the first row also carries the gap above the table.
         let top = if ri == 0 { gap } else { 0.0 };

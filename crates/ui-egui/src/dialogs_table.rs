@@ -624,3 +624,70 @@ fn relation(ui: &mut Ui, id: &str, value: &mut String, options: &[(&str, &str)])
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+
+    use crate::WordApp;
+
+    /// A new document with a tabular quick table (a header row, then six body rows), the caret in it.
+    fn app_with_table() -> WordApp {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("table.quick", json!({"kind": "tabular"})).unwrap();
+        a
+    }
+
+    /// The plain text of cell `c` in row `r` of the first table.
+    fn cell_text(a: &WordApp, r: usize, c: usize) -> String {
+        let t = a.session.doc.body.iter().find_map(|b| b.as_table()).expect("a table");
+        t.rows[r].cells[c].blocks.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn the_sort_dialog_sorts_the_body_rows_and_keeps_the_header() {
+        let mut a = app_with_table();
+        a.run("ui.dialog", json!({"name": "tableSort"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(h.query_by_label("Sort by").is_some(), "the dialog asks for its key");
+        assert!(h.query_by_label("Header row").is_some(), "and whether the first row is a header");
+        h.get_by_label("Descending").click();
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        let a = h.state();
+        assert_eq!(cell_text(a, 0, 0), "Item", "the header stays on top");
+        assert_eq!(cell_text(a, 1, 0), "Pens", "the body is sorted descending");
+        assert_eq!(cell_text(a, 6, 0), "Books");
+    }
+
+    #[test]
+    fn the_formula_dialog_asks_for_a_function_and_a_formula() {
+        let mut a = app_with_table();
+        a.run("ui.dialog", json!({"name": "tableFormula"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(h.query_by_label("Paste function:").is_some(), "the dialog offers the functions");
+    }
+}
