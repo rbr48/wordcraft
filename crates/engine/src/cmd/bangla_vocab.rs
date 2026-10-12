@@ -1,5 +1,26 @@
-// Auto-generated comprehensive Bangla Avro vocabulary database for instant suggestion and transliteration.
-// Derived from OmicronLab Avro Database (77926 words).
+// The contents of this file are subject to the Mozilla Public License Version 1.1 (the "License");
+// you may not use this file except in compliance with the License. You may obtain a copy of the
+// License at http://www.mozilla.org/MPL/ (a copy is in LICENSE-MPL-1.1.txt at the root of this
+// repository).
+//
+// Software distributed under the License is distributed on an "AS IS" basis, WITHOUT WARRANTY OF
+// ANY KIND, either express or implied. See the License for the specific language governing rights
+// and limitations under the License.
+//
+// The Original Code is Avro Keyboard (its phonetic word database),
+// https://github.com/omicronlab/Avro-Keyboard.
+//
+// The Initial Developer of the Original Code is Mehdi Hasan Khan <mhasan@omicronlab.com>.
+//
+// Copyright (C) OmicronLab <http://www.omicronlab.com>. All Rights Reserved.
+//
+// Contributor(s): WordCraft contributors (2026): converted the word database to this Rust table
+// of (romanised spelling, Bangla word) pairs, sorted for lookup, and edited entries.
+//
+// This file alone is under the MPL 1.1; the rest of WordCraft is MIT OR Apache-2.0 (see NOTICE
+// and ATTRIBUTION.md).
+
+// Bangla Avro vocabulary for phonetic suggestions and transliteration (77,926 words).
 pub const BANGLA_VOCAB: &[(&str, &str)] = &[
     ("a", "আ"),
     ("a:", "আঃ"),

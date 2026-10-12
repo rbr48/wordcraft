@@ -23,6 +23,10 @@ list (author, source, license) is in ATTRIBUTION.md.
 - English word list (assets/hyphenation/en-us.dic) — derived from the Moby Hyphenator II list by
   Grady Ward, public domain (Project Gutenberg eBook #3204). The hyphenation patterns
   (assets/hyphenation/en-us.pat) were trained from it and are released as CC0-1.0.
+- Bangla phonetic word list (crates/engine/src/cmd/bangla_vocab.rs) — derived from the Avro Keyboard
+  phonetic word database by Mehdi Hasan Khan / OmicronLab (https://github.com/omicronlab/Avro-Keyboard),
+  converted and edited by WordCraft contributors. That file alone is under the Mozilla Public
+  License 1.1; see LICENSE-MPL-1.1.txt. Its source form is the file itself.
 - All UI icons are drawn in code (crates/ui-egui/src/icons.rs) and are original work, MIT OR Apache-2.0.
 
 Rust dependencies (egui, eframe, vello_cpu, skrifa, harfrust, krilla, quick-xml, zip, image, …)

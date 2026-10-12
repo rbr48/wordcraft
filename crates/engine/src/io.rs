@@ -330,54 +330,60 @@ fn is_sutonny_glyph(c: char) -> bool {
     matches!(c, '†' | '‡' | 'ˆ' | '‰' | 'Š' | '‹' | 'Œ' | '‚' | '„' | '•' | '›' | 'œ' | 'š' | 'Ÿ' | 'ƒ') || ('\u{00A1}'..='\u{00FF}').contains(&c)
 }
 
-/// Detects paragraphs that were partially converted in an earlier session (containing Bengali Unicode
-/// mixed with leftover SutonnyMJ glyphs or unconverted `w`/`z` adjacent to Bengali characters).
-fn has_leftover_bijoy(text: &str) -> bool {
-    let has_bn = text.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c));
-    if !has_bn {
-        return false;
-    }
-    if text.chars().any(is_sutonny_glyph) || text.contains("šত্ন") || text.contains("¯ত্ন") || text.contains("চঁাদ") {
-        return true;
-    }
-    let chars: Vec<char> = text.chars().collect();
-    for (i, ch) in chars.iter().enumerate() {
-        if matches!(ch, 'w' | 'z') {
-            let prev_bn = i > 0 && chars.get(i - 1).is_some_and(|c| ('\u{0980}'..='\u{09FF}').contains(c));
-            let next_bn = chars.get(i + 1).is_some_and(|c| ('\u{0980}'..='\u{09FF}').contains(c));
-            if prev_bn || next_bn {
-                return true;
-            }
-        }
-    }
-    false
+/// A Bengali letter or sign; the Bengali digits (U+09E6–U+09EF) don't count, so a number with a
+/// symbol (`২৫°C`, `১০০£`) is never taken for a half-converted word.
+fn is_bn_letter(c: char) -> bool {
+    ('\u{0980}'..='\u{09E5}').contains(&c) || ('\u{09F0}'..='\u{09FF}').contains(&c)
 }
 
-/// Repairs a partially converted Bengali string without altering pure English words or numbers.
+/// One word of Unicode Bangla that still holds SutonnyMJ from an earlier, partial conversion: a
+/// Bengali letter together with a SutonnyMJ glyph in the same word, an unconverted pre-base `w`/`z`
+/// against a Bengali letter, or a known broken sequence. Words are split at whitespace, so a
+/// symbol standing apart (`© ২০২৪`, `½ কেজি`) or a Latin word (`café`) is ordinary text.
+fn is_leftover_word(word: &str) -> bool {
+    if !word.chars().any(is_bn_letter) {
+        return false;
+    }
+    if word.chars().any(is_sutonny_glyph) || word.contains("šত্ন") || word.contains("¯ত্ন") || word.contains("চঁাদ") {
+        return true;
+    }
+    let chars: Vec<char> = word.chars().collect();
+    chars.iter().enumerate().any(|(i, ch)| {
+        let near = |j: Option<usize>| j.and_then(|j| chars.get(j)).is_some_and(|c| is_bn_letter(*c));
+        matches!(ch, 'w' | 'z') && (near(i.checked_sub(1)) || near(i.checked_add(1)))
+    })
+}
+
+/// Detects text that was partially converted in an earlier session: any of its words is a
+/// leftover (see [`is_leftover_word`]).
+fn has_leftover_bijoy(text: &str) -> bool {
+    text.split_whitespace().any(is_leftover_word)
+}
+
+/// Repairs a partially converted Bengali string word by word: only the leftover words are decoded;
+/// every other word (Unicode Bangla, English, numbers, symbols) and the whitespace stay as they are.
 fn repair_partial_bijoy(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut token = String::new();
     let mut in_space = false;
-
+    let flush = |token: &str, in_space: bool, out: &mut String| {
+        if !in_space && is_leftover_word(token) {
+            out.push_str(&crate::cmd::bangla::ansi_to_unicode(token));
+        } else {
+            out.push_str(token);
+        }
+    };
     for ch in text.chars() {
         let is_ws = ch.is_whitespace();
         if is_ws != in_space && !token.is_empty() {
-            if !in_space && (token.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c)) || token.chars().any(is_sutonny_glyph)) {
-                out.push_str(&crate::cmd::bangla::ansi_to_unicode(&token));
-            } else {
-                out.push_str(&token);
-            }
+            flush(&token, in_space, &mut out);
             token.clear();
         }
         in_space = is_ws;
         token.push(ch);
     }
     if !token.is_empty() {
-        if !in_space && (token.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c)) || token.chars().any(is_sutonny_glyph)) {
-            out.push_str(&crate::cmd::bangla::ansi_to_unicode(&token));
-        } else {
-            out.push_str(&token);
-        }
+        flush(&token, in_space, &mut out);
     }
     out
 }
@@ -719,5 +725,42 @@ mod tests {
         let wm = doc.settings.watermark.unwrap();
         assert_eq!(wm.text, "বাংলাদেশ");
         assert_eq!(wm.font, "Kalpurush");
+    }
+
+    /// A one-paragraph document whose text is in an ordinary (Unicode) Bengali font.
+    fn unicode_doc(text: &str) -> Document {
+        let props = CharProps { font: Some("Kalpurush".into()), ..Default::default() };
+        let p = Paragraph { text: text.into(), runs: vec![Run { len: text.len(), props }], ..Default::default() };
+        Document { body: vec![std::sync::Arc::new(Block::Para(p))], ..Default::default() }
+    }
+
+    fn body_text(doc: &Document) -> String {
+        doc.body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default()
+    }
+
+    /// Opening a document never rewrites ordinary Unicode Bangla, even beside characters SutonnyMJ
+    /// also uses as glyphs (©, °, £, ½, é): set apart by spaces or next to digits they are text.
+    #[test]
+    fn normalize_bijoy_leaves_unicode_bangla_beside_symbols_alone() {
+        for text in ["© ২০২৪ বাংলাদেশ", "তাপমাত্রা ২৫°C আজ", "দাম ১০০£ মাত্র", "½ কেজি চাল", "ক্যাফে café বন্ধ"]
+        {
+            let mut doc = unicode_doc(text);
+            normalize_bijoy_fonts(&mut doc);
+            assert_eq!(body_text(&doc), text, "changed on open");
+        }
+    }
+
+    /// In Unicode text left half-converted, only the word that still holds a SutonnyMJ glyph is
+    /// repaired; the Bangla words around it stay as they are.
+    #[test]
+    fn normalize_bijoy_repairs_only_the_leftover_word() {
+        let mut doc = unicode_doc("আমি šত্ন করি");
+        normalize_bijoy_fonts(&mut doc);
+        let out = body_text(&doc);
+        let words: Vec<&str> = out.split(' ').collect();
+        assert_eq!(words.len(), 3, "{out:?}");
+        assert_eq!((words[0], words[2]), ("আমি", "করি"), "{out:?}");
+        assert_ne!(words[1], "šত্ন", "the leftover word is repaired: {out:?}");
+        assert!(!words[1].contains('š'), "{out:?}");
     }
 }
