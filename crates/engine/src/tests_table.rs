@@ -1306,3 +1306,27 @@ fn a_click_on_the_part_of_a_row_carried_to_the_next_page_lands_in_that_row() {
     let block = pos.path.0.get(3).copied().unwrap_or(0);
     assert!(block > 20, "a paragraph from the part on page 2, not the row's start: {pos:?}");
 }
+
+/// Typing in a large table relays it out quickly. Measured 2026-10-12: about 70ms a keystroke
+/// with its layout in a 1000 × 6 table (60ms when the table is fixed), against about 200ms for
+/// the first layout. The bound is generous (a shared machine); it catches a quadratic step, such
+/// as a keystroke that walks every cell of every row once per cell.
+#[test]
+fn typing_in_a_large_table_relays_it_out_in_moderate_time() {
+    let mut s = large_table(1000, 6);
+    let pages = s.layout().pages.len();
+    assert!(pages > 10, "the table runs over many pages: {pages}");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 500, 2, 0], "off": 0}}));
+    let start = std::time::Instant::now();
+    for _ in 0..10 {
+        run(&mut s, "text.insert", json!({"text": "x"}));
+        let _ = s.layout();
+    }
+    let per = start.elapsed() / 10;
+    assert!(per.as_millis() < 1500, "a keystroke with its layout took {per:?} in a 1000 × 6 table");
+    let start = std::time::Instant::now();
+    run(&mut s, "table.insertRowBelow", json!({}));
+    run(&mut s, "table.selectColumn", json!({}));
+    let _ = s.layout();
+    assert!(start.elapsed().as_millis() < 3000, "a row insert and a column selection took {:?}", start.elapsed());
+}
