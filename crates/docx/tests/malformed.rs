@@ -205,3 +205,17 @@ fn an_orphaned_vertical_merge_continuation_is_read_as_an_ordinary_cell() {
     assert!(t.rows.iter().all(|r| r.cells.iter().all(|c| c.props.vmerge == wordcraft_doc::props::VMerge::None)));
     assert!(t.rows[0].cells[0].blocks.iter().any(|b| b.as_para().is_some_and(|p| p.plain_text() == "kept")));
 }
+
+#[test]
+fn a_row_with_more_cells_than_a_table_can_have_keeps_their_text() {
+    let mut cells = String::new();
+    for i in 0..70 {
+        cells.push_str(&format!("<w:tc><w:p><w:r><w:t>c{i}</w:t></w:r></w:p></w:tc>"));
+    }
+    let xml = format!(r#"<w:document {W_NS}><w:body><w:tbl><w:tr>{cells}</w:tr></w:tbl></w:body></w:document>"#);
+    let doc = read(&doc_zip(xml.as_bytes())).unwrap();
+    let t = doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t.cols() <= wordcraft_doc::table::MAX_COLS);
+    let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains("c0") && text.contains("c62") && text.contains("c69"), "no cell's text is dropped");
+}

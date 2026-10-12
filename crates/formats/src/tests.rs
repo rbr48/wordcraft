@@ -603,3 +603,66 @@ fn bounded_scans_keep_ordinary_markdown_and_entities() {
     let t = import("html", long.as_bytes()).unwrap().unwrap().plain_text(Default::default());
     assert!(t.contains(&"a".repeat(40)), "{t}");
 }
+
+/// Every continuation cell continues a cell with the same start and span in the row above.
+fn merges_valid(t: &Table) -> bool {
+    use wordcraft_doc::props::VMerge;
+    let mut above: Vec<(usize, usize, VMerge)> = Vec::new();
+    for row in &t.rows {
+        let mut x = 0usize;
+        let mut this = Vec::new();
+        for c in &row.cells {
+            if c.props.vmerge == VMerge::Continue && !above.iter().any(|(g, sp, vm)| *g == x && *sp == c.span() && *vm != VMerge::None) {
+                return false;
+            }
+            this.push((x, c.span(), c.props.vmerge));
+            x += c.span();
+        }
+        above = this;
+    }
+    true
+}
+
+fn tables_of(d: &Document) -> Vec<&Table> {
+    d.body.iter().filter_map(|b| b.as_table()).collect()
+}
+
+#[test]
+fn an_rtf_cell_continuing_a_merge_that_never_started_shows_its_text() {
+    // The first row's only cell says it continues a vertical merge (\clvmrg) that no cell above
+    // started (\clvmgf).
+    let rtf = br"{\rtf1\ansi\trowd\clvmrg\cellx2000\cellx4000\intbl visible\cell next\cell\row\pard after\par}";
+    let d = crate::rtf::import(rtf).unwrap();
+    let ts = tables_of(&d);
+    assert_eq!(ts.len(), 1);
+    assert!(merges_valid(ts[0]));
+    assert!(d.plain_text(wordcraft_doc::StoryRef::Body).contains("visible"));
+    let first = &ts[0].rows[0].cells[0];
+    assert_eq!(first.props.vmerge, wordcraft_doc::props::VMerge::None, "the orphan is an ordinary cell, drawn with its text");
+}
+
+#[test]
+fn hostile_html_tables_import_with_valid_merges_and_no_lost_cells() {
+    let cases = [
+        r#"<table><tr><td rowspan="1000" colspan="999">a</td><td>b</td></tr><tr><td>c</td></tr></table>"#,
+        r#"<table><tr><td rowspan="-5">a</td></tr><tr><td colspan="0">b</td></tr></table>"#,
+        r#"<table><tr><td rowspan="3">a</td><td>b</td></tr></table>"#,
+        r#"<table><tr></tr><tr><td>only</td></tr></table>"#,
+        r#"<table><tr><td><table><tr><td rowspan="9">deep</td></tr></table></td></tr></table>"#,
+        r#"<table><tr><td rowspan="2">x</td><td rowspan="2">y</td></tr><tr></tr><tr><td colspan="70">z</td></tr></table>"#,
+    ];
+    for html in cases {
+        let d = crate::html::import(html);
+        for t in tables_of(&d) {
+            assert!(merges_valid(t), "{html}");
+            assert!(t.rows.iter().all(|r| !r.cells.is_empty()), "{html}");
+            assert!(t.cols() <= wordcraft_doc::table::MAX_COLS, "{html}");
+        }
+        let text = d.plain_text(wordcraft_doc::StoryRef::Body);
+        for word in ["a", "b", "c", "only", "deep", "x", "y", "z"] {
+            if html.contains(&format!(">{word}<")) {
+                assert!(text.contains(word), "`{word}` is kept from {html}");
+            }
+        }
+    }
+}
