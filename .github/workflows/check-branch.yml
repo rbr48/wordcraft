@@ -1,0 +1,45 @@
+# Fork-only: WordCraft's quality gates (`cargo xtask ci`: fmt, clippy, tests, assets, layers, wasm)
+# on any branch, on demand. Start it from the Actions tab (Run workflow) or with
+#   gh workflow run check-branch.yml -R rbr48/wordcraft -f ref=<branch>
+# It lives on this fork's default branch only, so it never travels with a pull request upstream.
+name: Check a branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or commit to check"
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ inputs.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: cargo xtask ci (${{ inputs.ref }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Linux libraries (windowing; GL and Vulkan in software for the interface tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
+            mesa-vulkan-drivers libvulkan1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ inputs.ref }}
+      - name: cargo xtask ci
+        run: cargo xtask ci
