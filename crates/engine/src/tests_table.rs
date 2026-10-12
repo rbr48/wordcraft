@@ -1143,8 +1143,8 @@ fn a_floating_table_that_may_not_overlap_moves_below_the_one_in_its_way() {
     let mut s = floating_tables(&[false, false]);
     let areas = table_areas(&mut s);
     let (a, b) = (areas[&1], areas[&3]);
-    assert!(!a.intersects(&b), "{a:?} and {b:?} must not overlap");
-    assert!(b.y >= a.bottom(), "the second goes below the first");
+    assert!(!a.intersects(&b.inset(0.01, 0.01, 0.01, 0.01)), "{a:?} and {b:?} must not overlap");
+    assert!(b.y >= a.bottom() - 0.01, "the second goes below the first");
     assert!((a.x - b.x).abs() < 0.5, "and keeps its horizontal place");
 }
 

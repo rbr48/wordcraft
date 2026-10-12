@@ -2075,12 +2075,12 @@ fn place_floating_table(pb: &mut PageBuilder, tl: &table::TableLayout, f: &Table
             _ => (pb.y, 0.0),
         };
         let x = float_table_x(pb, w, f, legacy);
-        let r = clear_of_float_tables(Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h), f, legacy, h_area.0, &pb.float_tables);
+        let mut r = clear_of_float_tables(Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h), f, legacy, h_area.0, &pb.float_tables);
         if attempt == 0 && r.bottom() > pb.bottom + 0.01 && !pb.at_top() && f.v_rel == Anchor::Paragraph {
             pb.advance(block, body_top);
             continue;
         }
-        if let Some(pg) = pb.page() {
+        let actual_h = if let Some(pg) = pb.page() {
             let mut y = r.y;
             for row in &tl.rows {
                 for it in &row.items {
@@ -2090,7 +2090,11 @@ fn place_floating_table(pb: &mut PageBuilder, tl: &table::TableLayout, f: &Table
                 }
                 y += row.height;
             }
-        }
+            y - r.y
+        } else {
+            h
+        };
+        r.h = r.h.max(actual_h);
         let area = r.inset(-dl, -dt, -dr, -db);
         pb.excl.push((area, false, ContourKind::Box));
         pb.float_tables.push(area);
