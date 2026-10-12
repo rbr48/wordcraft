@@ -56,7 +56,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
   re-implementing). Paste Special, Advanced Find, Column Selection, Style Inspector, custom table
   styles, and Draw Table and Eraser (#303) landed on 2026-10-10.
 - **UI/UX gaps:** #7, #18, #24; crop handles on the canvas (rotation handle landed, #332); table column drag on the
-  ruler (#49, #217); context menus for objects and tables; Linux title bar theming (#78).
+  ruler landed 2026-10-12 (#49, #217) and tables have a context menu; context menus for objects; Linux title bar theming (#78).
 - **File-format gaps:** #1, #2, #5, #9, #14, #19, #23, #26; embedded fonts; glossary/building blocks.
 - **Hardware gaps:** #6, #12, #28; scanner/Continuity Camera insert; KDE soft text (#140).
 - **Localization gaps:** #8, #11, #16, #17; native-speaker review of every catalog (human).
