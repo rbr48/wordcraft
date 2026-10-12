@@ -72,3 +72,17 @@ description: Comprehensive project memory, architecture guide, and operational r
   - Fixed table resize hit testing in `crates/ui-egui/src/table_resize.rs` to skip `VMerge::Continue` cells on row borders.
   - Implemented dedicated `Dialog::CellMargins` dialog with top, left, bottom, right inputs and wired it to the Table Layout ribbon button.
   - Verified all 6 CI quality gates (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`) pass cleanly.
+  - **Full Table Audit Resolution (commits b0fe7c8, 458a4ff, sort/formula commit, 947d78e)**:
+    - **B** — Added `Table::repair_vmerge()` in `crates/doc/src/table.rs`: scans grid columns, promotes orphan `Continue` cells to `None`, demotes single-row `Restart` to `None`; called at end of `insert_row`, `delete_row`, `insert_col`, `delete_col`, `merge`.
+    - **C** — `Table::merge` (vertical) now trims the leading empty paragraph from the restart cell after moving blocks in.
+    - **D** — `Table::split_cell` no longer calls `insert_col` (which widened the table). When `span >= n` it re-spans in place; when `span < n` it subdivides the last grid column in-width, preserving `total_width`.
+    - **E** — (noted limitation) `table.toText`/`table.fromText` preserve plain text only; documented in audit.
+    - **F** — `formula` command: unknown functions now return `Err(CmdError::Failed("unknown formula function `X`"))`. `MAX`/`MIN` empty-set returns 0; `PRODUCT` empty-set returns 1. `parse_num` strips `৳`, `¥`, `%` in addition to `$`, `€`, `£`.
+    - **G/S** — `sort_table` uses a strict 3-tier total-order comparator: (1) both numeric via `f64::total_cmp`, (2) numeric before text, (3) case-insensitive lexicographic. Eliminates non-total-order panic risk.
+    - **H** — Backspace nested-table navigation in `crates/engine/src/cmd/text.rs`: path comparison changed from `q.0.first() == prev_path.0.first()` to `q.0.starts_with(&prev_path.0)` so caret stays in the parent cell, not the outer table.
+    - **K** — `table.repeatHeader` now enforces contiguous headers from row 0: toggling ON marks rows 0..=r as header; toggling OFF clears headers from r onward.
+    - **M** — `del_col` collects all distinct grid columns from `selected_cells`, deletes them in descending order; falls back to caret column when no multi-cell selection.
+    - **O** — `table.distributeRows` now averages total row height (`total / count`) instead of taking the max height.
+    - **S** — `split_table` has a bounds guard (`if r <= t.rows.len()`) preventing panic on out-of-range row index.
+    - Regression tests added for: `vmerge_repair_removes_orphan_continues`, `split_cell_does_not_widen_table`, `distribute_rows_averages_height`, `table_sort_total_order_and_currency`, `table_formula_unknown_function_errors`, `del_col_multi_column_selection`, `backspace_after_nested_table_scoped_to_parent_cell`.
+
