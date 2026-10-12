@@ -17,8 +17,11 @@ use crate::CmdError;
 pub const MAX_FORMULA: usize = 512;
 /// The longest numeric picture (`\#` switch) used, in characters.
 const MAX_PICTURE: usize = 64;
-/// The deepest nesting of parentheses, function calls and unary signs.
+/// The deepest nesting of parentheses, function calls, unary signs and `^` chains.
 const MAX_DEPTH: usize = 32;
+/// The most cells one evaluation reads; past it the formula is too complex to work out, so a
+/// hostile document full of huge ranges can't make Update Field hang.
+pub const MAX_CELL_VISITS: usize = 100_000;
 
 /// Evaluate `formula` (with or without its leading `=`) for the cell in row `r`, cell index `c`.
 pub fn evaluate(t: &Table, r: usize, c: usize, formula: &str) -> Result<f64, CmdError> {
@@ -32,7 +35,7 @@ pub fn evaluate(t: &Table, r: usize, c: usize, formula: &str) -> Result<f64, Cmd
     if parser.pos != parser.toks.len() {
         return Err(syntax("unexpected text after the formula".into()));
     }
-    let here = Here { t, r, c, g: t.grid_col(r, c) };
+    let here = Here { t, r, c, g: t.grid_col(r, c), visits: std::cell::Cell::new(0) };
     match eval(&expr, &here)? {
         Val::Num(x) => finite(x),
         Val::List(_) => Err(syntax("a range or ABOVE/LEFT/RIGHT/BELOW needs a function, such as SUM".into())),
@@ -327,7 +330,10 @@ impl Parser {
     fn power(&mut self) -> Result<Expr, CmdError> {
         let base = self.unary()?;
         if self.eat_op('^') {
+            // `^` is right-associative, so each one in a chain nests one level deeper.
+            self.enter()?;
             let exp = self.power()?;
+            self.leave();
             return Ok(Expr::Bin('^', Box::new(base), Box::new(exp)));
         }
         Ok(base)
@@ -341,7 +347,10 @@ impl Parser {
             return Ok(Expr::Neg(Box::new(inner)));
         }
         if self.eat_op('+') {
-            return self.unary();
+            self.enter()?;
+            let inner = self.unary()?;
+            self.leave();
+            return Ok(inner);
         }
         self.primary()
     }
@@ -429,6 +438,23 @@ struct Here<'a> {
     r: usize,
     c: usize,
     g: usize,
+    /// Cells read so far in this evaluation (see [`MAX_CELL_VISITS`]).
+    visits: std::cell::Cell<usize>,
+}
+
+impl Here<'_> {
+    /// Count `n` more cells read, failing once the evaluation has read too many.
+    fn visit(&self, n: usize) -> Result<(), CmdError> {
+        let total = self.visits.get().saturating_add(n);
+        self.visits.set(total);
+        if total > MAX_CELL_VISITS { Err(CmdError::Failed("Formula too complex".into())) } else { Ok(()) }
+    }
+
+    /// The number in the cell covering grid column `g` of row `r`, counted against the budget.
+    fn number_at(&self, r: usize, g: usize) -> Result<Option<f64>, CmdError> {
+        self.visit(1)?;
+        Ok(number_at(self.t, r, g))
+    }
 }
 
 enum Val {
@@ -446,19 +472,21 @@ fn eval(e: &Expr, here: &Here) -> Result<Val, CmdError> {
     Ok(match e {
         Expr::Num(x) => Val::Num(*x),
         Expr::Cell(row, col, name) => {
-            let x = number_at(here.t, *row, *col).ok_or_else(|| CmdError::Failed(format!("{name} doesn't hold a number")))?;
+            let x = here.number_at(*row, *col)?.ok_or_else(|| CmdError::Failed(format!("{name} doesn't hold a number")))?;
             Val::Num(x)
         }
         Expr::Range(r0, g0, r1, g1) => {
+            // Only the part of the range inside the table holds cells.
             let mut v = Vec::new();
-            for row in *r0..=*r1 {
-                for g in *g0..=*g1 {
-                    v.extend(number_at(here.t, row, g));
+            let (r_end, g_end) = (here.t.rows.len().min(r1.saturating_add(1)), here.t.cols().min(g1.saturating_add(1)));
+            for row in *r0..r_end {
+                for g in *g0..g_end {
+                    v.extend(here.number_at(row, g)?);
                 }
             }
             Val::List(v)
         }
-        Expr::Side(side) => Val::List(side_numbers(here, *side)),
+        Expr::Side(side) => Val::List(side_numbers(here, *side)?),
         Expr::Neg(inner) => Val::Num(-scalar(eval(inner, here)?)?),
         Expr::Bin(op, a, b) => {
             let (x, y) = (scalar(eval(a, here)?)?, scalar(eval(b, here)?)?);
@@ -509,7 +537,7 @@ fn scalar(v: Val) -> Result<f64, CmdError> {
 
 /// The first run of numbers next to the formula's cell on one side (see the module note): the
 /// cells are skipped while they hold no number, then summed while they do.
-fn side_numbers(here: &Here, side: Side) -> Vec<f64> {
+fn side_numbers(here: &Here, side: Side) -> Result<Vec<f64>, CmdError> {
     let mut out = Vec::new();
     let mut started = false;
     let mut take = |value: Option<f64>| -> bool {
@@ -525,20 +553,21 @@ fn side_numbers(here: &Here, side: Side) -> Vec<f64> {
     match side {
         Side::Above => {
             for row in (0..here.r).rev() {
-                if !take(number_at(here.t, row, here.g)) {
+                if !take(here.number_at(row, here.g)?) {
                     break;
                 }
             }
         }
         Side::Below => {
             for row in (here.r + 1)..here.t.rows.len() {
-                if !take(number_at(here.t, row, here.g)) {
+                if !take(here.number_at(row, here.g)?) {
                     break;
                 }
             }
         }
         Side::Left | Side::Right => {
-            let Some(row) = here.t.rows.get(here.r) else { return out };
+            let Some(row) = here.t.rows.get(here.r) else { return Ok(out) };
+            here.visit(row.cells.len())?;
             let cells: Vec<Option<f64>> = row.cells.iter().map(cell_number).collect();
             let order: Vec<usize> = if side == Side::Left { (0..here.c).rev().collect() } else { ((here.c + 1)..cells.len()).collect() };
             for ci in order {
@@ -548,7 +577,7 @@ fn side_numbers(here: &Here, side: Side) -> Vec<f64> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Gather a function's arguments: numbers and lists (ranges and keywords) become one list.
@@ -805,5 +834,39 @@ mod tests {
         assert_eq!(shown("=A1"), "1234.50");
         assert_eq!(shown("=A1 \\# 0"), "1235", "a bare picture word");
         assert_eq!(shown("=A1 \\# \"\""), "1234.50", "an empty picture is none");
+    }
+
+    #[test]
+    fn a_huge_range_over_a_small_table_reads_only_the_table() {
+        let t = table(&[&["1", "2", "3"], &["4", "5", "6"], &["", "", ""]]);
+        // Forty ranges reaching to the last possible row and column would be about 80 million
+        // grid positions; clamped to the table they are 6 numbers each, well inside the budget.
+        let f = format!("=SUM({})", ["A1:BK32767"; 40].join(","));
+        assert!(f.len() <= MAX_FORMULA);
+        assert_eq!(ev(&t, 2, 0, &f).unwrap(), 21.0 * 40.0);
+    }
+
+    #[test]
+    fn an_evaluation_past_the_cell_budget_is_an_error() {
+        let mut t = Table::new(1000, 10, 468.0);
+        t.rows[0].cells[0] = Cell::with_text("1");
+        // Each range reads 10,000 cells, so eleven of them go past the 100,000-cell budget.
+        let ok = format!("=SUM({})", ["A1:J1000"; 10].join(","));
+        assert_eq!(ev(&t, 0, 1, &ok).unwrap(), 10.0);
+        let too_much = format!("=SUM({})", ["A1:J1000"; 11].join(","));
+        let err = ev(&t, 0, 1, &too_much).unwrap_err();
+        assert_eq!(err, CmdError::Failed("Formula too complex".into()));
+        assert_eq!(evaluate_field(&t, 0, 1, &too_much).unwrap_err().to_string(), "Formula too complex");
+    }
+
+    #[test]
+    fn deep_power_and_sign_chains_are_rejected() {
+        let t = table(&[&["1"]]);
+        assert_eq!(ev(&t, 0, 0, "=2^3^2").unwrap(), 512.0);
+        assert_eq!(ev(&t, 0, 0, "=-+-+2").unwrap(), 2.0);
+        for f in [format!("={}1", "1^".repeat(40)), format!("={}1", "+".repeat(40)), format!("={}1", "-+".repeat(20))] {
+            let err = ev(&t, 0, 0, &f).unwrap_err();
+            assert!(err.to_string().contains("nested too deeply"), "{f}: {err}");
+        }
     }
 }
