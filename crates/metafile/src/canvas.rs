@@ -8,6 +8,7 @@ use crate::{MAX_BYTES, MAX_ITEMS, MAX_OBJECTS, MAX_PATH_OPS, MAX_STACK};
 
 pub(crate) const MM_TEXT: u32 = 1;
 const MM_ISOTROPIC: u32 = 7;
+const MM_ANISOTROPIC: u32 = 8;
 const STOCK: u32 = 0x8000_0000;
 pub(crate) const PS_NULL: u32 = 5;
 /// Pen style bits; the rest of the style word holds end-cap, join and type flags.
@@ -15,6 +16,8 @@ pub(crate) const PS_STYLE_MASK: u32 = 0x0F;
 const BS_SOLID: u32 = 0;
 pub(crate) const BS_NULL: u32 = 1;
 const WINDING: u32 = 2;
+/// SETROP2 mix mode that leaves the destination alone: outlines and fills draw nothing.
+const R2_NOP: u32 = 11;
 const PATCOPY: u32 = 0x00F0_0021;
 const BLACKNESS: u32 = 0x0000_0042;
 const WHITENESS: u32 = 0x00FF_0062;
@@ -135,6 +138,19 @@ impl Mapping {
         det * (sx.abs() + sy.abs()) / 2.0
     }
 
+    /// True when the window-to-viewport extents set the scale (the isotropic and anisotropic modes).
+    pub fn uses_extents(&self) -> bool {
+        matches!(self.mode, MM_ISOTROPIC | MM_ANISOTROPIC)
+    }
+
+    pub fn window_ext(&self) -> P {
+        self.we
+    }
+
+    pub fn viewport_ext(&self) -> P {
+        self.ve
+    }
+
     /// The window in device units as `[x, y, w, h]` with positive extents, used as the picture frame
     /// of a plain WMF.
     pub fn window_rect(&self) -> [f64; 4] {
@@ -160,6 +176,7 @@ struct Saved {
     pen: Pen,
     brush: Brush,
     even_odd: bool,
+    nop: bool,
 }
 
 pub(crate) struct Canvas {
@@ -167,6 +184,8 @@ pub(crate) struct Canvas {
     pub map: Mapping,
     /// True once SETWINDOWEXT was seen, so a plain WMF has a frame to use.
     pub window_set: bool,
+    /// True once the file set the viewport extent itself (not the player, see [`Canvas::play_into`]).
+    pub viewport_set: bool,
     saved: Vec<Saved>,
     /// Bytes held by the items so far (path ops and pixels), capped at [`MAX_BYTES`].
     used: usize,
@@ -174,6 +193,8 @@ pub(crate) struct Canvas {
     pen: Pen,
     brush: Brush,
     even_odd: bool,
+    /// The mix mode is R2_NOP: shapes draw nothing.
+    nop: bool,
     pos: P,
     in_path: bool,
     path: Vec<Op>,
@@ -186,12 +207,14 @@ impl Canvas {
             items: Vec::new(),
             map: Mapping::identity(),
             window_set: false,
+            viewport_set: false,
             saved: Vec::new(),
             used: 0,
             objects: Vec::new(),
             pen: Pen { style: 0, width: 0.0, color: [0, 0, 0, 255] },
             brush: Brush { style: BS_SOLID, color: [255, 255, 255, 255] },
             even_odd: true,
+            nop: false,
             pos: (0.0, 0.0),
             in_path: false,
             path: Vec::new(),
@@ -232,6 +255,22 @@ impl Canvas {
 
     pub fn set_viewport_ext(&mut self, e: P) {
         self.map.ve = e;
+        self.viewport_set = true;
+    }
+
+    /// Sets up the mapping the way a player does before it plays a WMF into a target: anisotropic,
+    /// `window` (`[x, y, w, h]` in logical units) onto a viewport of `size` at the origin. The file's
+    /// own window records then replace the window; the viewport stays unless the file sets one.
+    /// Without a window (a plain WMF) only the viewport extent is set: the map mode and viewport
+    /// origin stay the file's.
+    pub fn play_into(&mut self, window: Option<[f64; 4]>, size: P) {
+        if let Some([x, y, w, h]) = window {
+            self.map.mode = MM_ANISOTROPIC;
+            self.map.wo = (x, y);
+            self.map.we = (w, h);
+            self.map.vo = (0.0, 0.0);
+        }
+        self.map.ve = size;
     }
 
     pub fn set_map_mode(&mut self, mode: u32) {
@@ -247,6 +286,11 @@ impl Canvas {
 
     pub fn set_polyfill(&mut self, mode: u32) {
         self.even_odd = mode != WINDING;
+    }
+
+    /// SETROP2: only R2_NOP changes what is drawn (nothing); the other mix modes draw as copy.
+    pub fn set_rop2(&mut self, mode: u32) {
+        self.nop = mode == R2_NOP;
     }
 
     /// EMF SETWORLDTRANSFORM (`mode` 4) and MODIFYWORLDTRANSFORM (1 identity, 2 left, 3 right, 4 set).
@@ -265,7 +309,7 @@ impl Canvas {
     /// could no longer match the file.
     pub fn save_dc(&mut self) {
         if self.saved.len() < MAX_STACK {
-            self.saved.push(Saved { map: self.map, pen: self.pen, brush: self.brush, even_odd: self.even_odd });
+            self.saved.push(Saved { map: self.map, pen: self.pen, brush: self.brush, even_odd: self.even_odd, nop: self.nop });
         } else {
             self.full = true;
         }
@@ -281,6 +325,7 @@ impl Canvas {
         self.pen = s.pen;
         self.brush = s.brush;
         self.even_odd = s.even_odd;
+        self.nop = s.nop;
     }
 
     /// Stores an object in `slot` (EMF index), or in the first free slot (WMF handle table).
@@ -381,6 +426,9 @@ impl Canvas {
         if self.in_path {
             return self.push_path_ops(dev);
         }
+        if self.nop {
+            return;
+        }
         let fill = if fill { self.fill_color() } else { None };
         let stroke = if stroke { self.stroke_pen() } else { None };
         if (fill.is_none() && stroke.is_none()) || dev.len() < 2 {
@@ -460,6 +508,9 @@ impl Canvas {
     /// FILLPATH, STROKEPATH and STROKEANDFILLPATH: paints the bracketed path and empties it.
     pub fn paint_path(&mut self, fill: bool, stroke: bool) {
         let ops = std::mem::take(&mut self.path);
+        if self.nop {
+            return;
+        }
         let fill = if fill { self.fill_color() } else { None };
         let stroke = if stroke { self.stroke_pen() } else { None };
         if ops.len() < 2 || (fill.is_none() && stroke.is_none()) {
