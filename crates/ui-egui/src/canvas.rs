@@ -580,8 +580,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 None => vec![app.session.sel.ordered()],
             };
             let mut first: Option<Rect> = None;
+            // Only a table cell range shades whole cells; text inside a cell shades its text.
+            let cell_range = app.session.is_cell_range();
             for (a, b) in &pieces {
-                let cell_rects: Vec<(usize, wordcraft_geom::Rect)> = if let Some((tp, r, c)) = a.path.cell() {
+                let cell_rects: Vec<(usize, wordcraft_geom::Rect)> = if let Some((tp, r, c)) = a.path.cell().filter(|_| cell_range) {
                     let mut crs = Vec::new();
                     for (pi, page) in layout.pages.iter().enumerate() {
                         for it in &page.items {

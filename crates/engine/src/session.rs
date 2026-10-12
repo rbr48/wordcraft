@@ -42,6 +42,9 @@ pub struct ColumnBlock {
     pub focus_x: f32,
     /// One `(start, end)` per line, in document order, each inside one paragraph.
     pub segments: Vec<(Pos, Pos)>,
+    /// True for a table cell range: its cells are shaded whole. A block of text inside a cell
+    /// is shaded only where its text is, like any other selection.
+    pub cells: bool,
 }
 
 /// View state that commands can change (ribbon View tab, status bar).
@@ -410,6 +413,11 @@ impl Session {
     /// moved since the block was made).
     pub fn column_segments(&self) -> Option<&[(Pos, Pos)]> {
         self.column.as_ref().filter(|c| c.sel == self.sel).map(|c| c.segments.as_slice())
+    }
+
+    /// Whether the current selection is a table cell range (its cells are shaded whole).
+    pub fn is_cell_range(&self) -> bool {
+        self.column.as_ref().is_some_and(|c| c.cells && c.sel == self.sel)
     }
 
     /// Document revision (bumped by every change).
