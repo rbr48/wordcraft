@@ -199,7 +199,10 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut rows: Vec<Row> = Vec::new();
     let mut cells: Vec<Cell> = Vec::new();
     let mut cell: Blocks = Vec::new();
-    let mut grid: Vec<f32> = Vec::new();
+    // Every column grid the table's rows carry. Rows of one table can carry different
+    // grids (a row may describe a grid with fewer columns than the table has), so the grid
+    // is chosen by the table's column count, not by whichever row came first.
+    let mut grids: Vec<Vec<f32>> = Vec::new();
     let mut props = TableProps::default();
     let mut open = false;
     let mut depth_seen = 0u32;
@@ -255,20 +258,38 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             cells,
         }
     }
-    fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
+    fn flush_table(
+        out: &mut Blocks,
+        rows: &mut Vec<Row>,
+        cells: &mut Vec<Cell>,
+        cell: &mut Blocks,
+        grids: &[Vec<f32>],
+        props: &TableProps,
+        nested: bool,
+    ) {
         if !cells.is_empty() || !cell.is_empty() {
             flush_cell(cells, cell);
             // A stray trailing row (no TTP of its own): size its cells from the grid.
-            let mut stray = build_row(std::mem::take(cells), &RowInfo::default());
-            for (i, c) in stray.cells.iter_mut().enumerate() {
-                if c.props.width.is_none() && c.props.span == 1 {
-                    c.props.width = grid.get(i).copied();
-                }
-            }
+            let stray = build_row(std::mem::take(cells), &RowInfo::default());
             rows.push(stray);
         }
         if rows.is_empty() {
             return;
+        }
+        let cols = Table { props: props.clone(), grid: Vec::new(), rows: rows.clone() }.cols();
+        let grid = choose_grid(grids, cols);
+        // A cell without its own width takes the grid columns it covers (a merged cell covers
+        // its span). Cells with a width from their row's properties keep it.
+        for r in rows.iter_mut() {
+            let mut col = 0usize;
+            for c in r.cells.iter_mut() {
+                let span = (c.props.span as usize).max(1);
+                if c.props.width.is_none() && col < grid.len() {
+                    let end = (col + span).min(grid.len());
+                    c.props.width = Some(grid[col..end].iter().sum());
+                }
+                col += span;
+            }
         }
         if nested {
             // Unclosed or nested deeper than we model: keep the text, drop the table shape.
@@ -278,7 +299,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 }
             }
         } else {
-            let mut t = Table { props: props.clone(), grid: grid.to_vec(), rows: std::mem::take(rows) };
+            let mut t = Table { props: props.clone(), grid, rows: std::mem::take(rows) };
             // A continuation with no restart above it becomes an ordinary cell (its text shown).
             t.repair_orphan_continues();
             out.push(Arc::new(Block::Table(t)));
@@ -291,7 +312,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         let is_table = info.in_table || info.ttp || info.cell_mark;
         if !is_table {
             if open {
-                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grids, &props, depth_seen > 1);
+                grids.clear();
                 open = false;
                 depth_seen = 0;
             }
@@ -302,8 +324,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             open = true;
         }
         depth_seen = depth_seen.max(info.depth);
-        if !info.grid.is_empty() && grid.is_empty() {
-            grid = info.grid.clone();
+        if !info.grid.is_empty() {
+            grids.push(info.grid.clone());
         }
         if info.borders.is_some() && props.borders.is_none() {
             props.borders = info.borders;
@@ -315,10 +337,15 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             props.indent = info.indent;
         }
         if info.cell_mark {
-            if !p.para.text.is_empty() {
-                cell.push(para_block(p.para));
+            // An empty row-end mark (Word's end-of-row mark: no text, sprmPTtp) closes the row
+            // without a cell of its own; a cell end with text, or a row end with text, is a cell.
+            let row_end_only = info.ttp && p.para.text.is_empty();
+            if !row_end_only || !cell.is_empty() {
+                if !p.para.text.is_empty() {
+                    cell.push(para_block(p.para));
+                }
+                flush_cell(&mut cells, &mut cell);
             }
-            flush_cell(&mut cells, &mut cell);
             if info.ttp {
                 let row = build_row(std::mem::take(&mut cells), &info);
                 rows.push(row);
@@ -328,9 +355,16 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         }
     }
     if open {
-        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grids, &props, depth_seen > 1);
+        grids.clear();
     }
     out
+}
+
+/// The grid for a table with `cols` columns: the shortest one that covers every column (an exact
+/// match when a row has one), else the longest one there is. Empty when the table has none.
+fn choose_grid(grids: &[Vec<f32>], cols: usize) -> Vec<f32> {
+    grids.iter().filter(|g| g.len() >= cols).min_by_key(|g| g.len()).or_else(|| grids.iter().max_by_key(|g| g.len())).cloned().unwrap_or_default()
 }
 
 /// Column widths (points) from a `sprmTDefTable` operand: cb u16, itcMac u8, then itcMac+1

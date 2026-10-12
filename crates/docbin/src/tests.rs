@@ -945,6 +945,79 @@ fn table_assembled_from_marks() {
     assert_eq!(last.text, "tail");
 }
 
+/// Rows of one table can carry different column grids: the table takes the grid that covers its
+/// columns, not the first one seen. Taking the 2-column grid for these 3-column rows gave a
+/// real appraisal form tables that were 40% wider than the page.
+#[test]
+fn table_takes_the_grid_that_covers_its_columns() {
+    let two = t_def_table(&[0, 1440, 2880]);
+    let three = t_def_table(&[0, 1440, 2880, 4320]);
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let row_end = |def: &Vec<u8>| [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), def.clone()].concat();
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}e\u{7}tail\r";
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),
+            (2, 0, row_end(&two)),
+            (4, 0, in_tbl.clone()),
+            (6, 0, in_tbl.clone()),
+            (8, 0, row_end(&three)),
+            (10, 0, Vec::new()),
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.cols(), 3);
+    assert_eq!(tbl.grid, vec![72.0, 72.0, 72.0], "the 3-column grid, not the first row's 2-column one");
+}
+
+/// Word ends a row with an empty end-of-row mark (no text, sprmPTtp), after the row's cell
+/// ends. That mark closes the row; it is not a cell, so a row has exactly its cells (the
+/// reader used to add an empty cell per row, one more than the table's grid covers).
+#[test]
+fn empty_row_end_marks_close_rows_without_a_cell() {
+    let def = t_def_table(&[0, 2880, 5760]);
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let row_end = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), def.clone()].concat();
+    let text = "a\u{7}b\u{7}\u{7}c\u{7}d\u{7}\u{7}tail\r";
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),
+            (2, 0, in_tbl.clone()),
+            (4, 0, row_end.clone()),
+            (5, 0, in_tbl.clone()),
+            (7, 0, in_tbl),
+            (9, 0, row_end),
+            (11, 0, Vec::new()),
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.iter().map(|r| r.cells.len()).collect::<Vec<_>>(), vec![2, 2]);
+    assert_eq!(tbl.cols(), 2);
+    assert_eq!(doc.body.last().and_then(|b| b.as_para()).map(|p| p.text.as_str()), Some("tail"));
+}
+
 /// Word stores a row end's grpprl in the Data stream when it is too big for the FKP
 /// (`sprmPHugePapx`). Without following it the row never ends: every following row ran into
 /// one 46-cell row in a real appraisal form, and its 7 pages became 19.
