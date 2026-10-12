@@ -21,7 +21,9 @@ Citations (each runs one of the commands below).
 
 They run in the app (and through the control channel and MCP bridged to the app). A command
 returns at once with `{"started": …}`; Zotero then works in its own window and WordCraft answers
-it in the background. All changes from one command are one undo step.
+it in the background. All changes from one command are one undo step. If New or Open replaces
+the document while a command is running, Zotero's remaining calls for it get an error and the
+new document is left as it is.
 
 From a terminal, against a file:
 
