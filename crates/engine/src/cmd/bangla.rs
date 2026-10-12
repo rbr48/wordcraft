@@ -64,14 +64,22 @@ impl BanglaMode {
 
 /// Transliterates English phonetic text to Bengali Unicode.
 pub fn phonetic_transliterate(input: &str) -> String {
-    let mut out = String::with_capacity(input.len().saturating_mul(2));
+    let preprocessed = input
+        .replace("du:kho", "দুঃখ")
+        .replace("du:kh", "দুঃখ")
+        .replace("du:khi", "দুঃখী")
+        .replace("dukkhi", "দুঃখী")
+        .replace("puno:", "পুনঃ")
+        .replace("onto:", "অন্তঃ");
+
+    let mut out = String::with_capacity(preprocessed.len().saturating_mul(2));
     let mut words = Vec::new();
     let mut current_word = String::new();
     let mut is_alpha = false;
 
     // Split text into tokens (alphabetic word tokens vs whitespace/punctuation)
-    for ch in input.chars() {
-        let alpha = ch.is_ascii_alphabetic() || ch == ':' || ch == '\'';
+    for ch in preprocessed.chars() {
+        let alpha = ch.is_ascii_alphabetic() || ch == '\'' || ch == '^' || ch == '`';
         if alpha == is_alpha {
             current_word.push(ch);
         } else {
@@ -104,7 +112,15 @@ pub fn phonetic_transliterate(input: &str) -> String {
                     }
                     '$' => out.push('৳'),
                     '|' => out.push('।'),
-                    ':' => out.push('ঃ'),
+                    ':' => out.push(':'), // Literal colon
+                    '.' => {
+                        let prev_is_digit = out.chars().next_back().is_some_and(|c| ('০'..='৯').contains(&c) || c.is_ascii_digit());
+                        if prev_is_digit {
+                            out.push('.');
+                        } else {
+                            out.push('।');
+                        }
+                    }
                     _ => out.push(ch),
                 }
             }
@@ -117,26 +133,18 @@ pub fn phonetic_transliterate(input: &str) -> String {
 /// Transliterates a single alphabetic word phonetically.
 fn phonetic_word(word: &str) -> String {
     let lower = word.to_ascii_lowercase();
+    // 1. Exact match in full vocabulary database
+    if let Some(&(_, val)) = BANGLA_VOCAB.iter().find(|&&(k, _)| k == lower) {
+        return val.to_string();
+    }
     // Common word overrides for frictionless typing
     match lower.as_str() {
-        "ami" => return "আমি".into(),
-        "amra" => return "আমরা".into(),
-        "amader" => return "আমাদের".into(),
-        "amar" => return "আমার".into(),
-        "tumi" => return "তুমি".into(),
-        "tomra" => return "তোমরা".into(),
-        "tomader" => return "তোমাদের".into(),
-        "tomar" => return "তোমার".into(),
-        "apni" => return "আপনি".into(),
-        "apnader" => return "আপনাদের".into(),
-        "apnar" => return "আপনার".into(),
-        "bangla" => return "বাংলা".into(),
-        "bangladesh" => return "বাংলাদেশ".into(),
-        "dhaka" => return "ঢাকা".into(),
         "sonar" => return "সোনার".into(),
         "shonar" => return "সোনার".into(),
         "du:kh" | "du:kho" | "dukho" => return "দুঃখ".into(),
         "du:khi" | "dukkhi" => return "দুঃখী".into(),
+        "ut`sob" | "utsob" => return "উৎসব".into(),
+        "hot`hat" | "hothat" => return "হঠাৎ".into(),
         _ => {}
     }
 
@@ -145,6 +153,7 @@ fn phonetic_word(word: &str) -> String {
     let len = chars.len();
     let mut i = 0;
     let mut last_was_consonant = false;
+    let mut has_chandrabindu = false;
 
     while i < len {
         let ch0 = chars[i];
@@ -154,7 +163,12 @@ fn phonetic_word(word: &str) -> String {
             i += 1;
             continue;
         }
-        if ch0 == '\'' {
+        if ch0 == '^' {
+            has_chandrabindu = true;
+            i += 1;
+            continue;
+        }
+        if ch0 == '\'' || ch0 == '`' {
             // Avro syllable separator (resets consonant context, suppressed in output)
             last_was_consonant = false;
             i += 1;
@@ -191,6 +205,15 @@ fn phonetic_word(word: &str) -> String {
                 last_was_consonant = true;
                 i += 3;
                 continue;
+            } else if lower_trio == "rri" {
+                if last_was_consonant {
+                    res.push('ৃ');
+                } else {
+                    res.push('ঋ');
+                }
+                last_was_consonant = false;
+                i += 3;
+                continue;
             }
         }
 
@@ -217,6 +240,10 @@ fn phonetic_word(word: &str) -> String {
                 } else {
                     res.push(ind);
                 }
+                if has_chandrabindu {
+                    res.push('ঁ');
+                    has_chandrabindu = false;
+                }
                 last_was_consonant = false;
                 i += 2;
                 continue;
@@ -241,6 +268,7 @@ fn phonetic_word(word: &str) -> String {
                 ('s', 'h') | ('S', 'h') => Some("শ"),
                 ('s', 's') => Some("স"),
                 ('R', 'h') => Some("ঢ়"),
+                ('t', '`') | ('T', '`') => Some("ৎ"),
                 _ => None,
             };
             if let Some(bn) = con_match {
@@ -248,7 +276,7 @@ fn phonetic_word(word: &str) -> String {
                     res.push('্');
                 }
                 res.push_str(bn);
-                last_was_consonant = true;
+                last_was_consonant = bn != "ৎ" && bn != "ং";
                 i += 2;
                 continue;
             }
@@ -293,6 +321,10 @@ fn phonetic_word(word: &str) -> String {
                 }
             } else {
                 res.push(ind);
+            }
+            if has_chandrabindu {
+                res.push('ঁ');
+                has_chandrabindu = false;
             }
             last_was_consonant = false;
             i += 1;
@@ -348,6 +380,10 @@ fn phonetic_word(word: &str) -> String {
         };
 
         if !bn_c.is_empty() {
+            if has_chandrabindu {
+                res.push('ঁ');
+                has_chandrabindu = false;
+            }
             if last_was_consonant && bn_c != "্য" && bn_c != "্ব" {
                 // Join consecutive consonants with virama (্)
                 res.push('্');
@@ -355,11 +391,19 @@ fn phonetic_word(word: &str) -> String {
             res.push_str(bn_c);
             last_was_consonant = true;
         } else {
+            if has_chandrabindu {
+                res.push('ঁ');
+                has_chandrabindu = false;
+            }
             res.push(c);
             last_was_consonant = false;
         }
 
         i += 1;
+    }
+
+    if has_chandrabindu {
+        res.push('ঁ');
     }
 
     res
@@ -419,7 +463,7 @@ pub fn jatiya_key(ch: char) -> Option<&'static str> {
         'S' => Some("ূ"),  // uu-kar
         'D' => Some("ী"), // ee-kar
         'F' => Some("অ"), // Dependent vowel A
-        'G' => Some("জ্ঞ"),
+        'G' => Some("।"), // Dari (Shift+g)
         'H' => Some("ভ"),
         'J' => Some("খ"),
         'K' => Some("থ"),
@@ -445,12 +489,12 @@ pub fn jatiya_key(ch: char) -> Option<&'static str> {
         '9' => Some("৯"),
 
         // Symbols
-        ':' => Some("ঃ"),
+        ':' => Some(":"),
         ';' => Some(";"),
         '.' => Some("।"),
         '$' => Some("৳"),
         '&' | '^' => Some("ঁ"),
-        '|' => Some("।"),
+        '|' => Some("ঃ"), // Bisarga (Shift of \ / ৎ)
         '\\' => Some("ৎ"),
         '~' => Some("ঁ"),
 
@@ -500,11 +544,11 @@ pub fn bijoy_ansi_key(ch: char) -> Option<&'static str> {
         'I' => Some("T"),  // ঞ
         'O' => Some("N"),  // ঘ
         'P' => Some("p"),  // ঢ়
-        'A' => Some("Av"), // আ
+        'A' => Some("©"),  // Reph (Shift+a in ANSI)
         'S' => Some("~"),  // ূ
         'D' => Some("x"),  // ী
         'F' => Some("A"),  // অ
-        'G' => Some("Á"),  // জ্ঞ
+        'G' => Some("।"),  // । (Dari in Bijoy/SutonnyMJ, Shift+g)
         'H' => Some("f"),  // ভ
         'J' => Some("L"),  // খ
         'K' => Some("_"),  // থ
@@ -530,12 +574,12 @@ pub fn bijoy_ansi_key(ch: char) -> Option<&'static str> {
         '9' => Some("9"),
 
         // Symbols
-        ':' => Some("t"), // ঃ
+        ':' => Some(":"), // Literal colon
         ';' => Some(";"),
         '.' => Some("."), // । (SutonnyMJ '.' renders as Bengali Dari)
         '$' => Some("৳"),
         '&' | '^' => Some("u"), // ঁ
-        '|' => Some("."),       // । (Dari)
+        '|' => Some("t"),       // ঃ (Bisarga in SutonnyMJ, Shift of \ / r / ৎ)
         '\\' => Some("r"),      // ৎ
         '~' => Some("u"),       // ঁ
 
@@ -673,7 +717,7 @@ pub fn find_bijoy_conjunct(c1: char, c2: char) -> Option<&'static str> {
         ('ম', 'ম') => Some("¤§"),  // ম্ম
         ('ম', 'ল') => Some("¤ø"),  // ম্ল
         ('ল', 'ক') => Some("é"),   // ল্ক
-        ('ল', 'গ') => Some("ë"),   // ল্গ
+        ('ল', 'গ') => Some("î"),   // ল্গ
         ('ল', 'ট') => Some("ë"),   // ল্ট
         ('ল', 'ড') => Some("ì"),   // ল্ড
         ('ল', 'প') => Some("í"),   // ল্প
@@ -713,6 +757,21 @@ pub fn find_bijoy_conjunct(c1: char, c2: char) -> Option<&'static str> {
         ('হ', 'ম') => Some("n&g"), // হ্ম
         ('হ', 'ল') => Some("n&j"), // হ্ল
         ('হ', 'য') => Some("n¨"),  // হ্য
+        ('হ', 'ঋ') => Some("ü"),   // হৃ
+
+        // Ra-fala conjuncts
+        ('ক', 'র') => Some("µ"),  // ক্র
+        ('গ', 'র') => Some("MÖ"), // গ্র
+        ('ত', 'র') => Some("Î"),  // ত্র
+        ('ধ', 'র') => Some("aÖ"), // ধ্র
+        ('প', 'র') => Some("cÖ"), // প্র
+        ('ব', 'র') => Some("eª"), // ব্র
+        ('ভ', 'র') => Some("å"),  // ভ্র
+        ('ম', 'র') => Some("gÖ"), // ম্র
+        ('শ', 'র') => Some("kÖ"), // শ্র
+        ('ষ', 'র') => Some("lÖ"), // ষ্র
+        ('স', 'র') => Some("mÖ"), // স্র
+        ('হ', 'র') => Some("nÖ"), // হ্র
         _ => None,
     }
 }
@@ -787,14 +846,33 @@ pub fn unicode_to_ansi(text: &str) -> String {
         ("স্ম", "¯§"),
         ("শ্চ", "ð"),
         ("ল্প", "í"),
+        ("ল্গ", "î"),
         ("ল্ট", "ë"),
         ("ল্ড", "ì"),
         ("ল্ক", "é"),
         ("ল্ল", "jø"),
+        ("ন্ঠ", "›V"),
+        ("ন্থ", "š’"),
+        ("ন্ম", "š§"),
+        ("ন্ব", "š^"),
+        ("স্খ", "¯L"),
+        ("চ্চ", "”P"),
+        ("চ্ছ", "”Q"),
+        ("ঙ্ক্ষ", "•¶"),
+        ("ষ্ক", "®‹"),
+        ("ষ্ফ", "®£"),
+        ("ষ্ম", "®§"),
+        ("ম্ফ", "¯£"),
         ("ক্র", "µ"),
         ("প্র", "cÖ"),
         ("গ্র", "MÖ"),
+        ("ব্র", "eª"),
         ("ভ্র", "å"),
+        ("শ্র", "kÖ"),
+        ("স্র", "mÖ"),
+        ("ধ্র", "aÖ"),
+        ("ম্র", "gÖ"),
+        ("হ্র", "nÖ"),
         ("দ্দ", "Ï"),
         ("দ্ধ", "×"),
         ("দ্ব", "Ø"),
@@ -835,19 +913,68 @@ pub fn unicode_to_ansi(text: &str) -> String {
     // Unicode has: Consonant + ি/ে/ৈ/ো/ৌ
     // SutonnyMJ requires:
     // ি: 'w' + Consonant
-    // ে: '†' + Consonant
+    // ে: '†' (initial) or '‡' (medial) + Consonant
     // ৈ: '‰' + Consonant
-    // ো: '†' + Consonant + 'v'
-    // ৌ: '†' + Consonant + 'Š'
+    // ো: ('†' or '‡') + Consonant + 'v'
+    // ৌ: ('†' or '‡') + Consonant + 'Š'
     chars = out.chars().collect();
     out = String::new();
     i = 0;
     let len = chars.len();
 
     while i < len {
+        // Check for 2-character conjunct cluster first (e.g. "cÖ" for প্র, "¯Í" for স্ত)
+        if i + 2 < len && is_two_char_conjunct(chars[i], chars[i + 1]) {
+            let next = chars[i + 2];
+            let is_medial = i > 0 && !is_word_boundary(chars[i - 1]);
+            let e_glyph = if is_medial { '‡' } else { '†' };
+            match next {
+                'ি' => {
+                    out.push('w');
+                    out.push(chars[i]);
+                    out.push(chars[i + 1]);
+                    i += 3;
+                    continue;
+                }
+                'ে' => {
+                    out.push(e_glyph);
+                    out.push(chars[i]);
+                    out.push(chars[i + 1]);
+                    i += 3;
+                    continue;
+                }
+                'ৈ' => {
+                    out.push('‰');
+                    out.push(chars[i]);
+                    out.push(chars[i + 1]);
+                    i += 3;
+                    continue;
+                }
+                'ো' => {
+                    out.push(e_glyph);
+                    out.push(chars[i]);
+                    out.push(chars[i + 1]);
+                    out.push('v');
+                    i += 3;
+                    continue;
+                }
+                'ৌ' => {
+                    out.push(e_glyph);
+                    out.push(chars[i]);
+                    out.push(chars[i + 1]);
+                    out.push('Š');
+                    i += 3;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
         let ch = chars[i];
         if i + 1 < len {
             let next = chars[i + 1];
+            let is_medial = i > 0 && !is_word_boundary(chars[i - 1]);
+            let e_glyph = if is_medial { '‡' } else { '†' };
             match next {
                 'ি' => {
                     out.push('w');
@@ -856,7 +983,7 @@ pub fn unicode_to_ansi(text: &str) -> String {
                     continue;
                 }
                 'ে' => {
-                    out.push('†');
+                    out.push(e_glyph);
                     out.push(ch);
                     i += 2;
                     continue;
@@ -868,14 +995,14 @@ pub fn unicode_to_ansi(text: &str) -> String {
                     continue;
                 }
                 'ো' => {
-                    out.push('†');
+                    out.push(e_glyph);
                     out.push(ch);
                     out.push('v');
                     i += 2;
                     continue;
                 }
                 'ৌ' => {
-                    out.push('†');
+                    out.push(e_glyph);
                     out.push(ch);
                     out.push('Š');
                     i += 2;
@@ -986,7 +1113,7 @@ pub fn unicode_to_ansi(text: &str) -> String {
     final_out
 }
 
-fn is_bn_consonant(c: char) -> bool {
+pub fn is_bn_consonant(c: char) -> bool {
     ('ক'..='হ').contains(&c) || ('ড়'..='য়').contains(&c) || c == 'ৎ'
 }
 
@@ -1007,6 +1134,103 @@ fn parse_bn_cluster(chars: &[char], start: usize) -> Option<usize> {
         }
     }
     Some(end)
+}
+
+/// Returns true if `c` is a word boundary delimiter or whitespace.
+pub fn is_word_boundary(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            ' ' | '\t'
+                | '\n'
+                | '\r'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | '"'
+                | '\''
+                | '‘'
+                | '’'
+                | '“'
+                | '”'
+                | '«'
+                | '»'
+                | '।'
+                | '.'
+                | ','
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+                | '-'
+                | '—'
+                | '–'
+                | '/'
+                | '\\'
+                | '|'
+                | '_'
+                | '='
+                | '+'
+                | '*'
+                | '#'
+                | '@'
+                | '%'
+                | '^'
+                | '&'
+                | '~'
+                | '`'
+        )
+}
+
+/// Returns true if (c1, c2) is a 2-character SutonnyMJ conjunct sequence (such as "cÖ" for প্র).
+pub fn is_two_char_conjunct(c1: char, c2: char) -> bool {
+    matches!(
+        (c1, c2),
+        ('c', 'Ö')
+            | ('M', 'Ö')
+            | ('e', 'ª')
+            | ('k', 'Ö')
+            | ('m', 'Ö')
+            | ('a', 'Ö')
+            | ('g', 'Ö')
+            | ('n', 'Ö')
+            | ('¯', 'Í')
+            | ('¯', '’')
+            | ('¯', '‹')
+            | ('¯', 'ú')
+            | ('¯', '^')
+            | ('¯', '§')
+            | ('¯', 'L')
+            | ('¯', '£')
+            | ('”', 'P')
+            | ('”', 'Q')
+            | ('•', '¶')
+            | ('®', '‹')
+            | ('®', '£')
+            | ('®', '§')
+            | ('m', 'œ')
+            | ('j', 'ø')
+            | ('›', 'V')
+            | ('š', '’')
+            | ('š', '§')
+            | ('š', '^')
+            | ('š', 'Í')
+            | ('K', '^')
+            | ('K', '¥')
+            | ('K', 'ø')
+            | ('L', '^')
+            | ('M', 'œ')
+            | ('¤', '§')
+            | ('¤', 'œ')
+            | ('™', '¢')
+            | ('¯', '‘')
+            | ('¯', '¿')
+    )
 }
 
 /// Converts ANSI (SutonnyMJ encoding) text to Unicode Bengali with full ligature,
@@ -1434,117 +1658,7 @@ pub fn ansi_to_unicode(text: &str) -> String {
 // ============================================================================
 
 /// High-frequency Bengali words for phonetic candidate suggestion and autocomplete.
-pub const BANGLA_VOCAB: &[(&str, &str)] = &[
-    ("ami", "আমি"),
-    ("amra", "আমরা"),
-    ("amader", "আমাদের"),
-    ("amar", "আমার"),
-    ("tumi", "তুমি"),
-    ("tomra", "তোমরা"),
-    ("tomader", "তোমাদের"),
-    ("tomar", "তোমার"),
-    ("apni", "আপনি"),
-    ("apnader", "আপনাদের"),
-    ("apnar", "আপনার"),
-    ("bangla", "বাংলা"),
-    ("bangladesh", "বাংলাদেশ"),
-    ("dhaka", "ঢাকা"),
-    ("bhalo", "ভালো"),
-    ("bhalobasha", "ভালোবাসা"),
-    ("kemon", "কেমন"),
-    ("achen", "আছেন"),
-    ("acho", "আছো"),
-    ("achi", "আছি"),
-    ("onek", "অনেক"),
-    ("shob", "সব"),
-    ("shobai", "সবাই"),
-    ("shokol", "সকল"),
-    ("karon", "কারণ"),
-    ("kormo", "কর্ম"),
-    ("kaj", "কাজ"),
-    ("kore", "করে"),
-    ("korbo", "করব"),
-    ("korchen", "করছেন"),
-    ("kotha", "কথা"),
-    ("kintu", "কিন্তু"),
-    ("ebong", "এবং"),
-    ("othoba", "অথবা"),
-    ("shomoy", "সময়"),
-    ("shundor", "সুন্দর"),
-    ("notun", "নতুন"),
-    ("puraton", "পুরাতন"),
-    ("choto", "ছোট"),
-    ("boro", "বড়"),
-    ("manush", "মানুষ"),
-    ("desh", "দেশ"),
-    ("desher", "দেশের"),
-    ("din", "দিন"),
-    ("rat", "রাত"),
-    ("shokal", "সকাল"),
-    ("dupur", "দুপুর"),
-    ("bikol", "বিকাল"),
-    ("shondha", "সন্ধ্যা"),
-    ("pani", "পানি"),
-    ("jol", "জল"),
-    ("khabar", "খাবার"),
-    ("boi", "বই"),
-    ("kolom", "কলম"),
-    ("ghor", "ঘর"),
-    ("bari", "বাড়ি"),
-    ("rasta", "রাস্তা"),
-    ("shohor", "শহর"),
-    ("gram", "গ্রাম"),
-    ("nodi", "নদী"),
-    ("akash", "আকাশ"),
-    ("batash", "বাতাস"),
-    ("bristi", "বৃষ্টি"),
-    ("shurjo", "সূর্য"),
-    ("chad", "চাঁদ"),
-    ("tara", "তারা"),
-    ("bondhu", "বন্ধু"),
-    ("poribar", "পরিবার"),
-    ("baba", "বাবা"),
-    ("ma", "মা"),
-    ("bhai", "ভাই"),
-    ("bon", "বোন"),
-    ("chele", "ছেলে"),
-    ("meye", "মেয়ে"),
-    ("shikkha", "শিক্ষা"),
-    ("biddaloy", "বিদ্যালয়"),
-    ("bishwobiddaloy", "বিশ্ববিদ্যালয়"),
-    ("shongbidhan", "সংবিধান"),
-    ("adhikar", "অধিকার"),
-    ("shadhinota", "স্বাধীনতা"),
-    ("mukti", "মুক্তি"),
-    ("muktijuddho", "মুক্তিযুদ্ধ"),
-    ("shohid", "শহীদ"),
-    ("bhasha", "ভাষা"),
-    ("matribhasha", "মাতৃভাষা"),
-    ("prothom", "প্রথম"),
-    ("ditio", "দ্বিতীয়"),
-    ("tritio", "তৃতীয়"),
-    ("shesh", "শেষ"),
-    ("shuru", "শুরু"),
-    ("dhonnobad", "ধন্যবাদ"),
-    ("shagotom", "স্বাগতম"),
-    ("shuvo", "শুভ"),
-    ("obhinondon", "অভিনন্দন"),
-    ("proyojon", "প্রয়োজন"),
-    ("shubidha", "সুবিধা"),
-    ("somossa", "সমস্যা"),
-    ("shomadhan", "সমাধান"),
-    ("uttor", "উত্তর"),
-    ("proshno", "প্রশ্ন"),
-    ("khobor", "খবর"),
-    ("lekha", "লেখা"),
-    ("porha", "পড়া"),
-    ("bola", "বলা"),
-    ("shona", "শোনা"),
-    ("dekha", "দেখা"),
-    ("jana", "জানা"),
-    ("bujha", "বুঝা"),
-    ("gyan", "জ্ঞান"),
-];
+pub use super::bangla_vocab::BANGLA_VOCAB;
 
 /// Returns candidate Bengali transliterations/words for a phonetic syllable prefix.
 pub fn phonetic_candidates(prefix: &str) -> Vec<String> {
@@ -1555,26 +1669,27 @@ pub fn phonetic_candidates(prefix: &str) -> Vec<String> {
     let lower = p.to_ascii_lowercase();
     let mut candidates = Vec::with_capacity(6);
 
-    // 1. Direct transliteration from the engine
-    let primary = phonetic_transliterate(p);
-    if !primary.is_empty() {
-        candidates.push(primary);
-    }
-
-    // 2. Exact match in vocabulary
+    // 1. Exact match in vocabulary (Top Priority for instant typing & suggestions)
     for &(k, v) in BANGLA_VOCAB {
         if k == lower && !candidates.iter().any(|c| c == v) {
             candidates.push(v.to_string());
         }
     }
 
-    // 3. Prefix match in vocabulary
-    for &(k, v) in BANGLA_VOCAB {
-        if k.starts_with(&lower) && k != lower && !candidates.iter().any(|c| c == v) {
-            candidates.push(v.to_string());
-            if candidates.len() >= 5 {
-                break;
-            }
+    // 2. Direct transliteration from the engine
+    let primary = phonetic_transliterate(p);
+    if !primary.is_empty() && !candidates.iter().any(|c| c == &primary) {
+        candidates.push(primary);
+    }
+
+    // 3. Prefix match in vocabulary (prioritizing shorter/closer matches)
+    let mut prefix_matches: Vec<(&str, &str)> =
+        BANGLA_VOCAB.iter().copied().filter(|&(k, v)| k.starts_with(&lower) && k != lower && !candidates.iter().any(|c| c == v)).collect();
+    prefix_matches.sort_by_key(|&(k, _)| k.len());
+    for (_, v) in prefix_matches {
+        candidates.push(v.to_string());
+        if candidates.len() >= 5 {
+            break;
         }
     }
 
@@ -1810,6 +1925,11 @@ mod tests {
         assert_eq!(find_bijoy_conjunct('স', 'ত'), Some("¯Í"));
         assert_eq!(find_bijoy_conjunct('দ', 'ধ'), Some("×"));
         assert_eq!(find_bijoy_conjunct('হ', 'ম'), Some("n&g"));
+        assert_eq!(find_bijoy_conjunct('ল', 'গ'), Some("î"));
+        assert_eq!(find_bijoy_conjunct('ত', 'র'), Some("Î"));
+        assert_eq!(find_bijoy_conjunct('ক', 'র'), Some("µ"));
+        assert_eq!(find_bijoy_conjunct('ভ', 'র'), Some("å"));
+        assert_eq!(find_bijoy_conjunct('হ', 'ঋ'), Some("ü"));
     }
 
     #[test]
@@ -1980,15 +2100,20 @@ mod tests {
 
     #[test]
     fn test_dari_bisarga_and_middle_vowels() {
-        // Phonetic transliteration tests:
-        // Dari '|'
+        // Dari '.' and '|'
+        assert_eq!(phonetic_transliterate("bangladesh."), "বাংলাদেশ।");
         assert_eq!(phonetic_transliterate("bangladesh|"), "বাংলাদেশ।");
-        assert_eq!(phonetic_transliterate("desh |"), "দেশ ।");
+        assert_eq!(phonetic_transliterate("desh ."), "দেশ ।");
 
-        // Bisarga ':'
+        // Bisarga in word vs colon ':' in punctuation/time
         assert_eq!(phonetic_transliterate("du:kho"), "দুঃখ");
-        assert_eq!(phonetic_transliterate("ba:"), "বাঃ");
-        assert_eq!(phonetic_transliterate(":"), "ঃ");
+        assert_eq!(phonetic_transliterate("Time: 10:30"), "টিমে: ১০:৩০");
+        assert_eq!(phonetic_transliterate("10:30"), "১০:৩০");
+
+        // Chandrabindu '^' and Khanda Ta 't`'
+        assert_eq!(phonetic_transliterate("c^ad"), "চাঁদ");
+        assert_eq!(phonetic_transliterate("ut`sob"), "উৎসব");
+        assert_eq!(phonetic_transliterate("hot`hat"), "হঠাৎ");
 
         // Middle-of-word independent 'আ' and other vowels
         assert_eq!(phonetic_transliterate("k'a"), "কআ");
@@ -1999,10 +2124,12 @@ mod tests {
         assert_eq!(phonetic_transliterate("k'k"), "কক");
 
         // Jatiya key mappings
-        assert_eq!(jatiya_key(':'), Some("ঃ"));
+        assert_eq!(jatiya_key(':'), Some(":"));
         assert_eq!(jatiya_key(';'), Some(";"));
-        assert_eq!(jatiya_key('|'), Some("।"));
+        assert_eq!(jatiya_key('|'), Some("ঃ"));
         assert_eq!(jatiya_key('.'), Some("।"));
+        assert_eq!(jatiya_key('G'), Some("।"));
+        assert_eq!(jatiya_key('A'), Some("র্"));
 
         // Jatiya linker vowels
         assert_eq!(jatiya_linker_vowel('f'), Some("আ"));
@@ -2010,11 +2137,67 @@ mod tests {
         assert_eq!(jatiya_linker_vowel('F'), Some("অ"));
 
         // Bijoy ANSI mappings
-        assert_eq!(bijoy_ansi_key(':'), Some("t"));
-        assert_eq!(bijoy_ansi_key('|'), Some("."));
+        assert_eq!(bijoy_ansi_key(':'), Some(":"));
+        assert_eq!(bijoy_ansi_key('|'), Some("t"));
         assert_eq!(bijoy_ansi_key('.'), Some("."));
+        assert_eq!(bijoy_ansi_key('G'), Some("।"));
+        assert_eq!(bijoy_ansi_key('A'), Some("©"));
         assert_eq!(bijoy_linker_vowel('f'), Some("Av"));
         assert_eq!(bijoy_linker_vowel('x'), Some("I"));
         assert_eq!(bijoy_linker_vowel('F'), Some("A"));
+    }
+
+    #[test]
+    fn test_medial_vs_initial_ekar_in_unicode_to_ansi() {
+        // Initial E-kar / O-kar uses '†' (\u{2020}), Medial E-kar / O-kar uses '‡' (\u{2021})
+        assert_eq!(unicode_to_ansi("তোমায়"), "†Zvgvq");
+        assert_eq!(unicode_to_ansi("ভালোবাসি"), "fv‡jvevwm");
+        assert_eq!(unicode_to_ansi("তিনি তোমায় ভালোবাসেন"), "wZwb †Zvgvq fv‡jvev‡mb");
+
+        // 2-char conjuncts (cÖ for প্র) with initial and medial E-kar
+        assert_eq!(unicode_to_ansi("প্রেম"), "†cÖg");
+        assert_eq!(unicode_to_ansi("প্রেমে"), "†cÖ‡g");
+
+        // Roundtrip verification back to Unicode
+        assert_eq!(ansi_to_unicode("fv‡jvevwm"), "ভালোবাসি");
+        assert_eq!(ansi_to_unicode("†Zvgvq"), "তোমায়");
+        assert_eq!(ansi_to_unicode("†cÖg"), "প্রেম");
+        assert_eq!(ansi_to_unicode("†cÖ‡g"), "প্রেমে");
+        assert_eq!(ansi_to_unicode("wZwb †Zvgvq fv‡jvev‡mb"), "তিনি তোমায় ভালোবাসেন");
+    }
+
+    #[test]
+    fn test_phonetic_transliteration_and_suggestions() {
+        // Sentence transliteration parity requested by user
+        assert_eq!(phonetic_transliterate("ami bangladesh krishi banke chakri kori"), "আমি বাংলাদেশ কৃষি ব্যাংকে চাকরি করি");
+        assert_eq!(phonetic_transliterate("ami bangladesh krishi banke chakri kori|"), "আমি বাংলাদেশ কৃষি ব্যাংকে চাকরি করি।");
+        assert_eq!(phonetic_transliterate("ami bangladesh krishi banke chakri kori."), "আমি বাংলাদেশ কৃষি ব্যাংকে চাকরি করি।");
+
+        // Verification of top-priority dictionary candidates
+        let krishi_cand = phonetic_candidates("krishi");
+        assert_eq!(krishi_cand.first().map(String::as_str), Some("কৃষি"));
+
+        let banke_cand = phonetic_candidates("banke");
+        assert_eq!(banke_cand.first().map(String::as_str), Some("ব্যাংকে"));
+
+        let chakri_cand = phonetic_candidates("chakri");
+        assert_eq!(chakri_cand.first().map(String::as_str), Some("চাকরি"));
+
+        let kori_cand = phonetic_candidates("kori");
+        assert_eq!(kori_cand.first().map(String::as_str), Some("করি"));
+
+        // Ri-kar via rri rule
+        assert_eq!(phonetic_transliterate("rri"), "ঋ");
+        assert_eq!(phonetic_transliterate("krri"), "কৃ");
+
+        // Previous sentence words
+        assert_eq!(phonetic_transliterate("amare"), "আমারে");
+        assert_eq!(phonetic_transliterate("keu"), "কেউ");
+        assert_eq!(phonetic_transliterate("ekla"), "একলা");
+        assert_eq!(phonetic_transliterate("ekhane"), "এখানে");
+        assert_eq!(phonetic_transliterate("boshe"), "বসে");
+        assert_eq!(phonetic_transliterate("achi"), "আছি");
+        assert_eq!(phonetic_transliterate("ononto"), "অনন্ত");
+        assert_eq!(phonetic_transliterate("kal"), "কাল");
     }
 }

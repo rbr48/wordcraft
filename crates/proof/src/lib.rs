@@ -199,6 +199,78 @@ pub fn is_correct(word: &str) -> bool {
     if !w.is_ascii() && !w.chars().any(|c| c.is_ascii_alphabetic()) {
         return true; // other scripts: no dictionary
     }
+    // Bengali Unicode script or SutonnyMJ legacy glyphs: no English dictionary
+    if w.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c))
+        || w.chars().any(|c| {
+            matches!(
+                c,
+                '†' | '‰'
+                    | '©'
+                    | 'Ö'
+                    | '¨'
+                    | '„'
+                    | '›'
+                    | 'š'
+                    | '¤'
+                    | '¯'
+                    | '®'
+                    | '”'
+                    | '“'
+                    | '™'
+                    | '¶'
+                    | 'Á'
+                    | 'Î'
+                    | '°'
+                    | '±'
+                    | '³'
+                    | '»'
+                    | '¼'
+                    | '½'
+                    | '¾'
+                    | 'Â'
+                    | 'Ã'
+                    | 'Ä'
+                    | 'Å'
+                    | 'Æ'
+                    | 'Ç'
+                    | 'È'
+                    | 'É'
+                    | 'Ê'
+                    | 'Ë'
+                    | 'Ì'
+                    | 'Ï'
+                    | '×'
+                    | 'Ø'
+                    | 'Ù'
+                    | 'Û'
+                    | 'Ü'
+                    | 'Ý'
+                    | 'Þ'
+                    | 'ß'
+                    | 'à'
+                    | 'ã'
+                    | 'ä'
+                    | 'å'
+                    | 'é'
+                    | 'ë'
+                    | 'ì'
+                    | 'í'
+                    | 'ð'
+                    | 'ó'
+                    | 'ô'
+                    | 'õ'
+                    | 'ö'
+                    | '÷'
+                    | 'ø'
+                    | 'ù'
+                    | 'ú'
+                    | 'ý'
+                    | 'ü'
+            )
+        })
+    {
+        return true;
+    }
     let lower = w.to_lowercase().replace('’', "'");
     if known_core(&lower) {
         return true;
@@ -399,7 +471,78 @@ pub fn check_grammar(text: &str) -> Vec<Issue> {
     let mut after_end = true;
     for (a, b) in &ws {
         let Some(w) = text.get(*a..*b) else { continue };
-        if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
+        if after_end
+            && w.chars().next().is_some_and(char::is_lowercase)
+            && w.chars().all(char::is_alphabetic)
+            && !w.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c))
+            && !w.chars().any(|c| {
+                matches!(
+                    c,
+                    '†' | '‰'
+                        | '©'
+                        | 'Ö'
+                        | '¨'
+                        | '„'
+                        | '›'
+                        | 'š'
+                        | '¤'
+                        | '¯'
+                        | '®'
+                        | '”'
+                        | '“'
+                        | '™'
+                        | '¶'
+                        | 'Á'
+                        | 'Î'
+                        | '°'
+                        | '±'
+                        | '³'
+                        | '»'
+                        | '¼'
+                        | '½'
+                        | '¾'
+                        | 'Â'
+                        | 'Ã'
+                        | 'Ä'
+                        | 'Å'
+                        | 'Æ'
+                        | 'Ç'
+                        | 'È'
+                        | 'É'
+                        | 'Ê'
+                        | 'Ë'
+                        | 'Ì'
+                        | 'Ï'
+                        | '×'
+                        | 'Ø'
+                        | 'Ù'
+                        | 'Û'
+                        | 'Ü'
+                        | 'Ý'
+                        | 'Þ'
+                        | 'ß'
+                        | 'à'
+                        | 'ã'
+                        | 'ä'
+                        | 'å'
+                        | 'é'
+                        | 'ë'
+                        | 'ì'
+                        | 'í'
+                        | 'ð'
+                        | 'ó'
+                        | 'ô'
+                        | 'õ'
+                        | 'ö'
+                        | '÷'
+                        | 'ø'
+                        | 'ù'
+                        | 'ú'
+                        | 'ý'
+                        | 'ü'
+                )
+            })
+        {
             let fixed: String = w.chars().next().map(|f| f.to_uppercase().chain(w.chars().skip(1)).collect()).unwrap_or_default();
             v.push(Issue {
                 start: *a,

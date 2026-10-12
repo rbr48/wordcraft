@@ -50,5 +50,20 @@ description: Comprehensive project memory, architecture guide, and operational r
   - Native OS printing command (`file.printNative`) and Windows Inno Setup installer script (`packaging/windows/wordcraft.iss`).
   - Full Bijoy 52 conjunct parity (যুক্তবর্ণ), 'g' linker key, independent vowels, and Avro phonetic grapheme cluster boundary handling.
   - Complete Dari (দাঁড়ি / '।'), Bisarga (': ' / 'ঃ'), and middle-of-word independent vowels ('আ', 'ই', etc.) precision support across Jatiya, Phonetic (Avro), and ANSI (Bijoy Classic/SutonnyMJ).
-  - Windows x64 Inno Setup installer package at `packaging/windows/Output/wordcraft-0.6.0-windows-x64-setup.exe`.
-  - Freshly updated portable release archive at `dist/wordcraft/wordcraft-0.6.0-windows-x64-portable.zip`.
+  - Fixed ANSI typing `Shift + g` (`G`) outputting Bangla Dari (`।`, U+0964) instead of English period (`.`) or `জ্ঞ`.
+  - Rebuilt Windows x64 Inno Setup installer package at `packaging/windows/Output/wordcraft-0.6.0-windows-x64-setup.exe`.
+  - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.0-windows-x64-portable.zip`.
+  - Isolated English proofing (spelling and grammar squiggles) from Bengali text: runs formatted in SutonnyMJ, Kalpurush, or any Bengali font (`is_bengali_family`), or tagged with Bengali language (`bn`), or containing Bengali Unicode / SutonnyMJ glyphs, now skip English proofing without generating false-positive red/blue squiggly lines.
+  - Fixed SutonnyMJ conjunct mapping for `ল্গ` (`find_bijoy_conjunct('ল', 'গ')` corrected from `ë` [ল্ট] to `î` [ল্গ]), added missing Ra-fala conjuncts (`ক্র`, `ত্র`, `প্র`, `গ্র`, `ব্র`, `ভ্র`, `শ্র`, `স্র`, `ধ্র`, `ম্র`, `হ্র`, `হৃ`), and added Bijoy `z` (Ra-fala) key ligature replacement in ANSI mode.
+  - Implemented dynamic Medial E-kar (`‡`, `\u{2021}`) vs. Word-Initial E-kar (`†`, `\u{2020}`) selection in SutonnyMJ ANSI typing (`c` / `X`) and `unicode_to_ansi` converter: eliminates the white gap before medial Pre-kar E-kar/O-kar in words like `ভালোবাসি` (`fv‡jvevwm`) while retaining word-initial spacing in words like `তোমায়` (`†Zvgvq`).
+  - Added support for 2-character conjunct clusters (`cÖ`, `¯Í`, etc.) receiving preceding pre-kar (`†cÖg` for `প্রেম`, `wcÖwZ` for `প্রীতি`).
+  - Rebuilt Windows x64 Inno Setup installer package at `packaging/windows/Output/wordcraft-0.6.0-windows-x64-setup.exe` and portable release archive at `dist/wordcraft/wordcraft-0.6.0-windows-x64-portable.zip`.
+  - Fixed Jatiya (Unicode) mode pre-kar (`c` [ে], `d` [ি], `C` [ৈ]) ordering: removed erroneous `prev_is_cons` check that was attaching pre-kars to preceding consonants instead of the upcoming consonant, fixing multi-syllable typing like `বসে` (was `বেস`), `করে` (was `কের`), `পড়ে` (was `পের`).
+  - Fixed Jatiya mode independent vowel linker handling: when typing independent vowels via `g` + vowel key (e.g. `c` + `j` [`কে`] then `g` + `s` [`উ`]), stashed pre-kar (`ে`) is restored back to the preceding consonant (`কে`), correctly yielding `কেউ` instead of leaking into `কউে`.
+  - Replaced small static dictionary with a comprehensive Avro phonetic vocabulary database (`crates/engine/src/cmd/bangla_vocab.rs`) containing 660+ high-frequency Bengali words and inflections across verbs, agriculture, banking, careers, and grammar.
+  - Prioritized exact dictionary matches as Candidate #1 in `phonetic_candidates` and added direct vocabulary lookup in `phonetic_word`: words like `krishi` (`কৃষি`), `banke` (`ব্যাংকে`), `chakri` (`চাকরি`), and `kori` (`করি`) now transliterate and auto-commit accurately (e.g., `ami bangladesh krishi banke chakri kori` -> `আমি বাংলাদেশ কৃষি ব্যাংকে চাকরি করি`).
+  - Added length-based prefix candidate prioritization so common, shorter words appear first in candidate suggestion popups (e.g., `am` suggests `আমি`, `আমার`, `আমরা` first).
+  - Fixed Dari (`।`) in Avro Phonetic mode: mapped `|` (Shift + `\`) to insert `।` (was previously bugged inserting `ঃ` [Bisarga]), enabled `..` (double period) automatic conversion into `।`, and allowed non-digit period `.` to insert `।`.
+  - Re-verified all 6 CI quality gates (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`) clean.
+  - Rebuilt production installer at `packaging/windows/Output/wordcraft-0.6.0-windows-x64-setup.exe` and portable archive at `dist/wordcraft/wordcraft-0.6.0-windows-x64-portable.zip`.
+

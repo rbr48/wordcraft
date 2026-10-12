@@ -1882,7 +1882,16 @@ fn proof_issues(p: &Paragraph) -> Vec<(usize, usize, bool)> {
     }
     let text = proof_text(p);
     let skip = |a: usize, b: usize| {
-        p.run_ranges().any(|(r, c)| r.start < b && a < r.end && (c.no_proof == Some(true) || c.hidden == Some(true) || c.link.is_some()))
+        p.run_ranges().any(|(r, c)| {
+            r.start < b
+                && a < r.end
+                && (c.no_proof == Some(true)
+                    || c.hidden == Some(true)
+                    || c.link.is_some()
+                    || c.font.as_deref().is_some_and(wordcraft_fonts::word::is_bengali_family)
+                    || c.lang.as_deref().is_some_and(|l| l.starts_with("bn")))
+        }) || p.mark.font.as_deref().is_some_and(wordcraft_fonts::word::is_bengali_family)
+            || p.mark.lang.as_deref().is_some_and(|l| l.starts_with("bn"))
     };
     let mut v: Vec<(usize, usize, bool)> =
         wordcraft_proof::check_spelling(&text).into_iter().filter(|i| !skip(i.start, i.end)).map(|i| (i.start, i.end, false)).collect();

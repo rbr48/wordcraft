@@ -300,7 +300,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             if ui
                                 .selectable_label(
                                     app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Jatiya,
-                                    "Bangla Jatiya (National)",
+                                    "Bangla Jatiya (National / Ctrl+Alt+V)",
                                 )
                                 .clicked()
                             {
@@ -310,7 +310,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             if ui
                                 .selectable_label(
                                     app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Ansi,
-                                    "Bangla ANSI (SutonnyMJ)",
+                                    "Bangla ANSI (Bijoy / Ctrl+Alt+B)",
                                 )
                                 .clicked()
                             {

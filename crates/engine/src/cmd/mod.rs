@@ -1,6 +1,7 @@
 //! Command implementations, one module per area. Each module exposes `specs()`.
 
 pub mod bangla;
+pub mod bangla_vocab;
 pub mod caret;
 pub mod citations;
 pub mod column;

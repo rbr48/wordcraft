@@ -627,9 +627,20 @@ pub fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> 
     let text = wordcraft_layout::para::proof_text(p);
     let mut v: Vec<wordcraft_proof::Issue> = wordcraft_proof::check_spelling(&text);
     v.extend(wordcraft_proof::check_grammar(&text));
-    v.sort_by_key(|i| i.start);
+    let skip = |a: usize, b: usize| {
+        p.run_ranges().any(|(r, c)| {
+            r.start < b
+                && a < r.end
+                && (c.no_proof == Some(true)
+                    || c.link.is_some()
+                    || c.font.as_deref().is_some_and(wordcraft_fonts::word::is_bengali_family)
+                    || c.lang.as_deref().is_some_and(|l| l.starts_with("bn")))
+        }) || p.mark.font.as_deref().is_some_and(wordcraft_fonts::word::is_bengali_family)
+            || p.mark.lang.as_deref().is_some_and(|l| l.starts_with("bn"))
+            || s.bangla_mode != crate::cmd::bangla::BanglaMode::Off
+    };
     v.into_iter()
-        .filter(|i| !p.run_ranges().any(|(r, c)| r.start < i.end && i.start < r.end && (c.no_proof == Some(true) || c.link.is_some())))
+        .filter(|i| !skip(i.start, i.end))
         .map(|i| (Pos { story, path: path.clone(), off: i.start }, Pos { story, path: path.clone(), off: i.end }, i))
         .collect()
 }
