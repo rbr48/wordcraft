@@ -51,10 +51,7 @@ pub fn parse_number(text: &str) -> Option<f64> {
         Some(inner) => (inner, true),
         None => (t, false),
     };
-    let cleaned: String = t
-        .chars()
-        .filter(|c| !matches!(c, ',' | '$' | '€' | '£' | '¥' | '৳' | '%') && !c.is_whitespace())
-        .collect();
+    let cleaned: String = t.chars().filter(|c| !matches!(c, ',' | '$' | '€' | '£' | '¥' | '৳' | '%') && !c.is_whitespace()).collect();
     if cleaned.is_empty() || !cleaned.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E')) {
         return None;
     }
@@ -64,7 +61,7 @@ pub fn parse_number(text: &str) -> Option<f64> {
 }
 
 /// The number in a cell, if its text is one.
-fn cell_number(c: &Cell) -> Option<f64> {
+pub(crate) fn cell_number(c: &Cell) -> Option<f64> {
     parse_number(&super::table::cell_text(c))
 }
 

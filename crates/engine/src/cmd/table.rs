@@ -903,9 +903,10 @@ fn table_lines(t: &Table, sep: Separator) -> Vec<Paragraph> {
 /// by Update Field. What a formula can use is described in [`super::table_formula`].
 fn formula(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
-    let instr = formula_instr(p::str(v, "formula").unwrap_or("=SUM(ABOVE)"));
+    let raw = p::str(v, "formula").unwrap_or("=SUM(ABOVE)");
     let story = s.sel.focus.story;
     let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
+    let instr = auto_formula_instr(t, r, c, raw);
     let value = super::table_formula::evaluate(t, r, c, &instr)?;
     let text = super::table_formula::format_result(value);
     let props = s.typing_props();
@@ -920,6 +921,22 @@ pub(crate) fn formula_instr(raw: &str) -> String {
     let body = raw.trim();
     let body = body.strip_prefix('=').unwrap_or(body);
     format!("={}", body.trim().to_ascii_uppercase())
+}
+
+/// Resolve auto-direction if formula is a bare function name like `=SUM`.
+fn auto_formula_instr(t: &Table, r: usize, c: usize, raw: &str) -> String {
+    let instr = formula_instr(raw);
+    let body = instr.strip_prefix('=').unwrap_or(&instr);
+    if !body.contains('(') && matches!(body, "SUM" | "AVERAGE" | "COUNT" | "MAX" | "MIN" | "PRODUCT") {
+        let g = t.grid_col(r, c);
+        let has_above = (0..r)
+            .rev()
+            .any(|row| t.cell_at_grid(row, g).and_then(|ci| t.rows.get(row)?.cells.get(ci)).and_then(super::table_formula::cell_number).is_some());
+        let dir = if has_above { "ABOVE" } else { "LEFT" };
+        format!("={body}({dir})")
+    } else {
+        instr
+    }
 }
 
 pub fn select_grid_range(s: &mut Session, tp: &Path, min_r: usize, min_g: usize, max_r: usize, max_g: usize) -> CmdResult {
