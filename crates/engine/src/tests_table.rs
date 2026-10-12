@@ -1073,3 +1073,32 @@ fn a_right_to_left_table_survives_a_docx_round_trip() {
     let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap_or_else(|e| panic!("{e}"))).unwrap_or_else(|e| panic!("{e}"));
     assert!(!back.body.iter().find_map(|b| b.as_table()).is_some_and(|t| t.props.rtl));
 }
+
+#[test]
+fn sort_by_several_keys_breaks_ties_with_the_next_key() {
+    let mut s = s();
+    text_table(&mut s, "Sales\tAnn\t3\nIT\tBob\t9\nSales\tCyd\t7\nIT\tDee\t2");
+    run(&mut s, "table.sort", json!({"keys": [{"column": 0, "type": "text"}, {"column": 2, "descending": true}]}));
+    let t = table(&s);
+    let names: Vec<String> = (0..t.rows.len()).map(|r| cell_text(t, r, 1)).collect();
+    assert_eq!(names, vec!["Bob", "Dee", "Cyd", "Ann"], "IT first, then by number, largest first");
+    assert!(s.run("table.sort", &json!({"keys": [{}, {}, {}, {}]})).is_err(), "Word's Sort takes three keys");
+    assert!(s.run("table.sort", &json!({"keys": []})).is_err());
+}
+
+#[test]
+fn sort_by_date_reads_the_dates_word_reads() {
+    let mut s = s();
+    text_table(&mut s, "12 October 2026\nnot a date\n2026-01-05\n3/4/2025\nOct 1, 2026");
+    run(&mut s, "table.sort", json!({"column": 0, "type": "date"}));
+    assert_eq!(first_column(table(&s)), vec!["3/4/2025", "2026-01-05", "Oct 1, 2026", "12 October 2026", "not a date"]);
+}
+
+#[test]
+fn sorting_with_rows_selected_moves_only_those_rows() {
+    let mut s = s();
+    text_table(&mut s, "5\n4\n3\n2\n1");
+    run(&mut s, "table.selectRange", json!({"path": "0", "r0": 1, "c0": 0, "r1": 3, "c1": 0}));
+    run(&mut s, "table.sort", json!({"column": 0}));
+    assert_eq!(first_column(table(&s)), vec!["5", "2", "3", "4", "1"]);
+}

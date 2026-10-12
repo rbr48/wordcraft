@@ -59,10 +59,12 @@ pub struct SortForm {
     pub column: u32,
     /// The header text of each column (or "Column n" when there is none).
     pub labels: Vec<String>,
-    /// `number` or `text`.
+    /// `number`, `text` or `date`.
     pub kind: String,
     pub descending: bool,
     pub header: bool,
+    /// The two Then by keys: (1-based grid column, 0 for none; type; descending).
+    pub then: [(u32, String, bool); 2],
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -186,8 +188,15 @@ pub fn open(name: &str, app: &WordApp) -> Option<TableDialog> {
                 t.map_or_else(Vec::new, |t| t.rows.iter().skip(usize::from(header)).filter_map(|row| row_text_at(row, column_g)).collect());
             let numeric =
                 !body.is_empty() && body.iter().all(|x| x.trim().is_empty() || wordcraft_engine::cmd::table_formula::parse_number(x).is_some());
-            SortForm { column: column_g as u32 + 1, labels, kind: if numeric { "number" } else { "text" }.into(), descending: false, header }
-                .into_dialog()
+            SortForm {
+                column: column_g as u32 + 1,
+                labels,
+                kind: if numeric { "number" } else { "text" }.into(),
+                descending: false,
+                header,
+                then: [(0, "text".into(), false), (0, "text".into(), false)],
+            }
+            .into_dialog()
         }
         "tableFormula" => FormulaForm { formula: "=SUM(ABOVE)".into(), function: 0 }.into_dialog(),
         "tableToText" => SeparatorForm { choice: 1, other: String::new() }.into_to_text(),
@@ -276,6 +285,17 @@ impl SortForm {
     fn into_dialog(self) -> TableDialog {
         TableDialog::Sort(self)
     }
+
+    /// The `keys` `table.sort` takes: the Sort by key, then each Then by key with a column.
+    pub fn keys(&self) -> Value {
+        let mut keys = vec![json!({"column": self.column.saturating_sub(1), "type": self.kind, "descending": self.descending})];
+        for (col, kind, desc) in &self.then {
+            if *col != 0 {
+                keys.push(json!({"column": col - 1, "type": kind, "descending": desc}));
+            }
+        }
+        Value::Array(keys)
+    }
 }
 impl FormulaForm {
     fn into_dialog(self) -> TableDialog {
@@ -354,21 +374,46 @@ fn sort_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SortForm) -> bool {
     });
     f.column = f.column.clamp(1, max);
     heading(ui, "Type");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.kind, "number".to_string(), tl!("Number"));
-        ui.radio_value(&mut f.kind, "text".to_string(), tl!("Text"));
-    });
+    sort_type_ui(ui, &mut f.kind);
     heading(ui, "Order");
     ui.horizontal(|ui| {
         ui.radio_value(&mut f.descending, false, tl!("Ascending"));
         ui.radio_value(&mut f.descending, true, tl!("Descending"));
     });
+    // Then by: two more keys, each off until a column is picked (Word's Sort has three).
+    for (i, key) in f.then.iter_mut().enumerate() {
+        heading(ui, "Then by");
+        let none = tl!("(none)").to_string();
+        let shown = if key.0 == 0 { none.clone() } else { f.labels.get(key.0 as usize - 1).cloned().unwrap_or_else(|| format!("Column {}", key.0)) };
+        egui::ComboBox::from_id_salt(("sort_then", i)).selected_text(shown).show_ui(ui, |ui| {
+            ui.selectable_value(&mut key.0, 0, none.as_str());
+            for (c, label) in f.labels.iter().enumerate() {
+                ui.selectable_value(&mut key.0, c as u32 + 1, label.as_str());
+            }
+        });
+        key.0 = key.0.min(max);
+        if key.0 != 0 {
+            sort_type_ui(ui, &mut key.1);
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut key.2, false, tl!("Ascending"));
+                ui.radio_value(&mut key.2, true, tl!("Descending"));
+            });
+        }
+    }
     ui.checkbox(&mut f.header, tl!("Header row"));
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        let _ = app.run("table.sort", json!({"column": f.column.saturating_sub(1), "type": f.kind, "descending": f.descending, "header": f.header}));
+        let _ = app.run("table.sort", json!({"keys": f.keys(), "header": f.header}));
     }
     ok || cancel
+}
+
+fn sort_type_ui(ui: &mut Ui, kind: &mut String) {
+    ui.horizontal(|ui| {
+        ui.radio_value(kind, "number".to_string(), tl!("Number"));
+        ui.radio_value(kind, "text".to_string(), tl!("Text"));
+        ui.radio_value(kind, "date".to_string(), tl!("Date"));
+    });
 }
 
 fn column_label(f: &SortForm) -> String {
@@ -671,6 +716,25 @@ mod tests {
         assert_eq!(cell_text(a, 0, 0), "Item", "the header stays on top");
         assert_eq!(cell_text(a, 1, 0), "Pens", "the body is sorted descending");
         assert_eq!(cell_text(a, 6, 0), "Books");
+    }
+
+    #[test]
+    fn the_sort_dialog_sends_its_then_by_keys_with_a_column_only() {
+        let mut f = super::SortForm {
+            column: 1,
+            labels: vec!["A".into(), "B".into(), "C".into()],
+            kind: "text".into(),
+            descending: false,
+            header: true,
+            then: [(0, "text".into(), false), (0, "text".into(), false)],
+        };
+        assert_eq!(f.keys(), json!([{"column": 0, "type": "text", "descending": false}]));
+        f.then[1] = (3, "date".into(), true);
+        assert_eq!(
+            f.keys(),
+            json!([{"column": 0, "type": "text", "descending": false}, {"column": 2, "type": "date", "descending": true}]),
+            "a Then by left at (none) is skipped"
+        );
     }
 
     #[test]
