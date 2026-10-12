@@ -132,13 +132,15 @@ pub fn phonetic_transliterate(input: &str) -> String {
 
 /// Transliterates a single alphabetic word phonetically.
 fn phonetic_word(word: &str) -> String {
+    // If word contains internal separators or explicit uppercase 'A' (independent আ), let the character engine handle it
+    let has_explicit_independent = word.contains('A') || word.contains('\'') || word.contains('`');
+
     let lower = word.to_ascii_lowercase();
-    // 1. Exact match in full vocabulary database
-    if let Some(&(_, val)) = BANGLA_VOCAB.iter().find(|&&(k, _)| k == lower) {
-        return val.to_string();
-    }
-    // Common word overrides for frictionless typing
+
+    // Specific conjunct and word overrides
     match lower.as_str() {
+        "jng" => return "জ্ঞ".into(),
+        "kkh" => return "ক্ষ".into(),
         "sonar" => return "সোনার".into(),
         "shonar" => return "সোনার".into(),
         "du:kh" | "du:kho" | "dukho" => return "দুঃখ".into(),
@@ -146,6 +148,11 @@ fn phonetic_word(word: &str) -> String {
         "ut`sob" | "utsob" => return "উৎসব".into(),
         "hot`hat" | "hothat" => return "হঠাৎ".into(),
         _ => {}
+    }
+
+    // 1. Exact match in full vocabulary database
+    if !has_explicit_independent && let Some(&(_, val)) = BANGLA_VOCAB.iter().find(|&&(k, _)| k == lower) {
+        return val.to_string();
     }
 
     let mut res = String::new();
