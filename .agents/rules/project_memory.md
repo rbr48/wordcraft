@@ -91,3 +91,15 @@ description: Comprehensive project memory, architecture guide, and operational r
     - Recompiled optimized release binaries `wordcraft.exe` and `wordcraft-cli.exe`.
     - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.1-windows-x64-setup.exe`.
     - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.1-windows-x64-portable.zip`.
+  - **Upstream Feature Integration Sprint (10 commits merged & verified)**:
+    - **#626**: DOCX theme colors and theme fonts take precedence over fixed fallback values.
+    - **#543, #553**: Find and Replace special characters (`^p`, `^t`, `^^`) and wildcard pattern compilation with capture replacements.
+    - **#40, #796**: Custom dictionary persistence across sessions (`user_dictionary.txt` atomic bounded file I/O).
+    - **#544, #545**: AutoCorrect TWo INitial CApitals, cAPS LOCK accidental correction, and table-cell first-letter capitalization.
+    - **#745**: Large inline picture layout Word parity (pictures keep their dimensions rather than shrinking, imported/pasted pictures fitted to text width).
+    - **#810, #829**: ODT import reads page width, height, print orientation, and margins from `styles.xml` with defensive bounds clamping.
+    - **#713**: Bidi auto-detection for RTL paragraph direction when typing Arabic, Kurdish, or Hebrew into an empty paragraph.
+    - **#759**: Resizable Navigation pane truncates long headings with ellipses and provides hover tooltips.
+    - **#907**: Hardened table formula engine per upstream maintainer review (table boundary clamping, 100k cell evaluation budget, power/sign recursion depth guards).
+    - Cleanly integrated upstream fork PRs #1 and #2 without regressions to custom Bangla/AI capabilities.
+
