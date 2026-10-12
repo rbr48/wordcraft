@@ -346,7 +346,7 @@ fn backspace(s: &mut Session, _: &Value) -> CmdResult {
         }
         Some(Block::Table(_)) => {
             // Move into the table's last cell.
-            let last = s.doc.para_paths(f.story).into_iter().rfind(|q| q.0.first() == prev_path.0.first() && q.0.len() > 1);
+            let last = s.doc.para_paths(f.story).into_iter().rfind(|q| q.0.starts_with(&prev_path.0) && q.0.len() > prev_path.0.len());
             if let Some(q) = last {
                 let off = s.doc.para(f.story, &q).map(|x| x.len()).unwrap_or(0);
                 if s.doc.para_at(&f).is_some_and(|x| x.is_empty()) && s.doc.container(f.story, &f.path).is_some_and(|c| c.len() > i + 1) {

@@ -618,12 +618,29 @@ fn del_row(s: &mut Session, _: &Value) -> CmdResult {
 fn del_col(s: &mut Session, _: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
     let story = s.sel.focus.story;
+    let cells = selected_cells(s);
     let t = s.doc.table_mut(story, &tp)?;
     if t.grid.len() <= 1 {
         return del_table(s, &Value::Null);
     }
-    let g = t.grid_col(r, c);
-    t.delete_col(g);
+    let mut gc_set = std::collections::BTreeSet::new();
+    for (ri, ci) in &cells {
+        gc_set.insert(t.grid_col(*ri, *ci));
+    }
+    let mut grid_cols: Vec<usize> = gc_set.into_iter().collect();
+    grid_cols.sort_unstable_by(|a, b| b.cmp(a));
+    if grid_cols.is_empty() {
+        let g = t.grid_col(r, c);
+        grid_cols.push(g);
+    }
+    if grid_cols.len() >= t.grid.len() {
+        return del_table(s, &Value::Null);
+    }
+    for g in grid_cols {
+        if t.grid.len() > 1 {
+            t.delete_col(g);
+        }
+    }
     // Rows left without cells are dropped; if that was every row, no table is left.
     if t.rows.is_empty() {
         return del_table(s, &Value::Null);
@@ -727,12 +744,28 @@ fn sort_table(s: &mut Session, v: &Value) -> CmdResult {
     with_table(s, |t| {
         let skip = usize::from(header.unwrap_or(t.rows.first().is_some_and(|r| r.props.header)));
         let Some(body) = t.rows.get_mut(skip..) else { return };
+        // Note: this uses cell index `col`, which may differ from grid column index
+        // when rows contain merged cells. `t.cell_at_grid(r, col)` would be needed for grid-column
+        // correctness, but `sort_by` operates on row slices without row index.
         body.sort_by(|a, b| {
             let ka = a.cells.get(col).map(cell_text).unwrap_or_default();
             let kb = b.cells.get(col).map(cell_text).unwrap_or_default();
-            let o = match (ka.trim().replace(',', "").parse::<f64>(), kb.trim().replace(',', "").parse::<f64>()) {
-                (Ok(x), Ok(y)) => x.total_cmp(&y),
-                _ => ka.to_lowercase().cmp(&kb.to_lowercase()),
+            // Parse: strip currency symbols and thousands separators, then parse as f64
+            let parse_numeric = |s: &str| -> Option<f64> {
+                let cleaned: String = s.trim()
+                    .chars()
+                    .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+                    .collect();
+                cleaned.parse::<f64>().ok()
+            };
+            // Tier 1: both numeric → compare as f64 with total_cmp
+            // Tier 2: one numeric → numerics sort before text
+            // Tier 3: both text → case-insensitive lexicographic
+            let o = match (parse_numeric(&ka), parse_numeric(&kb)) {
+                (Some(x), Some(y)) => x.total_cmp(&y),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => ka.to_lowercase().cmp(&kb.to_lowercase()),
             };
             if desc { o.reverse() } else { o }
         });
@@ -766,7 +799,13 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
     let f = p::str(v, "formula").unwrap_or("=SUM(ABOVE)").to_ascii_uppercase();
     let t = s.doc.table(s.sel.focus.story, &tp).cloned().ok_or_else(|| CmdError::Failed("no table".into()))?;
-    let parse_num = |x: &wordcraft_doc::table::Cell| cell_text(x).trim().replace([',', '$', '€', '£'], "").parse::<f64>().ok();
+    let parse_num = |x: &wordcraft_doc::table::Cell| {
+        cell_text(x)
+            .trim()
+            .replace([',', '$', '€', '£', '৳', '¥', '%'], "")
+            .parse::<f64>()
+            .ok()
+    };
     let above: Vec<f64> = t.rows.iter().take(r).filter_map(|row| row.cells.get(c)).filter_map(parse_num).collect();
     let left: Vec<f64> = t.rows.get(r).map(|row| row.cells.iter().take(c).filter_map(parse_num).collect()).unwrap_or_default();
     let right: Vec<f64> = t.rows.get(r).map(|row| row.cells.iter().skip(c + 1).filter_map(parse_num).collect()).unwrap_or_default();
@@ -787,18 +826,23 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     } else {
         below
     };
-    let val = if f.starts_with("=AVERAGE") {
-        if nums.is_empty() { 0.0 } else { nums.iter().sum::<f64>() / nums.len() as f64 }
-    } else if f.starts_with("=COUNT") {
-        nums.len() as f64
-    } else if f.starts_with("=MAX") {
-        nums.iter().copied().fold(f64::MIN, f64::max)
-    } else if f.starts_with("=MIN") {
-        nums.iter().copied().fold(f64::MAX, f64::min)
-    } else if f.starts_with("=PRODUCT") {
-        nums.iter().product()
-    } else {
-        nums.iter().sum()
+    let func_name = f.trim_start_matches('=').trim().split(['(', ' ']).next().unwrap_or("UNKNOWN");
+    let val = match func_name {
+        "AVERAGE" => {
+            if nums.is_empty() { 0.0 } else { nums.iter().sum::<f64>() / nums.len() as f64 }
+        }
+        "COUNT" => nums.len() as f64,
+        "MAX" => {
+            if nums.is_empty() { 0.0 } else { nums.iter().copied().fold(f64::NEG_INFINITY, f64::max) }
+        }
+        "MIN" => {
+            if nums.is_empty() { 0.0 } else { nums.iter().copied().fold(f64::INFINITY, f64::min) }
+        }
+        "PRODUCT" => {
+            if nums.is_empty() { 1.0 } else { nums.iter().product() }
+        }
+        "SUM" => nums.iter().sum(),
+        _ => return Err(CmdError::Failed(format!("unknown formula function `{func_name}`"))),
     };
     let text = if val.fract() == 0.0 && val.abs() < 1e15 { format!("{}", val as i64) } else { format!("{val:.2}") };
     let props = s.typing_props();

@@ -2814,3 +2814,57 @@ fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
 }
+
+#[test]
+fn del_col_multi_column_selection() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    run(&mut s, "table.selectRange", json!({"r0": 0, "c0": 0, "r1": 2, "c1": 1}));
+    run(&mut s, "table.deleteColumn", json!({}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    let t = s.doc.table(StoryRef::Body, &tp).unwrap();
+    assert_eq!(t.grid.len(), 1);
+    for row in &t.rows {
+        assert_eq!(row.cells.len(), 1);
+    }
+}
+
+#[test]
+fn backspace_after_nested_table_scoped_to_parent_cell() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let after_nested = Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 0, 1]), off: 0 };
+    run(&mut s, "caret.set", json!({"pos": after_nested}));
+    run(&mut s, "text.backspace", json!({}));
+    let cell = s.sel.focus.path.cell().expect("caret should be in a table cell");
+    assert_eq!(cell.0.0, vec![0, 0, 0, 0], "caret must stay inside the nested table");
+}
+
+#[test]
+fn table_sort_total_order_and_currency() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 5, "cols": 1}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    let values = ["$100", "$9", "$20", "abc", "10"];
+    for (r, val) in values.iter().enumerate() {
+        let t = s.doc.table_mut(StoryRef::Body, &tp).unwrap();
+        t.rows[r].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(*val, Default::default()))];
+    }
+    run(&mut s, "table.sort", json!({"column": 0, "descending": false, "header": false}));
+    let t = s.doc.table(StoryRef::Body, &tp).unwrap();
+    let result: Vec<String> = t
+        .rows
+        .iter()
+        .map(|r| r.cells[0].blocks.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join(""))
+        .collect();
+    assert_eq!(result, vec!["$9", "10", "$20", "$100", "abc"]);
+}
+
+#[test]
+fn table_formula_unknown_function_errors() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 1}));
+    let res = s.run("table.formula", &json!({"formula": "=MEDIAN(ABOVE)"}));
+    assert!(res.is_err(), "expected error for unknown formula function, got: {res:?}");
+}
