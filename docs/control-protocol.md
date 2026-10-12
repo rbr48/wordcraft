@@ -67,4 +67,7 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
 Any other method name is treated as a command id: `{"method": "format.bold"}` works.
 
+The `CharProps` and `ParaProps` that `format.set`, `para.set` and `styles.modify` take are listed
+in [MCP server](mcp.md#character-and-paragraph-properties).
+
 Positions are `{"story": "body" | {"part": n}, "path": [block, row, cell, block, …], "off": byteOffset}`.
