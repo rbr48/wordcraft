@@ -797,6 +797,10 @@ pub struct TableProps {
     /// Floating placement (`w:tblpPr`); `None` for a table in the text flow.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub float: Option<TableFloat>,
+    /// Right-to-left table (`w:bidiVisual`): the first column is on the right, and the cells'
+    /// left and right sides, the indent and the alignment are read from the right edge.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub rtl: bool,
     /// Tracked formatting change (`w:tblPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<TableProps>>>,

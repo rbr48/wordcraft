@@ -222,7 +222,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path"?: "0.1", "r0"?: n, "c0"?: n, "r1"?: n, "c1"?: n}"#)
         .pure(),
         t(CommandSpec::new("table.properties", "Properties", "Table Layout › Table", properties).params(
-            r#"{"align"?: "left|center|right", "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "cellSpacing"?: pt|null, "altText"?: string, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom"} (row, column and cell settings apply to the caret's; without settings it returns the current ones)"#,
+            r#"{"align"?: "left|center|right", "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "cellSpacing"?: pt|null, "altText"?: string, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom", "rightToLeft"?: bool} (row, column and cell settings apply to the caret's; without settings it returns the current ones)"#,
         )),
         CommandSpec::new("table.position", "Table Positioning", "Table Layout › Table", position)
             .params(r#"{"floating"?: bool, "hRel"?: "column|margin|page", "hAlign"?: "left|center|right", "x"?: pt, "vRel"?: "paragraph|margin|page", "vAlign"?: "top|center|bottom", "y"?: pt, "dist"?: [left, top, right, bottom] pt, "overlap"?: bool} (floating: false puts the table back in the text)"#),
@@ -414,6 +414,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
         "columnWidth",
         "cellWidth",
         "valign",
+        "rightToLeft",
     ];
     if !keys.iter().any(|k| v.get(*k).is_some()) {
         let t = s.doc.table(s.sel.focus.story, &tp).cloned().unwrap_or_default();
@@ -465,6 +466,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     let header = p::bool(v, "headerRow");
     let column_width = p::f32(v, "columnWidth").map(|x| x.clamp(6.0, 1584.0));
     let cell_width = size("cellWidth", 6.0, 1584.0);
+    let rtl = p::bool(v, "rightToLeft");
     let text_width = super::page::sect(s).text_width();
     with_table(s, |t| {
         if let Some(a) = align {
@@ -475,6 +477,9 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
         }
         if let Some(sp) = cell_spacing {
             t.props.cell_spacing = sp;
+        }
+        if let Some(r) = rtl {
+            t.props.rtl = r;
         }
         if let Some(a) = &alt_text {
             t.props.caption = (!a.is_empty()).then(|| a.clone());

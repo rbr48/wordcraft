@@ -313,6 +313,7 @@ impl PropCtx {
                         f.overlap = k.attr("w:val") != Some("never");
                     }
                 }
+                "w:bidiVisual" => t.rtl = on_off(k),
                 "w:tblCaption" => t.caption = k.attr("w:val").map(str::to_string),
                 "w:tblDescription" if t.caption.is_none() => t.caption = k.attr("w:val").map(str::to_string),
                 _ => {}

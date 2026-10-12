@@ -1018,3 +1018,58 @@ fn formulas_that_read_each_other_in_a_circle_stop_updating() {
     run(&mut s, "references.updateFields", json!({}));
     assert!(field_result(table(&s), 1, 1).is_some());
 }
+
+/// The page rectangles of row `r`'s cells, by cell index.
+fn row_cell_rects(s: &mut Session, r: usize) -> Vec<(usize, wordcraft_geom::Rect)> {
+    let l = s.layout();
+    let mut out: Vec<(usize, wordcraft_geom::Rect)> = l
+        .pages
+        .iter()
+        .flat_map(|pg| pg.items.iter())
+        .filter_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row, cell, table, .. } if *row == r && table.0.len() == 1 => Some((*cell, *rect)),
+            _ => None,
+        })
+        .collect();
+    out.sort_by_key(|x| x.0);
+    out
+}
+
+#[test]
+fn a_right_to_left_table_puts_its_first_column_on_the_right() {
+    let mut s = s();
+    matrix(&mut s);
+    let ltr = row_cell_rects(&mut s, 1);
+    assert!(ltr.windows(2).all(|w| w[0].1.x < w[1].1.x), "left to right first");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 1, 1, 0], "off": 0}}));
+    run(&mut s, "table.properties", json!({"rightToLeft": true}));
+    assert!(table(&s).props.rtl);
+    let rtl = row_cell_rects(&mut s, 1);
+    assert_eq!(rtl.len(), 4);
+    assert!(rtl.windows(2).all(|w| w[0].1.x > w[1].1.x), "cell 0 is the rightmost: {rtl:?}");
+    // The same columns, mirrored: the table's extent doesn't change for a table that fills the
+    // text column.
+    let span = |v: &[(usize, wordcraft_geom::Rect)]| {
+        let lo = v.iter().map(|x| x.1.x).fold(f32::MAX, f32::min);
+        let hi = v.iter().map(|x| x.1.right()).fold(f32::MIN, f32::max);
+        hi - lo
+    };
+    assert!((span(&ltr) - span(&rtl)).abs() < 0.5);
+    assert!((ltr[0].1.w - rtl[0].1.w).abs() < 0.01, "each column keeps its width");
+}
+
+#[test]
+fn a_right_to_left_table_survives_a_docx_round_trip() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 1, 1, 0], "off": 0}}));
+    run(&mut s, "table.properties", json!({"rightToLeft": true}));
+    let bytes = wordcraft_docx::write(&s.doc).unwrap_or_else(|e| panic!("{e}"));
+    let back = wordcraft_docx::read(&bytes).unwrap_or_else(|e| panic!("{e}"));
+    let t = back.body.iter().find_map(|b| b.as_table()).unwrap_or_else(|| panic!("no table"));
+    assert!(t.props.rtl);
+    // Turning it off writes no bidiVisual.
+    run(&mut s, "table.properties", json!({"rightToLeft": false}));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap_or_else(|e| panic!("{e}"))).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!back.body.iter().find_map(|b| b.as_table()).is_some_and(|t| t.props.rtl));
+}
