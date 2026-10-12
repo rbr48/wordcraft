@@ -1018,6 +1018,44 @@ fn empty_row_end_marks_close_rows_without_a_cell() {
     assert_eq!(doc.body.last().and_then(|b| b.as_para()).map(|p| p.text.as_str()), Some("tail"));
 }
 
+/// Each row of a table is laid out on its own grid in Word. A row with two cells over a grid
+/// whose first column is the second row's first two columns spans them: the table has the
+/// union of the rows' columns, and nothing lands in the wrong column.
+#[test]
+fn rows_with_their_own_grids_span_the_table_columns() {
+    let two = t_def_table(&[0, 2880, 5760]);
+    let three = t_def_table(&[0, 1440, 2880, 5760]);
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let row_end = |def: &Vec<u8>| [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), def.clone()].concat();
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}e\u{7}tail\r";
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),
+            (2, 0, row_end(&two)),
+            (4, 0, in_tbl.clone()),
+            (6, 0, in_tbl),
+            (8, 0, row_end(&three)),
+            (10, 0, Vec::new()),
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.grid, vec![72.0, 72.0, 144.0], "the union of the rows' columns");
+    assert_eq!(tbl.rows[0].cells.iter().map(|c| c.props.span).collect::<Vec<_>>(), vec![2, 1]);
+    assert_eq!(tbl.rows[1].cells.iter().map(|c| c.props.span).collect::<Vec<_>>(), vec![1, 1, 1]);
+    assert_eq!(tbl.rows[0].cells[0].props.width, Some(144.0));
+}
+
 /// Word stores a row end's grpprl in the Data stream when it is too big for the FKP
 /// (`sprmPHugePapx`). Without following it the row never ends: every following row ran into
 /// one 46-cell row in a real appraisal form, and its 7 pages became 19.
