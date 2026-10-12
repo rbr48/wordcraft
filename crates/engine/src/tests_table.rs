@@ -1241,3 +1241,68 @@ fn autofit_to_window_in_a_nested_table_fills_its_cell_not_the_page() {
     let span = inner.iter().map(|r| r.right()).fold(f32::MIN, f32::max) - inner.iter().map(|r| r.x).fold(f32::MAX, f32::min);
     assert!(span > outer.w - 20.0, "and fills it: {span} of {}", outer.w);
 }
+
+/// Every cell box on every page: (page, table path, row, cell, rect).
+fn cell_boxes(s: &mut Session) -> Vec<(usize, wordcraft_doc::Path, usize, usize, wordcraft_geom::Rect)> {
+    let l = s.layout();
+    let mut out = Vec::new();
+    for (pi, pg) in l.pages.iter().enumerate() {
+        for it in &pg.items {
+            if let wordcraft_layout::Placed::Cell { rect, table, row, cell, .. } = it {
+                out.push((pi, table.clone(), *row, *cell, *rect));
+            }
+        }
+    }
+    out
+}
+
+/// Where a click at the middle of `r` (low part when `low`) on page `pi` puts the caret.
+fn click(s: &mut Session, pi: usize, r: wordcraft_geom::Rect, low: bool) -> wordcraft_doc::Pos {
+    let y = if low { r.bottom() - 3.0 } else { r.y + r.h / 2.0 };
+    let l = s.layout();
+    l.hit(pi, r.x + r.w / 2.0, y, wordcraft_doc::StoryRef::Body).unwrap_or_else(|| panic!("no hit at {r:?}"))
+}
+
+#[test]
+fn a_click_low_in_a_vertically_merged_cell_lands_in_it() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 1, "r1": 3, "c1": 1}));
+    run(&mut s, "table.merge", json!({}));
+    let merged = cell_boxes(&mut s).into_iter().find(|b| b.1.0 == [1] && (b.2, b.3) == (1, 1)).unwrap_or_else(|| panic!("no merged cell"));
+    // Low in the merged cell is beside row 3, yet the caret goes into the merged cell's text.
+    let pos = click(&mut s, merged.0, merged.4, true);
+    let (_, r, c) = pos.path.cell().unwrap_or_else(|| panic!("not in a cell: {pos:?}"));
+    assert_eq!((r, c), (1, 1), "the merged cell (row 1), not a continuation: {pos:?}");
+}
+
+#[test]
+fn a_click_in_a_nested_table_lands_in_its_cell() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let inner = cell_boxes(&mut s).into_iter().find(|b| b.1.0.len() > 1 && (b.2, b.3) == (1, 1)).unwrap_or_else(|| panic!("no nested cell"));
+    let pos = click(&mut s, inner.0, inner.4, false);
+    let (tp, r, c) = pos.path.cell().unwrap_or_else(|| panic!("not in a cell"));
+    assert_eq!((tp, r, c), (inner.1.clone(), 1, 1), "{pos:?}");
+}
+
+#[test]
+fn a_click_on_the_part_of_a_row_carried_to_the_next_page_lands_in_that_row() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    // The second row holds more lines than a page: it splits across pages.
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0, 1, 0, 0], "off": 0}}));
+    for _ in 0..80 {
+        run(&mut s, "text.insert", json!({"text": "line"}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    let boxes = cell_boxes(&mut s);
+    let later =
+        boxes.iter().find(|b| b.0 == 1 && b.1.0 == [0] && (b.2, b.3) == (1, 0)).cloned().unwrap_or_else(|| panic!("row 1 doesn't reach page 2"));
+    let pos = click(&mut s, later.0, later.4, false);
+    let (_, r, c) = pos.path.cell().unwrap_or_else(|| panic!("not in a cell: {pos:?}"));
+    assert_eq!((r, c), (1, 0), "{pos:?}");
+    let block = pos.path.0.get(3).copied().unwrap_or(0);
+    assert!(block > 20, "a paragraph from the part on page 2, not the row's start: {pos:?}");
+}
