@@ -1860,7 +1860,7 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             }
         });
         big(ui, app, "textDirection", "Text\nDirection", "table.textDirection", json!({}), false);
-        big(ui, app, "cellMargins", "Cell\nMargins", "table.cellMargins", json!({}), false);
+        big(ui, app, "cellMargins", "Cell\nMargins", "ui.dialog", json!({"name": "cellMargins"}), false);
     });
     group(ui, "Data", None, app, |ui, app| {
         big(ui, app, "sort", "Sort", "table.sort", json!({}), false);

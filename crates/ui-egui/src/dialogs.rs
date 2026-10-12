@@ -242,6 +242,13 @@ pub enum Dialog {
         #[serde(skip)]
         basis: Box<TableForm>,
     },
+    /// Table Layout › Alignment › Cell Margins: top, left, bottom, right in interface units.
+    CellMargins {
+        top: f32,
+        left: f32,
+        bottom: f32,
+        right: f32,
+    },
     /// Opening a password-protected document (#55): the password, then `file.open` with
     /// `params` again. The password is never serialised or printed.
     Password {
@@ -672,6 +679,7 @@ impl Dialog {
             Dialog::MatchFields { .. } => "matchFields",
             Dialog::CheckErrors { .. } => "checkErrors",
             Dialog::TableProperties { .. } => "tableProperties",
+            Dialog::CellMargins { .. } => "cellMargins",
             Dialog::Password { .. } => "password",
             Dialog::EncryptPassword { .. } => "encryptPassword",
             Dialog::DefineList { .. } => "defineList",
@@ -801,6 +809,14 @@ impl Dialog {
             "tableProperties" => {
                 let form = Box::new(TableForm::read(app)?);
                 Dialog::TableProperties { basis: form.clone(), form }
+            }
+            "cellMargins" => {
+                let s = &app.session;
+                let (tp, _, _) = s.sel.focus.path.cell()?;
+                let t = s.doc.table(s.sel.focus.story, &tp)?;
+                let k = wordcraft_geom::Unit::default().pt_per_unit();
+                let m = t.props.cell_margins.unwrap_or([0.0, 5.4, 0.0, 5.4]);
+                Dialog::CellMargins { top: m[0] / k, left: m[1] / k, bottom: m[2] / k, right: m[3] / k }
             }
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "about" => Dialog::About { tab: 0 },
@@ -988,6 +1004,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::MatchFields { .. } => "Match Fields",
         Dialog::CheckErrors { .. } => "Check for Errors",
         Dialog::TableProperties { .. } => "Table Properties",
+        Dialog::CellMargins { .. } => "Cell Margins",
         Dialog::Password { .. } => "Password",
         Dialog::EncryptPassword { .. } => "Encrypt with Password",
         Dialog::DefineList { .. } => "Define New Multilevel List",
@@ -1350,6 +1367,39 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if changes.as_object().is_some_and(|m| !m.is_empty()) {
                     let _ = app.run("table.properties", changes);
                 }
+            }
+            ok || cancel
+        }
+        Dialog::CellMargins { top, left, bottom, right } => {
+            let unit = wordcraft_geom::Unit::default();
+            let k = unit.pt_per_unit();
+            ui.label(egui::RichText::new(tl!("Default cell margins")).font(semibold(12.5)));
+            ui.add_space(4.0);
+            egui::Grid::new("cm_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Top:"));
+                ui.add(egui::DragValue::new(top).speed(0.01).range(0.0..=2.0).suffix(unit.suffix()).max_decimals(2));
+                ui.end_row();
+                ui.label(tl!("Bottom:"));
+                ui.add(egui::DragValue::new(bottom).speed(0.01).range(0.0..=2.0).suffix(unit.suffix()).max_decimals(2));
+                ui.end_row();
+                ui.label(tl!("Left:"));
+                ui.add(egui::DragValue::new(left).speed(0.01).range(0.0..=2.0).suffix(unit.suffix()).max_decimals(2));
+                ui.end_row();
+                ui.label(tl!("Right:"));
+                ui.add(egui::DragValue::new(right).speed(0.01).range(0.0..=2.0).suffix(unit.suffix()).max_decimals(2));
+                ui.end_row();
+            });
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let _ = app.run(
+                    "table.cellMargins",
+                    json!({
+                        "top": *top * k,
+                        "bottom": *bottom * k,
+                        "left": *left * k,
+                        "right": *right * k,
+                    }),
+                );
             }
             ok || cancel
         }

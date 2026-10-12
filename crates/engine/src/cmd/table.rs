@@ -76,29 +76,34 @@ pub fn specs() -> Vec<CommandSpec> {
         t(CommandSpec::new("table.borders", "Borders", "Table Design › Borders", borders)
             .params(r#"{"kind": "all|outside|inside|none|top|bottom|left|right", "width"?: pt, "color"?: "RRGGBB"}"#)),
         t(CommandSpec::new("table.cellAlign", "Alignment", "Table Layout › Alignment", |s, v| {
-            let (h, va) = match p::str(v, "value").unwrap_or("topLeft") {
-                "topLeft" => (Align::Left, VAlign::Top),
-                "topCenter" => (Align::Center, VAlign::Top),
-                "topRight" => (Align::Right, VAlign::Top),
-                "centerLeft" => (Align::Left, VAlign::Center),
-                "center" => (Align::Center, VAlign::Center),
-                "centerRight" => (Align::Right, VAlign::Center),
-                "bottomLeft" => (Align::Left, VAlign::Bottom),
-                "bottomCenter" => (Align::Center, VAlign::Bottom),
-                "bottomRight" => (Align::Right, VAlign::Bottom),
+            let (h, va): (Option<Align>, VAlign) = match p::str(v, "value").unwrap_or("topLeft") {
+                "topLeft" => (Some(Align::Left), VAlign::Top),
+                "topCenter" => (Some(Align::Center), VAlign::Top),
+                "topRight" => (Some(Align::Right), VAlign::Top),
+                "centerLeft" => (Some(Align::Left), VAlign::Center),
+                "center" => (Some(Align::Center), VAlign::Center),
+                "centerRight" => (Some(Align::Right), VAlign::Center),
+                "bottomLeft" => (Some(Align::Left), VAlign::Bottom),
+                "bottomCenter" => (Some(Align::Center), VAlign::Bottom),
+                "bottomRight" => (Some(Align::Right), VAlign::Bottom),
+                "top" => (None, VAlign::Top),
+                "vcenter" => (None, VAlign::Center),
+                "bottom" => (None, VAlign::Bottom),
                 x => return Err(CmdError::Params(format!("unknown alignment `{x}`"))),
             };
             with_cells(s, |cl| {
                 cl.props.valign = va;
-                for b in &mut cl.blocks {
-                    if let Block::Para(p) = std::sync::Arc::make_mut(b) {
-                        p.props.align = Some(h);
-                        p.touch();
+                if let Some(h) = h {
+                    for b in &mut cl.blocks {
+                        if let Block::Para(p) = std::sync::Arc::make_mut(b) {
+                            p.props.align = Some(h);
+                            p.touch();
+                        }
                     }
                 }
             })
         })
-        .params(r#"{"value": "topLeft|topCenter|…|bottomRight"}"#)),
+        .params(r#"{"value": "topLeft|topCenter|…|bottomRight|top|vcenter|bottom"}"#)),
         t(CommandSpec::new("table.textDirection", "Text Direction", "Table Layout › Alignment", text_direction)
             .params(r#"{"value"?: "horizontal|down|up"} (default: the next direction after the caret cell's, like Word's button)"#)),
         t(CommandSpec::new("table.autofit", "AutoFit", "Table Layout › Cell Size", autofit).params(r#"{"mode": "contents|window|fixed"}"#)),
@@ -241,15 +246,17 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path"?: "0.1", "row"?: n}"#)
         .pure(),
         CommandSpec::new("table.selectColumn", "Select Column", "Table Layout › Table › Select", |s, v| {
-            let (tp, c) = if let Some(p_str) = p::str(v, "path") {
+            let (tp, g) = if let Some(p_str) = p::str(v, "path") {
                 let path = parse_path(p_str)?;
                 let col_idx = p::u64(v, "col").unwrap_or(0) as usize;
                 (path, col_idx)
             } else {
-                let (path, _, col_idx) = cell(s)?;
-                (path, col_idx)
+                let (path, row_idx, col_idx) = cell(s)?;
+                let story = s.sel.focus.story;
+                let g = s.doc.table(story, &path).map(|t| t.grid_col(row_idx, col_idx)).unwrap_or(col_idx);
+                (path, g)
             };
-            select_column_cells(s, &tp, c)
+            select_column_cells(s, &tp, g)
         })
         .params(r#"{"path"?: "0.1", "col"?: n}"#)
         .pure(),
@@ -334,12 +341,14 @@ pub(crate) fn sync_cell_widths(t: &mut Table) {
 /// goes, so the layout doesn't scale the column back.
 fn set_column_width(t: &mut Table, r: usize, c: usize, w: f32, adjust_next: bool) {
     let g = t.grid_col(r, c);
-    if let Some(x) = t.grid.get_mut(g) {
+    let span = t.rows.get(r).and_then(|row| row.cells.get(c)).map(|cell| cell.span()).unwrap_or(1);
+    let boundary_g = g.saturating_add(span).saturating_sub(1);
+    if let Some(x) = t.grid.get_mut(boundary_g) {
         let old_w = *x;
         let delta = w - old_w;
         *x = w;
-        if adjust_next && g + 1 < t.grid.len() {
-            if let Some(next_x) = t.grid.get_mut(g + 1) {
+        if adjust_next && boundary_g + 1 < t.grid.len() {
+            if let Some(next_x) = t.grid.get_mut(boundary_g + 1) {
                 *next_x = (*next_x - delta).max(6.0);
             }
         } else {
@@ -478,6 +487,29 @@ fn selected_cells(s: &Session) -> Vec<(usize, usize)> {
         return vec![(rb, cb)];
     }
     let (r0, r1) = (ra.min(rb), ra.max(rb));
+    if let Some(t) = s.doc.table(s.sel.focus.story, &ta) {
+        let span_a = t.rows.get(ra).and_then(|r| r.cells.get(ca)).map(|c| c.span()).unwrap_or(1);
+        let span_b = t.rows.get(rb).and_then(|r| r.cells.get(cb)).map(|c| c.span()).unwrap_or(1);
+        let ga = t.grid_col(ra, ca);
+        let gb = t.grid_col(rb, cb);
+        let g0 = ga.min(gb);
+        let g1 = (ga + span_a - 1).max(gb + span_b - 1);
+        let mut v = Vec::new();
+        for r in r0..=r1 {
+            let mut seen_in_row = std::collections::BTreeSet::new();
+            for g in g0..=g1 {
+                if let Some(c) = t.cell_at_grid(r, g) {
+                    seen_in_row.insert(c);
+                }
+            }
+            for c in seen_in_row {
+                v.push((r, c));
+            }
+        }
+        if !v.is_empty() {
+            return v;
+        }
+    }
     let (c0, c1) = (ca.min(cb), ca.max(cb));
     let mut v = Vec::new();
     for r in r0..=r1 {
@@ -776,14 +808,15 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"result": text}))
 }
 
-pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: usize, c1: usize) -> CmdResult {
+pub fn select_grid_range(s: &mut Session, tp: &Path, min_r: usize, min_g: usize, max_r: usize, max_g: usize) -> CmdResult {
     let story = s.sel.focus.story;
     let Some(t) = s.doc.table(story, tp) else { return sel_result(s) };
     if t.rows.is_empty() {
         return sel_result(s);
     }
-    let (min_r, max_r) = (r0.min(r1), r0.max(r1).min(t.rows.len().saturating_sub(1)));
-    let (min_c, max_c) = (c0.min(c1), c0.max(c1));
+    let max_r = max_r.min(t.rows.len().saturating_sub(1));
+    let (min_r, max_r) = (min_r.min(max_r), max_r);
+    let (min_g, max_g) = (min_g.min(max_g), min_g.max(max_g));
 
     let all_paths = s.doc.para_paths(story);
     let mut segments = Vec::new();
@@ -792,9 +825,17 @@ pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: u
         if row.cells.is_empty() {
             continue;
         }
-        let actual_c0 = min_c.min(row.cells.len().saturating_sub(1));
-        let actual_c1 = max_c.min(row.cells.len().saturating_sub(1));
-        for c in actual_c0..=actual_c1 {
+        let mut seen_cells = std::collections::BTreeSet::new();
+        for g in min_g..=max_g {
+            if let Some(c) = t.cell_at_grid(r, g) {
+                seen_cells.insert(c);
+            }
+        }
+        if seen_cells.is_empty() {
+            let last_c = row.cells.len().saturating_sub(1);
+            seen_cells.insert(last_c);
+        }
+        for c in seen_cells {
             let mut a = tp.0.clone();
             a.extend([r as u32, c as u32, 0]);
             let mut b = tp.0.clone();
@@ -822,12 +863,34 @@ pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: u
     sel_result(s)
 }
 
+pub fn select_cell_range(s: &mut Session, tp: &Path, r0: usize, c0: usize, r1: usize, c1: usize) -> CmdResult {
+    let story = s.sel.focus.story;
+    let Some(t) = s.doc.table(story, tp) else { return sel_result(s) };
+    if t.rows.is_empty() {
+        return sel_result(s);
+    }
+    let (min_r, max_r) = (r0.min(r1), r0.max(r1).min(t.rows.len().saturating_sub(1)));
+
+    // Convert cell coordinates (r0, c0) and (r1, c1) to grid columns so selections on
+    // rows with horizontally merged cells remain strictly aligned.
+    let g0 = t.grid_col(r0, c0);
+    let g1 = if c1 == usize::MAX {
+        t.grid.len().saturating_sub(1)
+    } else {
+        let span = t.rows.get(r1).and_then(|r| r.cells.get(c1)).map(|c| c.span()).unwrap_or(1);
+        t.grid_col(r1, c1).saturating_add(span).saturating_sub(1)
+    };
+    let (min_g, max_g) = (g0.min(g1), g0.max(g1));
+    select_grid_range(s, tp, min_r, min_g, max_r, max_g)
+}
+
 fn select_cells(s: &mut Session, tp: &Path, which: Option<(usize, Option<usize>)>) -> CmdResult {
     let story = s.sel.focus.story;
     let Some(t) = s.doc.table(story, tp) else { return sel_result(s) };
+    let max_g = t.grid.len().saturating_sub(1);
     match which {
-        None => select_cell_range(s, tp, 0, 0, t.rows.len().saturating_sub(1), usize::MAX),
-        Some((r, None)) => select_cell_range(s, tp, r, 0, r, usize::MAX),
+        None => select_grid_range(s, tp, 0, 0, t.rows.len().saturating_sub(1), max_g),
+        Some((r, None)) => select_grid_range(s, tp, r, 0, r, max_g),
         Some((r, Some(c))) => select_cell_range(s, tp, r, c, r, c),
     }
 }
@@ -835,7 +898,12 @@ fn select_cells(s: &mut Session, tp: &Path, which: Option<(usize, Option<usize>)
 fn select_column_cells(s: &mut Session, tp: &Path, col: usize) -> CmdResult {
     let story = s.sel.focus.story;
     let Some(t) = s.doc.table(story, tp) else { return sel_result(s) };
-    select_cell_range(s, tp, 0, col, t.rows.len().saturating_sub(1), col)
+    if t.rows.is_empty() {
+        return sel_result(s);
+    }
+    let max_g = t.grid.len().saturating_sub(1);
+    let g = col.min(max_g);
+    select_grid_range(s, tp, 0, g, t.rows.len().saturating_sub(1), g)
 }
 
 fn from_text(s: &mut Session, v: &Value) -> CmdResult {

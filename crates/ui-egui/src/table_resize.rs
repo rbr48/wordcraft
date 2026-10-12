@@ -195,9 +195,21 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
                     ));
                 }
 
-                // Row bottom border.
+                // Row bottom border (skip vertically merged continuation cells whose bottom is not an actual cell bottom).
+                let is_vmerge_cont = app
+                    .session
+                    .doc
+                    .table(story, table)
+                    .and_then(|t| t.rows.get(*row))
+                    .and_then(|r| r.cells.get(*cell))
+                    .is_some_and(|c| c.props.vmerge == wordcraft_doc::props::VMerge::Continue);
                 let dist_y = (at.y - cy1).abs();
-                if dist_y <= BORDER_THRESHOLD && at.x >= cx0 - 2.0 && at.x <= cx1 + 2.0 && best.as_ref().is_none_or(|(_, d)| dist_y < *d) {
+                if !is_vmerge_cont
+                    && dist_y <= BORDER_THRESHOLD
+                    && at.x >= cx0 - 2.0
+                    && at.x <= cx1 + 2.0
+                    && best.as_ref().is_none_or(|(_, d)| dist_y < *d)
+                {
                     best = Some((
                         TableGrab::Row { path: table.clone(), row: *row, start_h: rect.h, start_y: at.y, border_y: cy1, x0: table_x0, x1: table_x1 },
                         dist_y,

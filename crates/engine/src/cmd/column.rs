@@ -145,7 +145,7 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
             super::sel_result(s)
         }
         "format.changeCase" | "format.clear" => per_row(s, run, v, &segs),
-        _ if id.starts_with("format.") || id.starts_with("para.") || id == "select.column" => run(s, v),
+        _ if id.starts_with("format.") || id.starts_with("para.") || id.starts_with("table.") || id == "select.column" => run(s, v),
         _ if mutates && (id.starts_with("text.") || id.starts_with("edit.paste")) => {
             delete(s, &segs)?;
             run(s, v)

@@ -721,6 +721,25 @@ fn table_selection_range_and_headers() {
     assert!(!s.sel.is_collapsed(), "table selection must not be collapsed");
     let segs = s.column_segments().expect("column_segments should be Some");
     assert_eq!(segs.len(), 9, "entire 3x3 table must have 9 cell segments");
+
+    // 6. Merged table range selection and column width adjustment
+    let mut s2 = self::s();
+    run(&mut s2, "insert.table", json!({"rows": 2, "cols": 4}));
+    let tp2 = s2.sel.focus.path.cell().unwrap().0;
+    // Merge cells 0 and 1 of row 0: (0,0) now spans 2 columns
+    run(&mut s2, "table.selectRange", json!({"path": tp2.to_string(), "r0": 0, "c0": 0, "r1": 0, "c1": 1}));
+    run(&mut s2, "table.merge", json!({}));
+    // Select column 1 (which starts at grid col 1 in row 1, but row 0 cell 0 spans grid 0..=1)
+    run(&mut s2, "table.selectColumn", json!({"path": tp2.to_string(), "col": 1}));
+    let segs2 = s2.column_segments().expect("column_segments should be Some on merged table");
+    assert_eq!(segs2.len(), 2, "selected column across 2 rows should have 2 cell segments");
+
+    // Adjust column width with adjustNext on merged cell (row 0, cell 0 which spans grid 0..=1)
+    let grid_before = s2.doc.body.iter().find_map(|b| b.as_table()).unwrap().grid.clone();
+    run(&mut s2, "table.columnWidth", json!({"path": tp2.to_string(), "row": 0, "col": 0, "width": 80.0, "adjustNext": true}));
+    let grid_after = s2.doc.body.iter().find_map(|b| b.as_table()).unwrap().grid.clone();
+    assert_eq!(grid_after[0], grid_before[0], "grid column 0 remains unchanged");
+    assert_eq!(grid_after[1], 80.0, "grid column 1 adjusted to 80");
 }
 
 /// AutoFit Contents (#44) measures the text: a column of short words narrows, a column with a
