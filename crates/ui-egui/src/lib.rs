@@ -150,10 +150,9 @@ pub struct UiState {
     pub ai_pane: bool,
     #[serde(skip)]
     pub ai_prompt: String,
+    /// The Copilot conversation (this session only).
     #[serde(skip)]
-    pub ai_response: String,
-    #[serde(skip)]
-    pub ai_mode: String,
+    pub ai_chat: Vec<copilot::ChatMsg>,
     #[serde(skip)]
     pub phonetic_buffer: String,
     #[serde(skip)]
@@ -185,9 +184,20 @@ pub struct UiState {
     /// Whether the AI Settings modal/popover is currently open.
     #[serde(skip)]
     pub ai_settings_open: bool,
-    /// Transient status or error message from AI execution.
-    #[serde(skip)]
-    pub ai_status: String,
+    /// Copilot settings, Response: randomness (0–2), the longest answer (tokens), the wait (s).
+    pub ai_temperature: f32,
+    pub ai_max_tokens: u32,
+    pub ai_timeout_s: u64,
+    /// Copilot settings, Writing: the answer language (`Auto`: the request's), the tone, and
+    /// standing instructions sent with every request.
+    pub ai_language: String,
+    pub ai_tone: String,
+    pub ai_custom_instructions: String,
+    /// Copilot settings, Document context: send the whole document when nothing is selected; the
+    /// most characters sent; carry the earlier conversation.
+    pub ai_whole_document: bool,
+    pub ai_max_chars: u32,
+    pub ai_remember_chat: bool,
 }
 
 impl Default for UiState {
@@ -215,8 +225,7 @@ impl Default for UiState {
             dark_page: false,
             ai_pane: false,
             ai_prompt: String::new(),
-            ai_response: String::new(),
-            ai_mode: "Draft".into(),
+            ai_chat: Vec::new(),
             phonetic_buffer: String::new(),
             phonetic_rendered_len: 0,
             phonetic_candidates: Vec::new(),
@@ -232,7 +241,15 @@ impl Default for UiState {
             ai_api_key: String::new(),
             ai_base_url: String::new(),
             ai_settings_open: false,
-            ai_status: String::new(),
+            ai_temperature: 0.7,
+            ai_max_tokens: 4096,
+            ai_timeout_s: 60,
+            ai_language: "Auto".into(),
+            ai_tone: "professional".into(),
+            ai_custom_instructions: String::new(),
+            ai_whole_document: true,
+            ai_max_chars: 120_000,
+            ai_remember_chat: true,
         }
     }
 }

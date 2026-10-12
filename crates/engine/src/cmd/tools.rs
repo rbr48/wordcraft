@@ -422,7 +422,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("tools.dictate", "Dictate", "Home › Voice", dictate).params(r#"{"text"?: string, "listening"?: bool}"#),
         CommandSpec::new("tools.copilot", "Copilot / AI Assistant", "Home › AI", copilot).params(
-            r#"{"action"?: "toggle|draft|rewrite|summarize|proofread|table|ask|autocomplete", "prompt"?: string, "instructions"?: string, "tone"?: string, "replace"?: bool, "insert"?: bool, "provider"?: string, "model"?: string, "api_key"?: string, "base_url"?: string}"#,
+            r#"{"action"?: "toggle|draft|rewrite|summarize|proofread|table|ask|autocomplete", "prompt"?: string, "instructions"?: string, "tone"?: string, "replace"?: bool, "insert"?: bool, "provider"?: string, "model"?: string, "api_key"?: string, "base_url"?: string, "temperature"?: n, "max_tokens"?: n, "timeout_s"?: n, "language"?: string, "custom_instructions"?: string, "scope"?: "auto|selection", "max_chars"?: n, "history"?: [{"role": "user|assistant", "text": string}]}"#,
         ),
         CommandSpec::new("ai.rewrite", "AI Rewrite", "Home › AI", ai_rewrite).params(
             r#"{"text"?: string, "tone"?: "concise|academic|executive|casual|professional", "replace"?: bool, "insert"?: bool}"#,
@@ -587,8 +587,16 @@ fn copilot(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// The most document text a Copilot request sends: a very long document is cut at a character
-/// boundary rather than sent whole.
+/// boundary rather than sent whole. Settings can lower it (`max_chars`), never raise it.
 const COPILOT_MAX_CHARS: usize = 120_000;
+/// The earlier chat a request carries: the last few messages, each and all cut short.
+const COPILOT_HISTORY_MESSAGES: usize = 10;
+const COPILOT_HISTORY_CHARS: usize = 4_000;
+
+/// What `/check-doc` asks the model.
+pub const CHECK_DOC_PROMPT: &str = "Check this document for problems: spelling and grammar mistakes, inconsistent names, \
+numbers, dates and amounts, missing or empty fields, and formatting inconsistencies. List each issue with where it is \
+and how to fix it.";
 
 /// One call to the user's AI provider, built from the document as it is now. The call itself
 /// ([`CopilotRequest::send`]) needs no `Session`, so the app makes it on a worker thread while the
@@ -604,49 +612,78 @@ pub struct CopilotRequest {
     pub base_url: Option<String>,
     pub system: String,
     pub user: String,
+    pub options: crate::ai_client::LlmOptions,
 }
 
 impl CopilotRequest {
-    /// Ask the provider (blocking, bounded by the client's timeout).
+    /// Ask the provider (blocking, bounded by the request's timeout).
     pub fn send(&self) -> Result<String, String> {
-        crate::ai_client::query_llm_api(&self.provider, &self.model, &self.api_key, self.base_url.as_deref(), &self.system, &self.user)
+        crate::ai_client::query_llm_api(&self.provider, &self.model, &self.api_key, self.base_url.as_deref(), &self.system, &self.user, &self.options)
     }
 }
 
-/// `text` cut to at most [`COPILOT_MAX_CHARS`] characters.
-fn copilot_text(text: String) -> String {
-    match text.char_indices().nth(COPILOT_MAX_CHARS) {
+/// `text` cut to at most `cap` characters.
+fn cut_chars(text: String, cap: usize) -> String {
+    match text.char_indices().nth(cap) {
         Some((cut, _)) => text.get(..cut).unwrap_or_default().to_string(),
         None => text,
     }
 }
 
+/// The earlier chat (`history`: `[{"role": "user"|"assistant", "text": …}]`), oldest first, as
+/// a transcript; empty when there is none.
+fn copilot_history(v: &Value) -> String {
+    let Some(items) = v.get("history").and_then(Value::as_array) else { return String::new() };
+    let start = items.len().saturating_sub(COPILOT_HISTORY_MESSAGES);
+    let mut out = String::new();
+    for m in items.iter().skip(start) {
+        let who = if m.get("role").and_then(Value::as_str) == Some("assistant") { "Assistant" } else { "User" };
+        let text = m.get("text").and_then(Value::as_str).unwrap_or("").trim();
+        if !text.is_empty() {
+            out.push_str(&format!("{who}: {}\n", cut_chars(text.to_string(), COPILOT_HISTORY_CHARS)));
+        }
+    }
+    out
+}
+
 /// The provider call `tools.copilot` makes for these params, or `None` when it answers offline
 /// (no API key, or an action the model isn't asked for: Table, Autocomplete).
+///
+/// Settings params: `temperature`, `max_tokens`, `timeout_s` (how the model generates);
+/// `language` (`auto` or a language name), `custom_instructions` (standing instructions);
+/// `scope` (`auto`: the selection, else the whole document; `selection`: only the selection);
+/// `max_chars` (the most document text sent); `history` (the chat so far).
 pub fn copilot_request(s: &Session, v: &Value) -> Option<CopilotRequest> {
     let api_key = p::str(v, "api_key").unwrap_or("").trim();
     let action = p::str(v, "action").unwrap_or("");
     if api_key.is_empty() || matches!(action, "table" | "autocomplete") || (action.is_empty() && p::str(v, "prompt").unwrap_or("").is_empty()) {
         return None;
     }
+    let cap = p::u64(v, "max_chars").map_or(COPILOT_MAX_CHARS, |c| (c.min(COPILOT_MAX_CHARS as u64) as usize).max(1_000));
+    let cut = |t: String| cut_chars(t, cap);
     let prompt = p::str(v, "prompt").unwrap_or("");
     let tone = p::str(v, "tone").unwrap_or("professional");
     // How to do it ("Key Takeaways", "keep it formal"): guidance for the model, not text to edit.
-    let guide = p::str(v, "instructions").map(|i| copilot_text(i.trim().to_string())).filter(|i| !i.is_empty());
-    let with_guide = |system: String| match &guide {
-        Some(g) => format!("{system}\n\nThe user's instructions: {g}"),
-        None => system,
-    };
-    // The selection, or the whole body when nothing is selected.
+    let guide = p::str(v, "instructions").map(|i| cut(i.trim().to_string())).filter(|i| !i.is_empty());
+    // The selection, or (scope `auto`) the whole body when nothing is selected.
+    let whole_doc = p::str(v, "scope") != Some("selection");
     let target = || {
         let sel = s.selected_text();
-        copilot_text(if !sel.trim().is_empty() { sel } else { s.doc.plain_text(StoryRef::Body) })
+        if !sel.trim().is_empty() {
+            cut(sel)
+        } else if whole_doc {
+            cut(s.doc.plain_text(StoryRef::Body))
+        } else {
+            String::new()
+        }
     };
-    let source = || if !prompt.is_empty() { copilot_text(prompt.to_string()) } else { target() };
+    let source = || if !prompt.is_empty() { cut(prompt.to_string()) } else { target() };
     let (system, user, title) = match action {
         "rewrite" => (
-            format!("You are an expert editing assistant. Rewrite the following text with a {tone} tone. Output ONLY the rewritten text without conversational commentary."),
-            if !prompt.is_empty() { copilot_text(prompt.to_string()) } else { copilot_text(s.selected_text()) },
+            format!(
+                "You are an expert editing assistant. Rewrite the following text with a {tone} tone. Output ONLY the rewritten text without conversational commentary."
+            ),
+            if !prompt.is_empty() { cut(prompt.to_string()) } else { cut(s.selected_text()) },
             "Rewrite",
         ),
         "summarize" => (
@@ -655,25 +692,49 @@ pub fn copilot_request(s: &Session, v: &Value) -> Option<CopilotRequest> {
             "Summary",
         ),
         "proofread" => (
-            "You are a professional proofreader. Correct all spelling, grammar, punctuation, and flow issues. Output the polished corrected text.".into(),
+            "You are a professional proofreader. Correct all spelling, grammar, punctuation, and flow issues. Output the polished corrected text."
+                .into(),
             source(),
             "Proofreading",
         ),
         "ask" => {
             let q = if !prompt.is_empty() { prompt } else { p::str(v, "question").unwrap_or("") };
+            let doc = target();
+            let context = if doc.is_empty() { String::new() } else { format!("Document text:\n{doc}\n\n") };
             (
-                "You are an intelligent document analyst. Answer the user's question accurately using the provided document context. Answer in the language of the question.".into(),
-                format!("Document text:\n{}\n\nUser question: {q}", target()),
-                "Ask Document",
+                "You are an intelligent document assistant. Answer the user's request accurately using the provided document context. When asked to write or change text, output text ready to paste into the document.".into(),
+                format!("{context}User request: {}", cut(q.to_string())),
+                "Answer",
             )
         }
         _ => (
-            "You are an expert document author. Draft articulate, ready-to-use document text following the prompt. Output clean prose without meta-commentary.".into(),
-            copilot_text(prompt.to_string()),
+            format!(
+                "You are an expert document author. Draft articulate, ready-to-use document text following the prompt in a {tone} tone. Output clean prose without meta-commentary."
+            ),
+            cut(prompt.to_string()),
             "Draft",
         ),
     };
-    let system = with_guide(system);
+    let mut system = system;
+    match p::str(v, "language").map(str::trim).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("auto")) {
+        Some(lang) => system.push_str(&format!("\n\nWrite your answer in {}.", cut_chars(lang.to_string(), 40))),
+        None => system.push_str("\n\nWrite your answer in the language of the user's request or text."),
+    }
+    if let Some(ci) = p::str(v, "custom_instructions").map(str::trim).filter(|c| !c.is_empty()) {
+        system.push_str(&format!("\n\nStanding instructions from the user: {}", cut_chars(ci.to_string(), COPILOT_HISTORY_CHARS)));
+    }
+    if let Some(g) = &guide {
+        system.push_str(&format!("\n\nThe user's instructions: {g}"));
+    }
+    let history = copilot_history(v);
+    let user = if history.is_empty() { user } else { format!("Conversation so far:\n{history}\n{user}") };
+    let defaults = crate::ai_client::LlmOptions::default();
+    let options = crate::ai_client::LlmOptions {
+        temperature: p::f32(v, "temperature").unwrap_or(defaults.temperature),
+        max_tokens: p::u64(v, "max_tokens").map_or(defaults.max_tokens, |t| t.min(u64::from(u32::MAX)) as u32),
+        timeout_s: p::u64(v, "timeout_s").unwrap_or(defaults.timeout_s),
+    }
+    .clamped();
     Some(CopilotRequest {
         action: if action.is_empty() { "draft".into() } else { action.into() },
         title: title.into(),
@@ -683,6 +744,7 @@ pub fn copilot_request(s: &Session, v: &Value) -> Option<CopilotRequest> {
         base_url: p::str(v, "base_url").filter(|u| !u.trim().is_empty()).map(str::to_string),
         system,
         user,
+        options,
     })
 }
 
@@ -2395,5 +2457,60 @@ mod tests {
         let mut s = Session::new(Document::from_text("Nothing selected here."));
         let e = s.run("tools.copilot", &json!({"action": "rewrite", "instructions": "Professional"}));
         assert!(e.is_err(), "rewriting nothing is an error, not an empty result");
+    }
+
+    #[test]
+    fn copilot_settings_shape_the_request() {
+        let s = Session::new(Document::from_text("ঋণের আবেদন মঞ্জুর।"));
+        let req = copilot_request(
+            &s,
+            &with_key(
+                "ask",
+                json!({
+                    "prompt": "Is the loan approved?",
+                    "language": "Bangla",
+                    "custom_instructions": "Use formal register.",
+                    "temperature": 0.2,
+                    "max_tokens": 900,
+                    "timeout_s": 45,
+                    "history": [{"role": "user", "text": "Hello"}, {"role": "assistant", "text": "Hi, how can I help?"}],
+                }),
+            ),
+        )
+        .unwrap();
+        assert!(req.system.contains("Write your answer in Bangla."));
+        assert!(req.system.contains("Use formal register."));
+        assert!(req.user.contains("User: Hello\nAssistant: Hi, how can I help?"), "{}", req.user);
+        assert_eq!(req.options, crate::ai_client::LlmOptions { temperature: 0.2, max_tokens: 900, timeout_s: 45 });
+    }
+
+    #[test]
+    fn copilot_hostile_settings_are_clamped() {
+        let s = Session::new(Document::from_text("Text"));
+        let req = copilot_request(
+            &s,
+            &with_key(
+                "draft",
+                json!({"prompt": "Memo", "temperature": 99.0, "max_tokens": 0, "timeout_s": 999_999, "max_chars": 1, "language": "x".repeat(500)}),
+            ),
+        )
+        .unwrap();
+        assert_eq!(req.options, crate::ai_client::LlmOptions { temperature: 2.0, max_tokens: 64, timeout_s: 300 });
+        assert!(req.system.len() < 2_000, "a long language name is cut");
+        // History beyond the last few messages is dropped, and long messages are cut.
+        let long: Vec<Value> = (0..50).map(|i| json!({"role": "user", "text": format!("m{i} {}", "y".repeat(10_000))})).collect();
+        let req = copilot_request(&s, &with_key("ask", json!({"prompt": "q", "history": long}))).unwrap();
+        assert!(!req.user.contains("m39 "));
+        assert!(req.user.contains("m40 "));
+        assert!(req.user.chars().count() < (COPILOT_HISTORY_MESSAGES + 1) * (COPILOT_HISTORY_CHARS + 20));
+    }
+
+    #[test]
+    fn copilot_selection_scope_sends_no_document_without_a_selection() {
+        let s = Session::new(Document::from_text("Private notes."));
+        let req = copilot_request(&s, &with_key("ask", json!({"prompt": "What is a lien?", "scope": "selection"}))).unwrap();
+        assert!(!req.user.contains("Private notes"));
+        let req = copilot_request(&s, &with_key("ask", json!({"prompt": "Summarize", "max_chars": 1000}))).unwrap();
+        assert!(req.user.contains("Private notes"));
     }
 }

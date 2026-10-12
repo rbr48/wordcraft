@@ -3,6 +3,31 @@
 //! Connects to OpenRouter, DeepSeek, Google Gemini, Anthropic Claude,
 //! and OpenAI-compatible endpoints with bounded timeouts and zero panics.
 
+/// How the provider generates: the Copilot settings' Response section.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LlmOptions {
+    /// Randomness, 0 (precise) to 2 (inventive); Anthropic's range stops at 1.
+    pub temperature: f32,
+    /// The longest answer, in tokens.
+    pub max_tokens: u32,
+    /// How long to wait for the answer, in seconds.
+    pub timeout_s: u64,
+}
+
+impl Default for LlmOptions {
+    fn default() -> Self {
+        LlmOptions { temperature: 0.7, max_tokens: 4096, timeout_s: 60 }
+    }
+}
+
+impl LlmOptions {
+    /// The same options with every value inside its range (they come from settings and params).
+    pub fn clamped(self) -> Self {
+        let temperature = if self.temperature.is_finite() { self.temperature.clamp(0.0, 2.0) } else { 0.7 };
+        LlmOptions { temperature, max_tokens: self.max_tokens.clamp(64, 32_768), timeout_s: self.timeout_s.clamp(10, 300) }
+    }
+}
+
 /// Queries an external LLM API provider synchronously.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn query_llm_api(
@@ -12,12 +37,13 @@ pub fn query_llm_api(
     base_url: Option<&str>,
     system_prompt: &str,
     user_prompt: &str,
+    opts: &LlmOptions,
 ) -> Result<String, String> {
     if api_key.trim().is_empty() {
         return Err("API key is empty".into());
     }
-
-    let timeout = std::time::Duration::from_secs(60);
+    let opts = opts.clamped();
+    let timeout = std::time::Duration::from_secs(opts.timeout_s);
     let provider_lower = provider.trim().to_lowercase();
 
     if provider_lower == "claude" || provider_lower == "anthropic" {
@@ -26,7 +52,8 @@ pub fn query_llm_api(
         let model_id = if model.trim().is_empty() { "claude-3-5-sonnet-20241022" } else { model.trim() };
         let body = serde_json::json!({
             "model": model_id,
-            "max_tokens": 4096,
+            "max_tokens": opts.max_tokens,
+            "temperature": opts.temperature.min(1.0),
             "system": system_prompt,
             "messages": [
                 {"role": "user", "content": user_prompt}
@@ -67,7 +94,8 @@ pub fn query_llm_api(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        "temperature": 0.7
+        "temperature": opts.temperature,
+        "max_tokens": opts.max_tokens
     });
 
     let mut req =
@@ -107,6 +135,7 @@ pub fn query_llm_api(
     _base_url: Option<&str>,
     _system_prompt: &str,
     _user_prompt: &str,
+    _opts: &LlmOptions,
 ) -> Result<String, String> {
     Err("Direct HTTP API calls are not supported on wasm32; use offline mode.".into())
 }
