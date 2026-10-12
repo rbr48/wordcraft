@@ -540,7 +540,7 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // Replace the current match if selected, then move to the next.
     if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
-        super::paste_text(s, &f.rep.unwrap_or_default())?;
+        super::type_text(s, &f.rep.unwrap_or_default())?;
     }
     let _ = step(s, 1);
     Ok(json!({"remaining": search(s, story)?.len()}))

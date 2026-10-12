@@ -61,7 +61,13 @@ pub fn specs() -> Vec<CommandSpec> {
             if w.is_empty() {
                 return Err(CmdError::Params("no word".into()));
             }
-            wordcraft_proof::add_word(&w);
+            // The same rule as loading the dictionary file, so a word added is never dropped later.
+            if wordcraft_proof::custom_word(&w).is_none() {
+                let max = wordcraft_proof::MAX_CUSTOM_WORD_CHARS;
+                return Err(CmdError::Params(format!("{w:?} isn't a single word of at most {max} characters")));
+            }
+            wordcraft_proof::add_word(w.trim());
+            s.persist_user_dictionary(&[]);
             s.relayout();
             Ok(json!({"added": w}))
         })
@@ -74,7 +80,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     .map(|(a, b, _)| s.doc.para_at(&a).and_then(|p| p.text.get(a.off..b.off).map(str::to_string)).unwrap_or_default())
                     .unwrap_or_default(),
             };
-            wordcraft_proof::add_word(&w);
+            // For this session only, as in Word: not added to (or saved with) the dictionary.
+            if !w.trim().is_empty() {
+                wordcraft_proof::ignore_word(w.trim());
+            }
             s.relayout();
             Ok(json!({"ignored": w}))
         })
