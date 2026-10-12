@@ -1181,3 +1181,22 @@ fn text_keeps_clear_of_floating_tables() {
     }
     assert!(lines > 10, "the text was laid out ({lines} lines)");
 }
+
+#[test]
+fn autofit_to_contents_keeps_fitting_as_you_type() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    run(&mut s, "table.autofit", json!({"mode": "contents"}));
+    let first = row_cell_rects(&mut s, 0);
+    // Typing a long line in the first cell after the fit widens its column, as Word's does.
+    run(&mut s, "text.insert", json!({"text": " much longer text in the first column"}));
+    let after = row_cell_rects(&mut s, 0);
+    assert!(after[0].1.w > first[0].1.w + 20.0, "the column grows with its text: {} -> {}", first[0].1.w, after[0].1.w);
+    // Fixed column width turns the live fit off again.
+    run(&mut s, "table.autofit", json!({"mode": "fixed"}));
+    let fixed = row_cell_rects(&mut s, 0);
+    run(&mut s, "text.insert", json!({"text": " and even more words that would widen it"}));
+    let still = row_cell_rects(&mut s, 0);
+    assert!((still[0].1.w - fixed[0].1.w).abs() < 0.5, "a fixed table keeps its widths");
+}
