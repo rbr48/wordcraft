@@ -35,7 +35,7 @@ font can't match Word's metrics.
 | Tables: row heights (at least/exact), rows split across pages, header rows repeat, Can't Split | ✅ | 2026-10-06, #138 | — |
 | Tables: autofit to contents/window, fixed widths, Word 2013 edge | 🟡 | #137; #44: AutoFit Contents measures each column's narrowest and widest text and shares the width like Word, and keeps fitting as you type until the table is made fixed (pinned by a test, 2026-10-12); cell preferred widths and spans still differ | 3–5 |
 | Floating tables (`w:tblpPr`) | 🟡 | #137; overlap rules tested 2026-10-12 (a table that may not overlap moves below the one in its way; one that may stays put; text keeps clear of both) | 1–2 |
-| Nested tables | 🟡 | render; polish missing | 2–4 |
+| Nested tables | 🟡 | render; commands act on the innermost table; a table inserted in a cell, AutoFit and Convert Text to Table size to the cell (2026-10-12); remaining: Word's exact nested autofit widths unmeasured | 1–2 |
 | Floating pictures/shapes placement (relative to page/margin/column/paragraph/line/character) | ✅ | #136 | — |
 | Text wrap: square, top-and-bottom, behind, in front | ✅ | 2026-10-06 | — |
 | Text wrap: tight, through (contour, wrap polygon) | ❌ | laid out as square | 6–10 |

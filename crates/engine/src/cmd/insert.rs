@@ -832,7 +832,8 @@ pub(crate) fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Pat
 fn table(s: &mut Session, v: &Value) -> CmdResult {
     let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, 1000) as usize;
     let cols = p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize;
-    let width = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+    // Inside a table cell the new table fits the cell, as in Word.
+    let width = super::table::room_at(s, &s.sel.focus.path);
     let mut t = Table::new(rows, cols, width);
     if let Some(st) = p::str(v, "style") {
         let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;

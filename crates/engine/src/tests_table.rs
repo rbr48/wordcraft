@@ -1200,3 +1200,44 @@ fn autofit_to_contents_keeps_fitting_as_you_type() {
     let still = row_cell_rects(&mut s, 0);
     assert!((still[0].1.w - fixed[0].1.w).abs() < 0.5, "a fixed table keeps its widths");
 }
+
+/// Every cell box of the tables nested in the first table, and that table's first cell.
+fn nested_cells(s: &mut Session) -> (wordcraft_geom::Rect, Vec<wordcraft_geom::Rect>) {
+    let l = s.layout();
+    let (mut outer, mut inner) = (None, Vec::new());
+    for it in l.pages.iter().flat_map(|p| p.items.iter()) {
+        if let wordcraft_layout::Placed::Cell { rect, table, row, cell, .. } = it {
+            if table.0.len() == 1 && (*row, *cell) == (0, 0) {
+                outer = Some(*rect);
+            } else if table.0.len() > 1 {
+                inner.push(*rect);
+            }
+        }
+    }
+    (outer.unwrap_or_else(|| panic!("no outer cell")), inner)
+}
+
+#[test]
+fn a_table_inserted_in_a_cell_fits_the_cell() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let inner_tp = s.sel.focus.path.cell().unwrap_or_else(|| panic!("caret in the nested table")).0;
+    let w: f32 = s.doc.table(s.sel.focus.story, &inner_tp).map(|t| t.grid.iter().sum()).unwrap_or(0.0);
+    assert!(w < 234.0, "the nested table is narrower than its 234pt cell, not the page's 468pt: {w}");
+    let (outer, inner) = nested_cells(&mut s);
+    assert_eq!(inner.len(), 4);
+    assert!(inner.iter().all(|r| r.x >= outer.x - 0.5 && r.right() <= outer.right() + 0.5), "inside {outer:?}: {inner:?}");
+}
+
+#[test]
+fn autofit_to_window_in_a_nested_table_fills_its_cell_not_the_page() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "table.autofit", json!({"mode": "window"}));
+    let (outer, inner) = nested_cells(&mut s);
+    assert!(inner.iter().all(|r| r.right() <= outer.right() + 0.5), "inside {outer:?}: {inner:?}");
+    let span = inner.iter().map(|r| r.right()).fold(f32::MIN, f32::max) - inner.iter().map(|r| r.x).fold(f32::MAX, f32::min);
+    assert!(span > outer.w - 20.0, "and fills it: {span} of {}", outer.w);
+}

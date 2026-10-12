@@ -237,7 +237,8 @@ fn autofit(s: &mut Session, v: &Value) -> CmdResult {
     let mode = p::str(v, "mode").unwrap_or("window");
     let (tp, _, _) = cell(s)?;
     let story = s.sel.focus.story;
-    let tw = super::page::sect(s).text_width();
+    // A nested table fills its cell, not the page.
+    let tw = room_at(s, &tp);
     match mode {
         "fixed" => with_table(s, |t| t.props.fixed = true),
         "contents" => {
@@ -467,7 +468,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     let column_width = p::f32(v, "columnWidth").map(|x| x.clamp(6.0, 1584.0));
     let cell_width = size("cellWidth", 6.0, 1584.0);
     let rtl = p::bool(v, "rightToLeft");
-    let text_width = super::page::sect(s).text_width();
+    let text_width = room_at(s, &tp);
     with_table(s, |t| {
         if let Some(a) = align {
             t.props.align = Some(a);
@@ -532,6 +533,23 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             set_span_width(t, r, c, w);
         }
     })
+}
+
+/// The width a block at `at` has to fill: inside a table cell, the cell's columns less its side
+/// margins (so a nested table fits its cell, as in Word); elsewhere the section's text width.
+pub(crate) fn room_at(s: &Session, at: &Path) -> f32 {
+    let page = super::page::sect(s).text_width();
+    let Some((tp, r, c)) = at.cell() else { return page };
+    let Some(t) = s.doc.table(at_story(s), &tp) else { return page };
+    let g = t.grid_col(r, c);
+    let Some(cell) = t.rows.get(r).and_then(|row| row.cells.get(c)) else { return page };
+    let cols: f32 = t.grid.get(g..(g + cell.span()).min(t.grid.len())).unwrap_or(&[]).iter().filter(|w| w.is_finite()).sum();
+    let m = cell.props.margins.or(t.props.cell_margins).unwrap_or([0.0, 5.4, 0.0, 5.4]);
+    (cols - m[1].max(0.0) - m[3].max(0.0)).clamp(18.0, page.max(18.0))
+}
+
+fn at_story(s: &Session) -> wordcraft_doc::StoryRef {
+    s.sel.focus.story
 }
 
 fn cell(s: &Session) -> Result<(Path, usize, usize), CmdError> {
@@ -1867,7 +1885,7 @@ fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     if rows.len() > wordcraft_doc::table::MAX_ROWS {
         return Err(CmdError::Failed(format!("the text has {} rows, but a table can have at most {}", rows.len(), wordcraft_doc::table::MAX_ROWS)));
     }
-    let width = super::page::sect(s).text_width();
+    let width = room_at(s, &a.path);
     let mut t = Table::new(rows.len().max(1), cols.max(1), width);
     for (r, cells) in rows.into_iter().enumerate() {
         for (c, para) in cells.into_iter().enumerate() {
@@ -2011,7 +2029,7 @@ fn quick_table(s: &mut Session, v: &Value) -> CmdResult {
         x => return Err(CmdError::Params(format!("unknown quick table `{x}`"))),
     };
     let cols = if calendar { 7 } else { data.iter().map(Vec::len).max().unwrap_or(1) };
-    let width = super::page::sect(s).text_width();
+    let width = room_at(s, &s.sel.focus.path);
     let mut t = Table::new(data.len(), cols, width);
     t.props.style = Some(style.into());
     for (r, row) in data.iter().enumerate() {
