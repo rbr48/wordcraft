@@ -117,10 +117,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })),
         t(CommandSpec::new("table.distributeRows", "Distribute Rows", "Table Layout › Cell Size", |s, _| {
             with_table(s, |t| {
-                let h = t.rows.iter().filter_map(|r| r.props.height).fold(0.0f32, f32::max).max(18.0);
-                for r in &mut t.rows {
-                    r.props.height = Some(h);
-                }
+                t.distribute_rows();
             })
         })),
         CommandSpec::new("table.columnWidth", "Table Column Width", "Table Layout › Cell Size", |s, v| {
@@ -213,8 +210,16 @@ pub fn specs() -> Vec<CommandSpec> {
             let (_, r, _) = cell(s)?;
             let on = p::bool(v, "value");
             with_table(s, |t| {
-                if let Some(row) = t.rows.get_mut(r) {
-                    row.props.header = on.unwrap_or(!row.props.header);
+                let current_header_count = t.rows.iter().take_while(|row| row.props.header).count();
+                let on_val = on.unwrap_or_else(|| r >= current_header_count);
+                if on_val {
+                    for row in t.rows.iter_mut().take(r + 1) {
+                        row.props.header = true;
+                    }
+                } else {
+                    for row in t.rows.iter_mut().skip(r) {
+                        row.props.header = false;
+                    }
                 }
             })
         })),
@@ -680,7 +685,7 @@ fn split_table(s: &mut Session, _: &Value) -> CmdResult {
     }
     let story = s.sel.focus.story;
     let t = s.doc.table_mut(story, &tp)?;
-    let tail_rows = t.rows.split_off(r);
+    let tail_rows = if r <= t.rows.len() { t.rows.split_off(r) } else { vec![] };
     let tail = Table { props: t.props.clone(), grid: t.grid.clone(), rows: tail_rows };
     let after = tp.with_last(tp.last() + 1);
     s.doc.insert_block(story, &after, Block::Para(Paragraph::new()))?;

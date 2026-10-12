@@ -108,12 +108,14 @@ impl Table {
             row.cells.push(nc);
         }
         self.rows.insert(at.min(self.rows.len()), row);
+        self.repair_vmerge();
     }
 
     pub fn delete_row(&mut self, r: usize) {
         if r < self.rows.len() {
             self.rows.remove(r);
         }
+        self.repair_vmerge();
     }
 
     /// Insert a grid column at grid index `g` (cells spanning it widen instead).
@@ -160,6 +162,7 @@ impl Table {
                 }
             }
         }
+        self.repair_vmerge();
     }
 
     /// Delete grid column `g` (spanning cells shrink).
@@ -187,6 +190,7 @@ impl Table {
             }
         }
         self.rows.retain(|r| !r.cells.is_empty());
+        self.repair_vmerge();
     }
 
     /// Merge cells `c0..=c1` of row `r` horizontally (content is concatenated).
@@ -236,51 +240,188 @@ impl Table {
             }
             if let Some(c) = self.rows.get_mut(r0).and_then(|row| row.cells.get_mut(a)) {
                 c.blocks.extend(moved);
+                if c.blocks.len() > 1 && c.blocks.first().and_then(|b| b.as_para()).is_some_and(Paragraph::is_empty) {
+                    c.blocks.remove(0);
+                }
             }
         }
+        self.repair_vmerge();
     }
 
     /// Split cell `c` of row `r` into `n` cells horizontally.
     pub fn split_cell(&mut self, r: usize, c: usize, n: usize) {
         let n = n.clamp(1, MAX_COLS);
-        let Some(row) = self.rows.get_mut(r) else { return };
-        let Some(cell) = row.cells.get_mut(c) else { return };
+        let Some(row) = self.rows.get(r) else { return };
+        let Some(cell) = row.cells.get(c) else { return };
         let span = cell.span();
         if n <= 1 {
             return;
         }
-        let w = cell.props.width.map(|w| w / n as f32);
-        cell.props.width = w;
+        let g = self.grid_col(r, c);
+
         if span >= n {
-            cell.props.span = (span - (n - 1)) as u32;
+            // Enough grid columns: just re-span
+            let sub = span / n;
+            let rem = span % n;
+            let first_span = {
+                let Some(row) = self.rows.get_mut(r) else { return };
+                let Some(first) = row.cells.get_mut(c) else { return };
+                first.props.span = (sub + if rem > 0 { 1 } else { 0 }) as u32;
+                first.props.width = self.grid.get(g).copied();
+                first.span()
+            };
+            let mut g_off = g + first_span;
             for k in 1..n {
+                let this_span = sub + if k < rem { 1 } else { 0 };
+                let this_span = this_span.max(1);
+                let w = self.grid.get(g_off).copied();
                 let mut nc = Cell::empty();
+                nc.props.span = this_span as u32;
                 nc.props.width = w;
-                row.cells.insert(c + k, nc);
+                if let Some(row) = self.rows.get_mut(r) {
+                    row.cells.insert(c + k, nc);
+                }
+                g_off += this_span;
             }
         } else {
-            // Need more grid columns: widen the grid at this column for every other row.
-            let g = self.grid_col(r, c);
+            // Need to subdivide grid columns: split the last column of the span into (n - span + 1) parts
             let extra = n - span;
+            if self.grid.len() + extra > MAX_COLS {
+                return;
+            }
+            let last_g = g + span.saturating_sub(1);
+            let old_w = self.grid.get(last_g).copied().unwrap_or(72.0);
+            let sub_w = (old_w / (extra + 1) as f32).max(6.0);
+            // Replace grid[last_g] with (extra+1) sub-columns
+            if let Some(entry) = self.grid.get_mut(last_g) {
+                *entry = sub_w;
+            }
             for _ in 0..extra {
-                self.insert_col(g + span);
+                self.grid.insert(last_g + 1, sub_w);
             }
-            // After insert_col this row got empty cells inserted (or the cell widened): normalise
-            // the target row to n cells spanning one column each.
-            if let Some(row) = self.rows.get_mut(r) {
-                let mut x = 0;
-                for cell in row.cells.iter_mut() {
-                    if x == g {
-                        cell.props.span = 1;
+            // Widen spans in other rows that cover last_g
+            for ri in 0..self.rows.len() {
+                if ri == r {
+                    continue;
+                }
+                if let Some(ci) = self.cell_at_grid(ri, last_g) {
+                    let cell_start_g = self.grid_col(ri, ci);
+                    if let Some(cell) = self.rows.get_mut(ri).and_then(|row| row.cells.get_mut(ci)) {
+                        let cell_end_g = cell_start_g + cell.span().saturating_sub(1);
+                        if cell_end_g >= last_g {
+                            cell.props.span += extra as u32;
+                        }
                     }
-                    x += cell.span();
-                }
-                let have: usize = row.cells.iter().map(Cell::span).sum();
-                let want = self.grid.len();
-                for _ in have..want {
-                    row.cells.insert((c + 1).min(row.cells.len()), Cell::empty());
                 }
             }
+            // Now target row has `span` columns, need `n` cells of span 1 each
+            let total_new_span = span + extra;
+            let _ = total_new_span;
+            let w = self.grid.get(g).copied().unwrap_or(6.0);
+            if let Some(row) = self.rows.get_mut(r) {
+                let mut orig = if c < row.cells.len() { row.cells.remove(c) } else { Cell::empty() };
+                orig.props.span = 1;
+                orig.props.width = Some(w);
+                row.cells.insert(c, orig);
+                for k in 1..n {
+                    let mut nc = Cell::empty();
+                    nc.props.span = 1;
+                    nc.props.width = Some(w);
+                    row.cells.insert(c + k, nc);
+                }
+            }
+        }
+    }
+
+    /// Repair vertical merge chains across all grid columns.
+    pub fn repair_vmerge(&mut self) {
+        for g in 0..self.grid.len() {
+            let mut active_restart: Option<(usize, usize, usize)> = None;
+            let mut prev_ci: Option<usize> = None;
+            let mut continue_count = 0;
+
+            for r in 0..self.rows.len() {
+                let Some(ci) = self.cell_at_grid(r, g) else {
+                    if let Some((restart_r, restart_ci, _)) = active_restart.take() {
+                        if continue_count == 0 {
+                            if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
+                                c.props.vmerge = VMerge::None;
+                            }
+                        }
+                    }
+                    prev_ci = None;
+                    continue;
+                };
+
+                let cell_vmerge = self.rows.get(r).and_then(|row| row.cells.get(ci)).map(|c| c.props.vmerge).unwrap_or(VMerge::None);
+                let cell_span = self.rows.get(r).and_then(|row| row.cells.get(ci)).map(|c| c.span()).unwrap_or(1);
+
+                match cell_vmerge {
+                    VMerge::Restart => {
+                        if let Some((restart_r, restart_ci, _)) = active_restart.take() {
+                            if continue_count == 0 {
+                                if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
+                                    c.props.vmerge = VMerge::None;
+                                }
+                            }
+                        }
+                        active_restart = Some((r, ci, cell_span));
+                        prev_ci = Some(ci);
+                        continue_count = 0;
+                    }
+                    VMerge::Continue => {
+                        let is_valid = if let Some((_, _, restart_span)) = active_restart {
+                            prev_ci == Some(ci) && cell_span == restart_span
+                        } else {
+                            false
+                        };
+
+                        if is_valid {
+                            continue_count += 1;
+                            prev_ci = Some(ci);
+                        } else {
+                            if let Some((restart_r, restart_ci, _)) = active_restart.take() {
+                                if continue_count == 0 {
+                                    if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
+                                        c.props.vmerge = VMerge::None;
+                                    }
+                                }
+                            }
+                            if let Some(c) = self.rows.get_mut(r).and_then(|row| row.cells.get_mut(ci)) {
+                                c.props.vmerge = VMerge::None;
+                            }
+                            prev_ci = Some(ci);
+                        }
+                    }
+                    VMerge::None => {
+                        if let Some((restart_r, restart_ci, _)) = active_restart.take() {
+                            if continue_count == 0 {
+                                if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
+                                    c.props.vmerge = VMerge::None;
+                                }
+                            }
+                        }
+                        prev_ci = Some(ci);
+                    }
+                }
+            }
+
+            if let Some((restart_r, restart_ci, _)) = active_restart.take() {
+                if continue_count == 0 {
+                    if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
+                        c.props.vmerge = VMerge::None;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn distribute_rows(&mut self) {
+        let total: f32 = self.rows.iter().filter_map(|r| r.props.height).sum::<f32>();
+        let count = self.rows.len().max(1);
+        let h = if total > 0.0 { total / count as f32 } else { 18.0 }.max(4.0);
+        for r in &mut self.rows {
+            r.props.height = Some(h);
         }
     }
 
@@ -336,5 +477,36 @@ mod tests {
         v.merge(0, 2, 0, 0);
         assert_eq!(v.rows[0].cells[0].props.vmerge, VMerge::Restart);
         assert_eq!(v.rows[2].cells[0].props.vmerge, VMerge::Continue);
+    }
+
+    #[test]
+    fn vmerge_repair_removes_orphan_continues() {
+        let mut t = Table::new(3, 2, 200.0);
+        t.merge(0, 1, 0, 0);
+        assert_eq!(t.rows[0].cells[0].props.vmerge, VMerge::Restart);
+        assert_eq!(t.rows[1].cells[0].props.vmerge, VMerge::Continue);
+        t.delete_row(0);
+        let c0 = t.cell_at_grid(0, 0).and_then(|ci| t.rows.get(0).and_then(|r| r.cells.get(ci))).unwrap();
+        assert_ne!(c0.props.vmerge, VMerge::Continue);
+    }
+
+    #[test]
+    fn split_cell_does_not_widen_table() {
+        let mut t = Table::new(2, 2, 200.0);
+        assert_eq!(t.total_width(), 200.0);
+        t.split_cell(0, 0, 2);
+        assert_eq!(t.total_width(), 200.0);
+    }
+
+    #[test]
+    fn distribute_rows_averages_height() {
+        let mut t = Table::new(3, 1, 100.0);
+        t.rows[0].props.height = Some(10.0);
+        t.rows[1].props.height = Some(20.0);
+        t.rows[2].props.height = Some(30.0);
+        t.distribute_rows();
+        assert_eq!(t.rows[0].props.height, Some(20.0));
+        assert_eq!(t.rows[1].props.height, Some(20.0));
+        assert_eq!(t.rows[2].props.height, Some(20.0));
     }
 }
