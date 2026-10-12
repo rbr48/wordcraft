@@ -417,7 +417,7 @@ fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) 
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
-        let _ = app.run(id, params);
+        crate::widgets::run_from_ribbon(app, id, params);
         ui.close();
     }
 }
@@ -430,7 +430,7 @@ fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled(enabled, egui::Button::new((mark, tl!(label))).selected(checked).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
-        let _ = app.run(id, params);
+        crate::widgets::run_from_ribbon(app, id, params);
         ui.close();
     }
 }

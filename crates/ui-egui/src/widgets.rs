@@ -104,6 +104,16 @@ fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
     }
 }
 
+/// Runs a ribbon button's command, then hands keyboard focus back to the document so typing
+/// continues without another click, as in Word (#686). Interface commands (`ui.*`) open dialogs,
+/// panes and tabs that take focus themselves, so they keep it.
+pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
+    let _ = app.run(id, params);
+    if !id.starts_with("ui.") {
+        app.canvas.want_focus = true;
+    }
+}
+
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
     big_button(ui, app, icon, label, id, params, menu, false)
@@ -137,7 +147,7 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     }
     let resp = tooltip(app, resp, &label.replace('\n', " "), id);
     if resp.clicked() && on && !menu {
-        let _ = app.run(id, params);
+        run_from_ribbon(app, id, params);
     }
     resp
 }
@@ -159,8 +169,9 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     }
     let resp = tooltip(app, resp, tip, id);
     if resp.clicked() && on {
-        let _ = app.run(id, params);
+        run_from_ribbon(app, id, params);
     }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
     resp
 }
 
@@ -191,7 +202,7 @@ pub fn split(
     icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(10.0, 10.0)), "dropdown", t.icon, t.accent);
     let resp = tooltip(app, resp, tip, id);
     if resp.clicked() {
-        let _ = app.run(id, params);
+        run_from_ribbon(app, id, params);
     }
     egui::Popup::menu(&aresp).show(|ui| {
         ui.set_min_width(180.0);

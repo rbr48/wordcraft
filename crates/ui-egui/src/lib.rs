@@ -1297,6 +1297,7 @@ pub fn now_ms() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
 
     fn mod_key(key: egui::Key) -> egui::Event {
         egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
@@ -1913,6 +1914,76 @@ mod tests {
         h.step();
         assert!(h.state().session.dirty, "the keystroke reached the document");
         assert_eq!(reported.get(), Some(true), "the host was told before the frame ended");
+    }
+
+    #[test]
+    fn paragraph_alignment_keeps_the_canvas_focused_for_typing() {
+        use wordcraft_doc::Align;
+
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            typed(),
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+
+        for (label, alignment, text) in
+            [("Align Left", Align::Left, " left"), ("Center", Align::Center, " center"), ("Align Right", Align::Right, " right")]
+        {
+            h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+            h.step();
+
+            assert!(h.state().canvas.focused, "{label}: the canvas keeps keyboard focus");
+            let paragraph = h.state().session.doc.para_at(&h.state().session.sel.focus).expect("the caret remains in its paragraph");
+            assert_eq!(h.state().session.doc.styles.resolve_para(&paragraph.props).align, alignment);
+
+            h.event(egui::Event::Text(text.into()));
+            h.step();
+            assert!(body_text(h.state()).ends_with(text), "{label}: typing continues in the document");
+        }
+
+        // Every command button does the same, not only alignment: Bold, then type.
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Bold").click();
+        h.step();
+        assert!(h.state().canvas.focused, "Bold: the canvas keeps keyboard focus");
+        h.event(egui::Event::Text(" bold".into()));
+        h.step();
+        assert!(body_text(h.state()).ends_with(" bold"), "Bold: typing continues in the document");
+    }
+
+    /// #330: Word's shortcuts work from the keyboard — Ctrl+Alt+1 (⌘⌥1) applies Heading 1, and
+    /// an Alt shortcut doesn't also type the character its key would produce.
+    #[test]
+    fn word_shortcuts_run_from_the_keyboard() {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app(),
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+        h.event(egui::Event::Text("Kilns".into()));
+        h.step();
+        h.event(key(egui::Key::Num1, egui::Modifiers::COMMAND | egui::Modifiers::ALT));
+        h.step();
+        let style =
+            |h: &egui_kittest::Harness<WordApp>| h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).and_then(|p| p.props.style.clone());
+        assert_eq!(style(&h).as_deref(), Some("Heading1"));
+        // Alt+F7 (next misspelling) can come with key text on some platforms; none is typed.
+        h.event(key(egui::Key::F7, egui::Modifiers::ALT));
+        h.event(egui::Event::Text("x".into()));
+        h.step();
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns");
     }
 
     /// Save writes the document first, then carries on with what the user asked for.
