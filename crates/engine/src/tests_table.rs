@@ -748,3 +748,91 @@ fn hostile_table_params_never_panic_inside_a_table() {
         }
     }
 }
+
+#[test]
+fn delete_columns_on_a_merged_cell_removes_every_column_it_spans() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 1, "r1": 1, "c1": 2}));
+    run(&mut s, "table.merge", json!({}));
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 1, "r1": 1, "c1": 1}));
+    run(&mut s, "table.deleteColumn", json!({}));
+    let t = table(&s);
+    assert_eq!(t.grid.len(), 2, "the merged cell spanned two columns; both go");
+    assert!(t.rows.iter().all(|r| r.cells.iter().map(|c| c.span()).sum::<usize>() == 2));
+}
+
+#[test]
+fn a_range_from_a_wide_cell_covers_all_of_its_columns() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 2, "c0": 2, "r1": 2, "c1": 3}));
+    run(&mut s, "table.merge", json!({}));
+    // From the merged cell (grid columns 2-3) back to the first cell of the row below.
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 2, "c0": 2, "r1": 3, "c1": 0}));
+    let col = s.column.as_ref().unwrap_or_else(|| panic!("no cell range"));
+    let row3 = col.segments.iter().filter(|(a, _)| a.path.cell().is_some_and(|(_, r, _)| r == 3)).count();
+    assert_eq!(row3, 4, "row 3's cells under grid columns 0-3 are all selected");
+}
+
+#[test]
+fn merge_across_rows_with_different_cells_merges_the_rectangle() {
+    let mut s = s();
+    matrix(&mut s);
+    // Row 0 gets a merged cell, so its cell indices no longer line up with row 1's.
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 0, "c0": 1, "r1": 0, "c1": 2}));
+    run(&mut s, "table.merge", json!({}));
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 0, "c0": 2, "r1": 1, "c1": 1}));
+    run(&mut s, "table.merge", json!({}));
+    let t = table(&s);
+    assert_eq!(t.rows[0].cells.len(), 2, "grid columns 1-3 of row 0 are one cell");
+    assert_eq!(t.rows[0].cells[1].span(), 3);
+    assert_eq!(t.rows[0].cells[1].props.vmerge, VMerge::Restart);
+    assert_eq!(t.rows[1].cells[1].props.vmerge, VMerge::Continue);
+    assert_merges_valid(t);
+}
+
+#[test]
+fn split_table_through_a_vertical_merge_leaves_both_tables_valid() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 0, "r1": 2, "c1": 0}));
+    run(&mut s, "table.merge", json!({}));
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 2, "c0": 1, "r1": 2, "c1": 1}));
+    run(&mut s, "table.splitTable", json!({}));
+    let ts = tables(&s);
+    assert_eq!(ts.len(), 2);
+    for t in ts {
+        assert_merges_valid(t);
+        assert!(t.rows.iter().all(|r| r.cells.iter().all(|c| c.props.vmerge != VMerge::Restart)), "a one-row merge is no merge");
+    }
+}
+
+#[test]
+fn a_border_on_one_side_of_the_whole_table_keeps_the_cells_other_borders() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 1, "r1": 1, "c1": 1}));
+    run(&mut s, "table.borders", json!({"kind": "bottom", "style": "single", "width": 1.0}));
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 0, "c0": 0, "r1": 3, "c1": 3}));
+    run(&mut s, "table.borders", json!({"kind": "top", "style": "double", "width": 1.0}));
+    let t = table(&s);
+    assert!(border_at(&t.rows[1].cells[1], "bottom").is_some(), "the cell's own bottom border stays");
+    assert_eq!(t.props.borders.and_then(|b| b.top).map(|b| b.style), Some(wordcraft_doc::props::BorderStyle::Double));
+    // All borders on the whole table still replace the cells' own.
+    run(&mut s, "table.borders", json!({"kind": "all"}));
+    assert!(table(&s).rows.iter().all(|r| r.cells.iter().all(|c| c.props.borders.is_none())));
+}
+
+#[test]
+fn delete_cells_shift_up_takes_bottom_cells_that_end_their_row_together() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 2, "c0": 2, "r1": 3, "c1": 3}));
+    run(&mut s, "table.deleteCells", json!({"shift": "up"}));
+    let t = table(&s);
+    assert_eq!(cell_text(t, 2, 2), "8");
+    assert_eq!(cell_text(t, 2, 3), "9");
+    assert_eq!(t.rows[3].cells.len(), 2, "the bottom row loses its last two cells");
+    assert_eq!(cell_text(t, 3, 1), "7");
+}
