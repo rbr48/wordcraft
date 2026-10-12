@@ -2853,11 +2853,8 @@ fn table_sort_total_order_and_currency() {
     }
     run(&mut s, "table.sort", json!({"column": 0, "descending": false, "header": false}));
     let t = s.doc.table(StoryRef::Body, &tp).unwrap();
-    let result: Vec<String> = t
-        .rows
-        .iter()
-        .map(|r| r.cells[0].blocks.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join(""))
-        .collect();
+    let result: Vec<String> =
+        t.rows.iter().map(|r| r.cells[0].blocks.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join("")).collect();
     assert_eq!(result, vec!["$9", "10", "$20", "$100", "abc"]);
 }
 

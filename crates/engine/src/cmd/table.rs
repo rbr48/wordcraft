@@ -211,7 +211,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let on = p::bool(v, "value");
             with_table(s, |t| {
                 let current_header_count = t.rows.iter().take_while(|row| row.props.header).count();
-                let on_val = on.unwrap_or_else(|| r >= current_header_count);
+                let on_val = on.unwrap_or(r >= current_header_count);
                 if on_val {
                     for row in t.rows.iter_mut().take(r + 1) {
                         row.props.header = true;
@@ -757,10 +757,7 @@ fn sort_table(s: &mut Session, v: &Value) -> CmdResult {
             let kb = b.cells.get(col).map(cell_text).unwrap_or_default();
             // Parse: strip currency symbols and thousands separators, then parse as f64
             let parse_numeric = |s: &str| -> Option<f64> {
-                let cleaned: String = s.trim()
-                    .chars()
-                    .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
-                    .collect();
+                let cleaned: String = s.trim().chars().filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-').collect();
                 cleaned.parse::<f64>().ok()
             };
             // Tier 1: both numeric → compare as f64 with total_cmp
@@ -804,13 +801,7 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
     let f = p::str(v, "formula").unwrap_or("=SUM(ABOVE)").to_ascii_uppercase();
     let t = s.doc.table(s.sel.focus.story, &tp).cloned().ok_or_else(|| CmdError::Failed("no table".into()))?;
-    let parse_num = |x: &wordcraft_doc::table::Cell| {
-        cell_text(x)
-            .trim()
-            .replace([',', '$', '€', '£', '৳', '¥', '%'], "")
-            .parse::<f64>()
-            .ok()
-    };
+    let parse_num = |x: &wordcraft_doc::table::Cell| cell_text(x).trim().replace([',', '$', '€', '£', '৳', '¥', '%'], "").parse::<f64>().ok();
     let above: Vec<f64> = t.rows.iter().take(r).filter_map(|row| row.cells.get(c)).filter_map(parse_num).collect();
     let left: Vec<f64> = t.rows.get(r).map(|row| row.cells.iter().take(c).filter_map(parse_num).collect()).unwrap_or_default();
     let right: Vec<f64> = t.rows.get(r).map(|row| row.cells.iter().skip(c + 1).filter_map(parse_num).collect()).unwrap_or_default();
@@ -834,17 +825,33 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     let func_name = f.trim_start_matches('=').trim().split(['(', ' ']).next().unwrap_or("UNKNOWN");
     let val = match func_name {
         "AVERAGE" => {
-            if nums.is_empty() { 0.0 } else { nums.iter().sum::<f64>() / nums.len() as f64 }
+            if nums.is_empty() {
+                0.0
+            } else {
+                nums.iter().sum::<f64>() / nums.len() as f64
+            }
         }
         "COUNT" => nums.len() as f64,
         "MAX" => {
-            if nums.is_empty() { 0.0 } else { nums.iter().copied().fold(f64::NEG_INFINITY, f64::max) }
+            if nums.is_empty() {
+                0.0
+            } else {
+                nums.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            }
         }
         "MIN" => {
-            if nums.is_empty() { 0.0 } else { nums.iter().copied().fold(f64::INFINITY, f64::min) }
+            if nums.is_empty() {
+                0.0
+            } else {
+                nums.iter().copied().fold(f64::INFINITY, f64::min)
+            }
         }
         "PRODUCT" => {
-            if nums.is_empty() { 1.0 } else { nums.iter().product() }
+            if nums.is_empty() {
+                1.0
+            } else {
+                nums.iter().product()
+            }
         }
         "SUM" => nums.iter().sum(),
         _ => return Err(CmdError::Failed(format!("unknown formula function `{func_name}`"))),

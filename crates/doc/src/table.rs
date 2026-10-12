@@ -334,20 +334,21 @@ impl Table {
     }
 
     /// Repair vertical merge chains across all grid columns.
+    /// Ensures every Continue has a preceding Restart with the same span, and that
+    /// single-row Restart cells (with no following Continue) are demoted to None.
     pub fn repair_vmerge(&mut self) {
         for g in 0..self.grid.len() {
             let mut active_restart: Option<(usize, usize, usize)> = None;
             let mut prev_ci: Option<usize> = None;
-            let mut continue_count = 0;
+            let mut continue_count = 0usize;
 
             for r in 0..self.rows.len() {
                 let Some(ci) = self.cell_at_grid(r, g) else {
-                    if let Some((restart_r, restart_ci, _)) = active_restart.take() {
-                        if continue_count == 0 {
-                            if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
-                                c.props.vmerge = VMerge::None;
-                            }
-                        }
+                    if let Some((restart_r, restart_ci, _)) = active_restart.take()
+                        && continue_count == 0
+                        && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
+                    {
+                        c.props.vmerge = VMerge::None;
                     }
                     prev_ci = None;
                     continue;
@@ -358,34 +359,27 @@ impl Table {
 
                 match cell_vmerge {
                     VMerge::Restart => {
-                        if let Some((restart_r, restart_ci, _)) = active_restart.take() {
-                            if continue_count == 0 {
-                                if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
-                                    c.props.vmerge = VMerge::None;
-                                }
-                            }
+                        if let Some((restart_r, restart_ci, _)) = active_restart.take()
+                            && continue_count == 0
+                            && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
+                        {
+                            c.props.vmerge = VMerge::None;
                         }
                         active_restart = Some((r, ci, cell_span));
                         prev_ci = Some(ci);
                         continue_count = 0;
                     }
                     VMerge::Continue => {
-                        let is_valid = if let Some((_, _, restart_span)) = active_restart {
-                            prev_ci == Some(ci) && cell_span == restart_span
-                        } else {
-                            false
-                        };
-
+                        let is_valid = active_restart.is_some_and(|(_, _, restart_span)| prev_ci == Some(ci) && cell_span == restart_span);
                         if is_valid {
                             continue_count += 1;
                             prev_ci = Some(ci);
                         } else {
-                            if let Some((restart_r, restart_ci, _)) = active_restart.take() {
-                                if continue_count == 0 {
-                                    if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
-                                        c.props.vmerge = VMerge::None;
-                                    }
-                                }
+                            if let Some((restart_r, restart_ci, _)) = active_restart.take()
+                                && continue_count == 0
+                                && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
+                            {
+                                c.props.vmerge = VMerge::None;
                             }
                             if let Some(c) = self.rows.get_mut(r).and_then(|row| row.cells.get_mut(ci)) {
                                 c.props.vmerge = VMerge::None;
@@ -394,28 +388,25 @@ impl Table {
                         }
                     }
                     VMerge::None => {
-                        if let Some((restart_r, restart_ci, _)) = active_restart.take() {
-                            if continue_count == 0 {
-                                if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
-                                    c.props.vmerge = VMerge::None;
-                                }
-                            }
+                        if let Some((restart_r, restart_ci, _)) = active_restart.take()
+                            && continue_count == 0
+                            && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
+                        {
+                            c.props.vmerge = VMerge::None;
                         }
                         prev_ci = Some(ci);
                     }
                 }
             }
 
-            if let Some((restart_r, restart_ci, _)) = active_restart.take() {
-                if continue_count == 0 {
-                    if let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci)) {
-                        c.props.vmerge = VMerge::None;
-                    }
-                }
+            if let Some((restart_r, restart_ci, _)) = active_restart.take()
+                && continue_count == 0
+                && let Some(c) = self.rows.get_mut(restart_r).and_then(|row| row.cells.get_mut(restart_ci))
+            {
+                c.props.vmerge = VMerge::None;
             }
         }
     }
-
     pub fn distribute_rows(&mut self) {
         let total: f32 = self.rows.iter().filter_map(|r| r.props.height).sum::<f32>();
         let count = self.rows.len().max(1);
@@ -486,7 +477,7 @@ mod tests {
         assert_eq!(t.rows[0].cells[0].props.vmerge, VMerge::Restart);
         assert_eq!(t.rows[1].cells[0].props.vmerge, VMerge::Continue);
         t.delete_row(0);
-        let c0 = t.cell_at_grid(0, 0).and_then(|ci| t.rows.get(0).and_then(|r| r.cells.get(ci))).unwrap();
+        let c0 = t.cell_at_grid(0, 0).and_then(|ci| t.rows.first().and_then(|r| r.cells.get(ci))).unwrap();
         assert_ne!(c0.props.vmerge, VMerge::Continue);
     }
 
