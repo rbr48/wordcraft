@@ -148,6 +148,8 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         _ if id.starts_with("format.") || id.starts_with("para.") || id.starts_with("table.") || id == "select.column" => run(s, v),
         // A copied table is pasted over the block's cells (see `paste`), which keeps the block.
         "edit.paste" if v.get("text").is_none() && clipboard_is_table(s) => run(s, v),
+        // Anything else pasted over selected cells goes into every one of them, as in Word.
+        _ if id.starts_with("edit.paste") && !pastes_a_table(s, id, v) && cell_targets(&segs).is_some() => paste_into_cells(s, run, v, &segs),
         _ if mutates && (id.starts_with("text.") || id.starts_with("edit.paste")) => {
             delete(s, &segs)?;
             run(s, v)
@@ -160,6 +162,38 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         }
         _ => run(s, v),
     }
+}
+
+/// Whether this paste would put a copied table down (its own rules, see `paste::insert`): our
+/// own copy of a table, pasted as it is rather than as text, HTML or RTF.
+fn pastes_a_table(s: &Session, id: &str, v: &Value) -> bool {
+    let as_is = match id {
+        "edit.paste" => true,
+        _ => p::str(v, "as").is_none_or(|a| matches!(a.to_ascii_lowercase().as_str(), "formatted" | "keep" | "wordcraft")),
+    };
+    as_is && v.get("text").is_none() && clipboard_is_table(s)
+}
+
+/// Paste into each selected cell: the cells are emptied (or their text marked deleted under
+/// Track Changes), the paste runs once at the start of every cell, and the cells stay selected.
+fn paste_into_cells(s: &mut Session, run: fn(&mut Session, &Value) -> CmdResult, v: &Value, segs: &[(Pos, Pos)]) -> CmdResult {
+    let Some((story, tp, cells)) = cell_targets(segs) else { return run(s, v) };
+    delete(s, segs)?;
+    for &(r, c) in &cells {
+        let mut path = tp.0.clone();
+        path.extend([r as u32, c as u32, 0]);
+        s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: Path(path), off: 0 }));
+        s.column = None;
+        run(s, v)?;
+    }
+    // Select the same cells again: the rectangle of grid columns they cover.
+    let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("the table isn't there any more".into()))?;
+    let span = |r: usize, c: usize| t.rows.get(r).and_then(|row| row.cells.get(c)).map_or(1, wordcraft_doc::Cell::span);
+    let r0 = cells.iter().map(|x| x.0).min().unwrap_or(0);
+    let r1 = cells.iter().map(|x| x.0).max().unwrap_or(0);
+    let g0 = cells.iter().map(|&(r, c)| t.grid_col(r, c)).min().unwrap_or(0);
+    let g1 = cells.iter().map(|&(r, c)| t.grid_col(r, c) + span(r, c) - 1).max().unwrap_or(0);
+    super::table::select_grid_range(s, &tp, r0, g0, r1, g1)
 }
 
 /// Copy: one paragraph per block row (formatting kept); the plain text joins rows with newlines.

@@ -222,8 +222,11 @@ fn paste_table(s: &mut Session, src: &Table) -> Result<bool, CmdError> {
 }
 
 /// Writes the copy's cells into the table from grid column `g0` of row `r0`, replacing the text of
-/// each cell they land on. Rows are added below the table when the copy is taller than the rest.
+/// each cell they land on. Where the two tables' columns don't line up, a copied cell goes into
+/// the cell covering its column, after any text this paste already put there, so none is lost.
+/// Rows are added below the table when the copy is taller than the rest.
 fn overwrite_cells(t: &mut Table, r0: usize, g0: usize, src: &Table) {
+    let mut written = std::collections::BTreeSet::new();
     for (i, row) in src.rows.iter().enumerate() {
         while r0 + i >= t.rows.len() && t.rows.len() < MAX_ROWS {
             let last = t.rows.len().saturating_sub(1);
@@ -235,9 +238,13 @@ fn overwrite_cells(t: &mut Table, r0: usize, g0: usize, src: &Table) {
         }
         for (j, cell) in row.cells.iter().enumerate() {
             let g = g0 + src.grid_col(i, j);
-            let Some(ci) = super::table::starting_at(t, dest, g) else { continue };
+            let Some(ci) = t.cell_at_grid(dest, g) else { continue };
             if let Some(d) = t.rows.get_mut(dest).and_then(|x| x.cells.get_mut(ci)) {
-                d.blocks = cell.blocks.clone();
+                if written.insert((dest, ci)) {
+                    d.blocks = cell.blocks.clone();
+                } else {
+                    d.blocks.extend(cell.blocks.iter().filter(|b| b.as_para().is_none_or(|p| !p.is_empty())).cloned());
+                }
             }
         }
     }

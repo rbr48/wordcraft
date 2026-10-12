@@ -292,8 +292,15 @@ fn set_column_width(t: &mut Table, r: usize, c: usize, w: f32, adjust_next: bool
         let delta = w - old_w;
         *x = w;
         if adjust_next && boundary_g + 1 < t.grid.len() {
+            // The next column gives or takes the difference, down to its 6pt floor; past that the
+            // column itself stops growing, so the table keeps its width.
             if let Some(next_x) = t.grid.get_mut(boundary_g + 1) {
-                *next_x = (*next_x - delta).max(6.0);
+                let room = (*next_x - 6.0).max(0.0);
+                let taken = delta.min(room);
+                *next_x -= taken;
+                if let Some(x) = t.grid.get_mut(boundary_g) {
+                    *x = old_w + taken;
+                }
             }
         } else {
             t.props.width = None;
@@ -499,13 +506,19 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             if let Some(b) = allow_break {
                 row.props.cant_split = !b;
             }
-            if let Some(h) = header {
-                row.props.header = h;
-            }
             if let Some(cl) = row.cells.get_mut(c)
                 && let Some(va) = valign
             {
                 cl.props.valign = va;
+            }
+        }
+        // Header rows repeat from the top of the table, so they are always the rows above some
+        // point: a header row takes the rows above it along, and clearing one clears those below.
+        if let Some(h) = header {
+            if h {
+                t.rows.iter_mut().take(r + 1).for_each(|row| row.props.header = true);
+            } else {
+                t.rows.iter_mut().skip(r).for_each(|row| row.props.header = false);
             }
         }
         // The cell's preferred width is the width of the columns it spans (the grid is what is
@@ -612,11 +625,8 @@ fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Bump the revision of every paragraph in a table (table style changes alter their layout).
 pub(crate) fn touch_cells(s: &mut Session, tp: &Path) -> Result<(), CmdError> {
-    let story = s.sel.focus.story;
-    let paths: Vec<Path> = s.doc.para_paths(story).into_iter().filter(|p| p.0.len() > tp.0.len() && p.0.starts_with(&tp.0)).collect();
-    for p in paths {
-        s.doc.para_mut(story, &p)?.touch();
-    }
+    // The table alone is walked: a table command costs its table, not the whole story.
+    s.doc.table_mut(s.sel.focus.story, tp)?.touch_paragraphs();
     Ok(())
 }
 
@@ -980,28 +990,68 @@ pub(crate) fn cell_text(c: &wordcraft_doc::Cell) -> String {
     c.blocks.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join("\n")
 }
 
-/// The key a row sorts by: a number (numbers sort first, by value) or the text in lower case.
+/// The key a row sorts by: a number (numbers sort first, by value) or the text, as (its letters
+/// without accents, in lower case; then the text in lower case, which breaks ties).
 #[derive(Clone, Debug, PartialEq)]
 enum SortKey {
     Number(f64),
-    Text(String),
+    Text(String, String),
 }
 
 fn sort_key(text: &str, text_only: bool) -> SortKey {
     if !text_only && let Some(x) = super::table_formula::parse_number(text) {
         return SortKey::Number(x);
     }
-    SortKey::Text(text.trim().to_lowercase())
+    let lower = text.trim().to_lowercase();
+    SortKey::Text(fold_accents(&lower), lower)
 }
 
-/// A total order on keys: numbers by value (IEEE total order), then text by code point.
+/// Latin letters with their accents taken off (`é` → `e`, `ß` → `ss`), so `Émile` sorts among the
+/// e's rather than after `z`. Other characters are kept as they are.
+fn fold_accents(s: &str) -> String {
+    const FOLDS: [(&str, &str); 22] = [
+        ("àáâãäåāăą", "a"),
+        ("çćĉċč", "c"),
+        ("ďđ", "d"),
+        ("èéêëēĕėęě", "e"),
+        ("ĝğġģ", "g"),
+        ("ĥħ", "h"),
+        ("ìíîïĩīĭįı", "i"),
+        ("ĵ", "j"),
+        ("ķ", "k"),
+        ("ĺļľŀł", "l"),
+        ("ñńņňŉ", "n"),
+        ("òóôõöøōŏő", "o"),
+        ("ŕŗř", "r"),
+        ("śŝşš", "s"),
+        ("ţťŧ", "t"),
+        ("ùúûüũūŭůűų", "u"),
+        ("ŵ", "w"),
+        ("ýÿŷ", "y"),
+        ("źżž", "z"),
+        ("ß", "ss"),
+        ("æ", "ae"),
+        ("œ", "oe"),
+    ];
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match FOLDS.iter().find(|(from, _)| from.contains(ch)) {
+            Some((_, to)) => out.push_str(to),
+            None => out.push(ch),
+        }
+    }
+    out
+}
+
+/// A total order on keys: numbers by value (IEEE total order), then text by its letters without
+/// accents, then by code point.
 fn compare_keys(a: &SortKey, b: &SortKey) -> std::cmp::Ordering {
     use std::cmp::Ordering::{Greater, Less};
     match (a, b) {
         (SortKey::Number(x), SortKey::Number(y)) => x.total_cmp(y),
-        (SortKey::Number(_), SortKey::Text(_)) => Less,
-        (SortKey::Text(_), SortKey::Number(_)) => Greater,
-        (SortKey::Text(x), SortKey::Text(y)) => x.cmp(y),
+        (SortKey::Number(_), SortKey::Text(..)) => Less,
+        (SortKey::Text(..), SortKey::Number(_)) => Greater,
+        (SortKey::Text(xf, x), SortKey::Text(yf, y)) => xf.cmp(yf).then_with(|| x.cmp(y)),
     }
 }
 
@@ -1409,10 +1459,21 @@ fn distribute_selected_rows(s: &mut Session, _: &Value) -> CmdResult {
     let ranged = s.column_segments().is_some();
     let spots = selected_cells(s);
     let story = s.sel.focus.story;
+    // A row with no height of its own is as tall as its text makes it: read that from the layout.
+    let laid = laid_out_row_heights(s, story, &tp);
     let t = s.doc.table_mut(story, &tp)?;
     let rows: std::collections::BTreeSet<usize> = if ranged { spots.iter().map(|x| x.0).collect() } else { (0..t.rows.len()).collect() };
-    let heights: Vec<f32> =
-        rows.iter().filter_map(|&ri| t.rows.get(ri)).map(|row| row.props.height.filter(|h| h.is_finite() && *h > 0.0).unwrap_or(18.0)).collect();
+    let heights: Vec<f32> = rows
+        .iter()
+        .filter_map(|&ri| Some((ri, t.rows.get(ri)?)))
+        .map(|(ri, row)| {
+            row.props
+                .height
+                .filter(|h| h.is_finite() && *h > 0.0)
+                .or_else(|| laid.get(&ri).copied().filter(|h| h.is_finite() && *h > 0.0))
+                .unwrap_or(18.0)
+        })
+        .collect();
     if heights.is_empty() {
         return sel_result(s);
     }
@@ -1424,6 +1485,29 @@ fn distribute_selected_rows(s: &mut Session, _: &Value) -> CmdResult {
     }
     touch_cells(s, &tp)?;
     sel_result(s)
+}
+
+/// Each row's height as laid out (summed over the pages a split row falls on): the shortest cell
+/// box in the row on each page, since a vertically merged cell's box covers the rows below too.
+fn laid_out_row_heights(s: &mut Session, story: wordcraft_doc::StoryRef, tp: &Path) -> std::collections::BTreeMap<usize, f32> {
+    let l = s.layout();
+    let mut out = std::collections::BTreeMap::new();
+    for pg in &l.pages {
+        let mut shortest: std::collections::BTreeMap<usize, f32> = std::collections::BTreeMap::new();
+        for it in &pg.items {
+            if let wordcraft_layout::Placed::Cell { rect, table, row, story: st, .. } = it
+                && *st == story
+                && table == tp
+            {
+                let h = shortest.entry(*row).or_insert(f32::INFINITY);
+                *h = h.min(rect.h);
+            }
+        }
+        for (row, h) in shortest {
+            *out.entry(row).or_insert(0.0) += h;
+        }
+    }
+    out
 }
 
 /// Table Layout › Table › Resize Whole Table (the table's corner, dragged): the grid scales to the
@@ -1539,7 +1623,8 @@ fn filler(span: usize) -> wordcraft_doc::Cell {
 }
 
 /// A table as clipboard text: one line per row, cells separated by tabs, a cell's paragraphs
-/// joined by spaces so that every row stays one line.
+/// joined by spaces so that every row stays one line. Tabs and line breaks inside a cell become
+/// spaces too, so they can't start another cell or row in the program it's pasted into.
 pub(crate) fn table_text(t: &Table) -> String {
     let rows: Vec<String> = t
         .rows
@@ -1547,6 +1632,7 @@ pub(crate) fn table_text(t: &Table) -> String {
         .map(|row| {
             let cells: Vec<String> =
                 row.cells.iter().map(|c| c.blocks.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join(" ")).collect();
+            let cells: Vec<String> = cells.into_iter().map(|c| c.replace(['\t', '\n', '\r', '\u{b}', '\u{2028}'], " ")).collect();
             cells.join("\t")
         })
         .collect();
@@ -1590,29 +1676,16 @@ pub fn select_grid_range(s: &mut Session, tp: &Path, min_r: usize, min_g: usize,
     if chosen.is_empty() {
         return Err(CmdError::Failed("no cells there to select".into()));
     }
-    // Where each cell's text ends: the last paragraph inside it, nested tables included. One pass
-    // over the story's paragraphs, not one per selected cell.
-    let all_paths = s.doc.para_paths(story);
-    let depth = tp.0.len();
-    let mut ends: std::collections::HashMap<(usize, usize), Path> = std::collections::HashMap::new();
-    for q in &all_paths {
-        if q.0.len() > depth + 1
-            && q.0.starts_with(&tp.0)
-            && let (Some(&r), Some(&c)) = (q.0.get(depth), q.0.get(depth + 1))
-        {
-            ends.insert((r as usize, c as usize), q.clone());
-        }
-    }
+    // Where each cell's text ends: the last paragraph inside it, nested tables included, found
+    // in the cell itself rather than by walking the story.
     let mut segments = Vec::with_capacity(chosen.len());
     for (r, c) in chosen {
         let mut a = tp.0.clone();
         a.extend([r as u32, c as u32, 0]);
-        let end_path = ends.get(&(r, c)).cloned().unwrap_or_else(|| {
-            let mut x = tp.0.clone();
-            x.extend([r as u32, c as u32, 0]);
-            Path(x)
-        });
-        let off = s.doc.para(story, &end_path).map(|x| x.len()).unwrap_or(0);
+        let (end_path, off) = match t.cell_end(r, c) {
+            Some((below, len)) => (Path(tp.0.iter().copied().chain(below).collect()), len),
+            None => (Path(a.clone()), 0),
+        };
         segments.push((Pos { story, path: Path(a), off: 0 }, Pos { story, path: end_path, off }));
     }
     if let (Some((first_a, _)), Some((_, last_b))) = (segments.first(), segments.last()) {

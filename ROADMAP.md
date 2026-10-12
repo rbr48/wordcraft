@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** table fixes (a Split Cells crash, the calendar's web clock, merged-cell geometry); previously: merged upstream/main with fork features (Bangla/Bijoy input & decoding, AI Copilot suite, EPUB export, Android cdylib, Windows Inno Setup installer, readability auditor, PDF/A, contour tight wrap) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** pasting over selected cells fills each one; more table fixes; previously: table fixes (a Split Cells crash, the calendar's web clock, merged-cell geometry); previously: merged upstream/main with fork features (Bangla/Bijoy input & decoding, AI Copilot suite, EPUB export, Android cdylib, Windows Inno Setup installer, readability auditor, PDF/A, contour tight wrap) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 WordCraft aims for complete parity with Microsoft Word, then goes further on speed, openness and
 agent control. This page is the summary; the assessment is
@@ -109,6 +109,7 @@ selection and a saved language choice; Estonian proofing is not included. Word s
 
 | Date | What landed |
 |---|---|
+| 2026-10-12 | Tables: pasting text over selected cells fills every selected cell, as Word does (it filled only the first); sort puts accented letters with their base letter; header rows from Table Properties stay a block at the top; a paste over a merged cell keeps every copied cell's text; Distribute Rows reads text-sized rows from the layout; widening a column against its neighbour keeps the table width; clipboard text keeps one line per row; table commands no longer walk the whole story |
 | 2026-10-12 | Table fixes: Split Cells no longer panics on a row wider than its grid; the Quick Tables calendar reads the web-safe clock; Delete Columns takes every column of a merged cell; Merge and Select Cell Range work in grid columns across rows with merged cells; Split Table, the .docx/.doc readers and Delete Rows keep vertical merges valid; a one-side table border keeps the cells' other borders; Delete Cells › Shift Up takes bottom cells that end their row together |
 | 2026-10-11 | Merged upstream capabilities with fork features: Native Bangla input engine (Phonetic, Jatiya, ANSI/Bijoy) & automatic SutonnyMJ/Bijoy DOCX decoding; AI Document Intelligence Suite (`ai.rewrite`, `ai.generateTable`, `ai.summarize`, `ai.ask`, `ai.autocomplete`); EPUB export; readability auditor; PDF/A compliance; geometric contour tight wrapping; Windows Inno Setup installer & Android native `cdylib` |
 | 2026-10-11 | Citations and bibliography in all 12 of Word's styles: Harvard, ISO 690 (author-date and numerical), Turabian, GB/T 7714, GOST (name and title sort) and SIST02 join APA, MLA, Chicago and IEEE; numbered styles count in order of first citation (#383) |

@@ -836,3 +836,110 @@ fn delete_cells_shift_up_takes_bottom_cells_that_end_their_row_together() {
     assert_eq!(t.rows[3].cells.len(), 2, "the bottom row loses its last two cells");
     assert_eq!(cell_text(t, 3, 1), "7");
 }
+
+#[test]
+fn sort_puts_accented_letters_with_their_base_letter() {
+    let mut s = s();
+    text_table(&mut s, "Zed\nÉmile\nEva\nÅsa\nAnna\nebba");
+    run(&mut s, "table.sort", json!({"column": 0, "type": "text"}));
+    assert_eq!(first_column(table(&s)), vec!["Anna", "Åsa", "ebba", "Émile", "Eva", "Zed"]);
+}
+
+#[test]
+fn a_header_row_set_in_table_properties_takes_the_rows_above_it_along() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 2, 0, 0], "off": 0}}));
+    run(&mut s, "table.properties", json!({"headerRow": true}));
+    let headers: Vec<bool> = table(&s).rows.iter().map(|r| r.props.header).collect();
+    assert_eq!(headers, vec![true, true, true, false], "header rows repeat from the top, so rows 0-2 all are");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 1, 0, 0], "off": 0}}));
+    run(&mut s, "table.properties", json!({"headerRow": false}));
+    let headers: Vec<bool> = table(&s).rows.iter().map(|r| r.props.header).collect();
+    assert_eq!(headers, vec![true, false, false, false]);
+}
+
+#[test]
+fn a_tab_or_line_break_in_a_cell_does_not_split_its_clipboard_text() {
+    let mut t = Table::new(1, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("a\tb\u{b}c", Default::default()))];
+    t.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("d", Default::default()))];
+    assert_eq!(crate::cmd::table::table_text(&t), "a b c\td");
+}
+
+#[test]
+fn widening_a_column_against_its_neighbour_keeps_the_table_width() {
+    let mut s = s();
+    matrix(&mut s);
+    let before = grid_sum(&s);
+    run(&mut s, "table.columnWidth", json!({"path": "1", "row": 0, "col": 1, "width": 1000.0, "adjustNext": true}));
+    let t = table(&s);
+    assert!((grid_sum(&s) - before).abs() < 0.01, "the neighbour stops at its 6pt floor and the column stops there too");
+    assert_eq!(t.grid[2], 6.0);
+}
+
+#[test]
+fn pasting_over_a_merged_cell_keeps_every_copied_cells_text() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 3, "c0": 1, "r1": 3, "c1": 2}));
+    run(&mut s, "table.merge", json!({}));
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 1, "r1": 1, "c1": 2}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 3, "c0": 1, "r1": 3, "c1": 1}));
+    run(&mut s, "edit.paste", json!({}));
+    let text = cell_text(table(&s), 3, 1);
+    assert!(text.contains('1') && text.contains('2'), "both copied cells land in the merged cell: {text:?}");
+}
+
+#[test]
+fn distribute_rows_reads_the_height_of_rows_sized_by_their_text() {
+    let mut s = s();
+    matrix(&mut s);
+    // Row 1 holds six lines, so it is far taller than 18pt with no height of its own.
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 1, 1, 0], "off": 0}}));
+    for _ in 0..5 {
+        run(&mut s, "text.insert", json!({"text": "x"}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "table.distributeRows", json!({}));
+    let hs: Vec<f32> = table(&s).rows.iter().map(|r| r.props.height.unwrap_or(0.0)).collect();
+    assert!(hs.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01), "{hs:?}");
+    assert!(hs[0] > 25.0, "the average counts row 1's real height, not 18pt: {hs:?}");
+}
+
+#[test]
+fn pasting_text_over_selected_cells_fills_every_one_of_them() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 1, "r1": 2, "c1": 3}));
+    run(&mut s, "edit.paste", json!({"text": "Done"}));
+    let t = table(&s);
+    for r in 1..=2 {
+        for c in 1..=3 {
+            assert_eq!(cell_text(t, r, c), "Done", "cell ({r}, {c})");
+        }
+    }
+    assert_eq!(cell_text(t, 3, 1), "7", "cells outside the selection keep their text");
+    assert_eq!(cell_text(t, 1, 0), "Row 1");
+    assert!(s.column.as_ref().is_some_and(|c| c.segments.len() == 6), "the six cells stay selected");
+    // One undo takes the whole paste back.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(cell_text(table(&s), 1, 1), "1");
+    assert_eq!(cell_text(table(&s), 2, 3), "6");
+}
+
+#[test]
+fn pasting_a_copied_sentence_over_selected_cells_fills_every_one_of_them() {
+    let mut s = s();
+    matrix(&mut s);
+    // Copy a sentence (WordCraft's own clipboard) from a cell, then paste it over two rows.
+    let at = |off: usize| json!({"story": "body", "path": [1, 0, 1, 0], "off": off});
+    run(&mut s, "select.range", json!({"anchor": at(0), "focus": at(8)}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 2, "c0": 1, "r1": 3, "c1": 1}));
+    run(&mut s, "edit.paste", json!({}));
+    let t = table(&s);
+    assert_eq!(cell_text(t, 2, 1), "Column A");
+    assert_eq!(cell_text(t, 3, 1), "Column A");
+}
