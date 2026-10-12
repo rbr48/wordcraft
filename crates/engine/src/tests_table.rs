@@ -979,3 +979,42 @@ fn a_drag_selection_into_a_merged_cell_takes_it_whole() {
     assert_eq!(t.rows[1].cells[0].span(), 2);
     assert_eq!(t.rows[3].cells[0].props.vmerge, VMerge::Continue);
 }
+
+#[test]
+fn update_field_settles_formulas_that_read_other_formulas_below_them() {
+    let mut s = s();
+    matrix(&mut s);
+    let select = |s: &mut Session, r: u32, c: u32| {
+        let at = |off: usize| json!({"story": "body", "path": [1, r, c, 0], "off": off});
+        run(s, "select.range", json!({"anchor": at(0), "focus": at(1)}));
+    };
+    // D2 doubles D3; D3 is D4 plus one; D4 is a plain number.
+    select(&mut s, 1, 3);
+    run(&mut s, "table.formula", json!({"formula": "=D3*2"}));
+    select(&mut s, 2, 3);
+    run(&mut s, "table.formula", json!({"formula": "=D4+1"}));
+    assert_eq!(field_result(table(&s), 2, 3).as_deref(), Some("10"));
+    select(&mut s, 3, 3);
+    run(&mut s, "text.insert", json!({"text": "90"}));
+    run(&mut s, "references.updateFields", json!({}));
+    let t = table(&s);
+    assert_eq!(field_result(t, 2, 3).as_deref(), Some("91"));
+    assert_eq!(field_result(t, 1, 3).as_deref(), Some("182"), "D2 reads D3's new result, not the old one");
+}
+
+#[test]
+fn formulas_that_read_each_other_in_a_circle_stop_updating() {
+    let mut s = s();
+    matrix(&mut s);
+    let select = |s: &mut Session, r: u32, c: u32| {
+        let at = |off: usize| json!({"story": "body", "path": [1, r, c, 0], "off": off});
+        run(s, "select.range", json!({"anchor": at(0), "focus": at(1)}));
+    };
+    select(&mut s, 1, 1);
+    run(&mut s, "table.formula", json!({"formula": "=B3+1"}));
+    select(&mut s, 2, 1);
+    run(&mut s, "table.formula", json!({"formula": "=B2+1"}));
+    // Each pass adds one to both; the passes are bounded, so this returns.
+    run(&mut s, "references.updateFields", json!({}));
+    assert!(field_result(table(&s), 1, 1).is_some());
+}
