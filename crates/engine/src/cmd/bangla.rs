@@ -147,6 +147,8 @@ fn phonetic_word(word: &str) -> String {
         "du:khi" | "dukkhi" => return "দুঃখী".into(),
         "ut`sob" | "utsob" => return "উৎসব".into(),
         "hot`hat" | "hothat" => return "হঠাৎ".into(),
+        "ki" => return "কি".into(),
+        "koi" => return "কই".into(),
         _ => {}
     }
 
@@ -1888,6 +1890,8 @@ mod tests {
         assert_eq!(phonetic_transliterate("bangla"), "বাংলা");
         assert_eq!(phonetic_transliterate("desh"), "দেশ");
         assert_eq!(phonetic_transliterate("dhaka"), "ঢাকা");
+        assert_eq!(phonetic_transliterate("ki"), "কি");
+        assert_eq!(phonetic_transliterate("koi"), "কই");
     }
 
     #[test]
