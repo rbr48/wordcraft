@@ -544,6 +544,62 @@ impl Table {
         self.grid.iter().sum()
     }
 
+    /// The rows `r0..=r1` that the cell starting at grid column `g` of row `r` merges with
+    /// vertically (just `r` for a cell that isn't vertically merged).
+    pub fn merged_rows(&self, r: usize, g: usize) -> (usize, usize) {
+        let starts = |row: usize| -> Option<&Cell> {
+            let ci = self.cell_starting_at(row, g)?;
+            self.rows.get(row)?.cells.get(ci)
+        };
+        let Some(cell) = starts(r) else { return (r, r) };
+        if cell.props.vmerge == VMerge::None {
+            return (r, r);
+        }
+        let span = cell.span();
+        let same = |row: usize, want: VMerge| starts(row).is_some_and(|c| c.span() == span && c.props.vmerge == want);
+        let mut r0 = r;
+        while r0 > 0
+            && starts(r0).is_some_and(|c| c.props.vmerge == VMerge::Continue)
+            && (same(r0 - 1, VMerge::Restart) || same(r0 - 1, VMerge::Continue))
+        {
+            r0 -= 1;
+        }
+        let mut r1 = r;
+        while same(r1 + 1, VMerge::Continue) {
+            r1 += 1;
+        }
+        (r0, r1)
+    }
+
+    /// The smallest rectangle (rows `r0..=r1`, grid columns `g0..=g1`) that holds the given one
+    /// and every cell it touches whole: a cell spanning columns or merged across rows is selected
+    /// as one, as Word grows a selection over merged cells.
+    pub fn whole_cells(&self, mut r0: usize, mut r1: usize, mut g0: usize, mut g1: usize) -> (usize, usize, usize, usize) {
+        let last_row = self.rows.len().saturating_sub(1);
+        r1 = r1.min(last_row);
+        // Each pass only grows the rectangle, so it settles within rows + columns passes.
+        for _ in 0..=(self.rows.len() + self.cols()) {
+            let before = (r0, r1, g0, g1);
+            let (rows, cols) = (before.0..=before.1, before.2..=before.3);
+            for r in rows {
+                for g in cols.clone() {
+                    let Some(ci) = self.cell_at_grid(r, g) else { continue };
+                    let start = self.grid_col(r, ci);
+                    let span = self.rows.get(r).and_then(|row| row.cells.get(ci)).map_or(1, Cell::span);
+                    g0 = g0.min(start);
+                    g1 = g1.max(start + span - 1);
+                    let (a, b) = self.merged_rows(r, start);
+                    r0 = r0.min(a);
+                    r1 = r1.max(b);
+                }
+            }
+            if (r0, r1, g0, g1) == before {
+                break;
+            }
+        }
+        (r0, r1, g0, g1)
+    }
+
     /// Give every paragraph in the table (nested tables included) a new revision, so the layout
     /// lays them out again. Walks this table alone, not the story around it.
     pub fn touch_paragraphs(&mut self) {
@@ -716,6 +772,23 @@ mod tests {
         t.split_cell(0, 1, 2);
         assert_eq!(t.rows[0].cells.len(), 3);
         assert_eq!(t.rows[0].cells.iter().map(Cell::span).sum::<usize>(), t.cols());
+    }
+
+    #[test]
+    fn a_rectangle_grows_to_hold_the_merged_cells_it_touches() {
+        let mut t = Table::new(4, 3, 300.0);
+        t.merge(1, 3, 0, 0); // column 0, rows 1-3
+        t.merge_right(0, 1, 2); // row 0, columns 1-2
+        assert_eq!(t.merged_rows(2, 0), (1, 3));
+        assert_eq!(t.merged_rows(2, 1), (2, 2));
+        // A cell in the middle of the vertical merge selects all three rows.
+        assert_eq!(t.whole_cells(2, 2, 0, 0), (1, 3, 0, 0));
+        // Touching the wide cell in row 0 takes both of its columns, and the rectangle then
+        // reaches the vertical merge below through column 0 only when it covers it.
+        assert_eq!(t.whole_cells(0, 0, 2, 2), (0, 0, 1, 2));
+        assert_eq!(t.whole_cells(0, 1, 0, 1), (0, 3, 0, 2));
+        // Out-of-range rows are clamped, never panic.
+        assert_eq!(t.whole_cells(3, 99, 1, 1), (3, 3, 1, 1));
     }
 
     #[test]

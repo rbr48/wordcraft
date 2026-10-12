@@ -943,3 +943,39 @@ fn pasting_a_copied_sentence_over_selected_cells_fills_every_one_of_them() {
     assert_eq!(cell_text(t, 2, 1), "Column A");
     assert_eq!(cell_text(t, 3, 1), "Column A");
 }
+
+#[test]
+fn a_cell_range_grows_to_take_merged_cells_whole() {
+    let mut s = s();
+    matrix(&mut s);
+    // Column 0, rows 1-3 become one cell.
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 0, "r1": 3, "c1": 0}));
+    run(&mut s, "table.merge", json!({}));
+    // A range from the middle of that cell to its right neighbour takes all three rows.
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 2, "c0": 0, "r1": 2, "c1": 1}));
+    let col = s.column.as_ref().unwrap_or_else(|| panic!("no cell range"));
+    let rows: std::collections::BTreeSet<usize> = col.segments.iter().filter_map(|(a, _)| a.path.cell().map(|(_, r, _)| r)).collect();
+    assert_eq!(rows.into_iter().collect::<Vec<_>>(), vec![1, 2, 3]);
+    // Shading that range colours column 1 in all three rows, not row 2 alone.
+    run(&mut s, "table.shading", json!({"color": "FFCC00"}));
+    let t = table(&s);
+    assert!((1..=3).all(|r| t.rows[r].cells[1].props.shading.is_some()), "rows 1-3 of column 1 are shaded");
+    assert!(t.rows[0].cells[1].props.shading.is_none());
+}
+
+#[test]
+fn a_drag_selection_into_a_merged_cell_takes_it_whole() {
+    let mut s = s();
+    matrix(&mut s);
+    run(&mut s, "table.selectRange", json!({"path": "1", "r0": 1, "c0": 0, "r1": 3, "c1": 0}));
+    run(&mut s, "table.merge", json!({}));
+    // An ordinary selection from row 2's second cell into the merged cell, then Merge Cells.
+    let at = |r: u32, c: u32| json!({"story": "body", "path": [1, r, c, 0], "off": 0});
+    run(&mut s, "select.range", json!({"anchor": at(2, 1), "focus": at(1, 0)}));
+    run(&mut s, "table.merge", json!({}));
+    let t = table(&s);
+    assert_merges_valid(t);
+    // The merged cell (rows 1-3) and column 1 of those rows became one cell.
+    assert_eq!(t.rows[1].cells[0].span(), 2);
+    assert_eq!(t.rows[3].cells[0].props.vmerge, VMerge::Continue);
+}
