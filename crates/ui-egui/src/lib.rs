@@ -198,6 +198,9 @@ pub struct UiState {
     pub ai_whole_document: bool,
     pub ai_max_chars: u32,
     pub ai_remember_chat: bool,
+    /// Copilot settings, Agent: plain messages change the document; the most rounds per request.
+    pub ai_agent: bool,
+    pub ai_agent_rounds: u32,
 }
 
 impl Default for UiState {
@@ -250,6 +253,8 @@ impl Default for UiState {
             ai_whole_document: true,
             ai_max_chars: 120_000,
             ai_remember_chat: true,
+            ai_agent: true,
+            ai_agent_rounds: wordcraft_engine::agent::DEFAULT_ROUNDS as u32,
         }
     }
 }

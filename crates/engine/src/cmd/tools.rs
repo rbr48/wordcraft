@@ -623,7 +623,7 @@ impl CopilotRequest {
 }
 
 /// `text` cut to at most `cap` characters.
-fn cut_chars(text: String, cap: usize) -> String {
+pub(crate) fn cut_chars(text: String, cap: usize) -> String {
     match text.char_indices().nth(cap) {
         Some((cut, _)) => text.get(..cut).unwrap_or_default().to_string(),
         None => text,
@@ -632,7 +632,7 @@ fn cut_chars(text: String, cap: usize) -> String {
 
 /// The earlier chat (`history`: `[{"role": "user"|"assistant", "text": …}]`), oldest first, as
 /// a transcript; empty when there is none.
-fn copilot_history(v: &Value) -> String {
+pub(crate) fn copilot_history(v: &Value) -> String {
     let Some(items) = v.get("history").and_then(Value::as_array) else { return String::new() };
     let start = items.len().saturating_sub(COPILOT_HISTORY_MESSAGES);
     let mut out = String::new();
@@ -716,18 +716,29 @@ pub fn copilot_request(s: &Session, v: &Value) -> Option<CopilotRequest> {
         ),
     };
     let mut system = system;
-    match p::str(v, "language").map(str::trim).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("auto")) {
-        Some(lang) => system.push_str(&format!("\n\nWrite your answer in {}.", cut_chars(lang.to_string(), 40))),
-        None => system.push_str("\n\nWrite your answer in the language of the user's request or text."),
-    }
-    if let Some(ci) = p::str(v, "custom_instructions").map(str::trim).filter(|c| !c.is_empty()) {
-        system.push_str(&format!("\n\nStanding instructions from the user: {}", cut_chars(ci.to_string(), COPILOT_HISTORY_CHARS)));
-    }
+    system.push_str(&standing_instructions(v));
     if let Some(g) = &guide {
         system.push_str(&format!("\n\nThe user's instructions: {g}"));
     }
     let history = copilot_history(v);
     let user = if history.is_empty() { user } else { format!("Conversation so far:\n{history}\n{user}") };
+    Some(provider_request(v, if action.is_empty() { "draft" } else { action }, title, system, user))
+}
+
+/// The answer language and the user's standing instructions, as lines for a system prompt.
+pub(crate) fn standing_instructions(v: &Value) -> String {
+    let mut out = match p::str(v, "language").map(str::trim).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("auto")) {
+        Some(lang) => format!("\n\nWrite your answer in {}.", cut_chars(lang.to_string(), 40)),
+        None => "\n\nWrite your answer in the language of the user's request or text.".to_string(),
+    };
+    if let Some(ci) = p::str(v, "custom_instructions").map(str::trim).filter(|c| !c.is_empty()) {
+        out.push_str(&format!("\n\nStanding instructions from the user: {}", cut_chars(ci.to_string(), COPILOT_HISTORY_CHARS)));
+    }
+    out
+}
+
+/// A provider request with the provider, key, model and generation settings in `v`.
+pub(crate) fn provider_request(v: &Value, action: &str, title: &str, system: String, user: String) -> CopilotRequest {
     let defaults = crate::ai_client::LlmOptions::default();
     let options = crate::ai_client::LlmOptions {
         temperature: p::f32(v, "temperature").unwrap_or(defaults.temperature),
@@ -735,17 +746,17 @@ pub fn copilot_request(s: &Session, v: &Value) -> Option<CopilotRequest> {
         timeout_s: p::u64(v, "timeout_s").unwrap_or(defaults.timeout_s),
     }
     .clamped();
-    Some(CopilotRequest {
-        action: if action.is_empty() { "draft".into() } else { action.into() },
+    CopilotRequest {
+        action: action.into(),
         title: title.into(),
         provider: p::str(v, "provider").unwrap_or("OpenRouter").into(),
         model: p::str(v, "model").unwrap_or("").into(),
-        api_key: api_key.into(),
+        api_key: p::str(v, "api_key").unwrap_or("").trim().into(),
         base_url: p::str(v, "base_url").filter(|u| !u.trim().is_empty()).map(str::to_string),
         system,
         user,
         options,
-    })
+    }
 }
 
 fn ai_rewrite(s: &mut Session, v: &Value) -> CmdResult {
