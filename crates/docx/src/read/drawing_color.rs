@@ -83,7 +83,8 @@ fn mix(c: Rgb, to: f64, v: f64) -> Rgb {
     Rgb(f(c.0), f(c.1), f(c.2))
 }
 
-fn adjust_lum(c: Rgb, f: impl Fn(f64) -> f64) -> Rgb {
+/// `c` with its HSL luminance changed by `f`.
+pub(crate) fn adjust_lum(c: Rgb, f: impl Fn(f64) -> f64) -> Rgb {
     let (h, s, l) = to_hsl(c);
     from_hsl(h, s, f(l).clamp(0.0, 1.0))
 }
