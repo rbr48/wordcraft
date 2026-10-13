@@ -1056,6 +1056,33 @@ fn rows_with_their_own_grids_span_the_table_columns() {
     assert_eq!(tbl.rows[0].cells[0].props.width, Some(144.0));
 }
 
+/// A table whose cells all state a width keeps those widths: the columns don't re-share the page
+/// to fit their content. (A narrow column with a long word took width from the wide text column,
+/// so a real form's text column came out at half its width, where Word keeps it.)
+#[test]
+fn tables_whose_cells_state_widths_keep_them() {
+    let def = t_def_table(&[0, 1440, 2880, 7200]);
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let row_end = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), def].concat();
+    let text = "a\u{7}b\u{7}c\u{7}tail\r";
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl.clone()), (2, 0, in_tbl), (4, 0, row_end), (6, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert!(tbl.props.fixed, "widths stated by every cell make the table fixed");
+}
+
 /// Word stores a row end's grpprl in the Data stream when it is too big for the FKP
 /// (`sprmPHugePapx`). Without following it the row never ends: every following row ran into
 /// one 46-cell row in a real appraisal form, and its 7 pages became 19.

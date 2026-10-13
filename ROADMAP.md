@@ -107,8 +107,7 @@ selection and a saved language choice; Estonian proofing is not included. Word s
 
 ## Progress log
 
-| Date | What landed |
-|---|---|
+| 2026-10-13 | `.doc` tables compared with Word's PDF of the same form: tables whose cells all state a width keep their widths (no re-sharing to fit content), so the text column keeps its width. 12 → 9 pages; Word has 7. The rest is the font: Word sets the Bangla text in SutonnyMJ, which is not installed on the machine that renders here, so the fallback font's taller lines fill more pages |
 | 2026-10-12 | `.doc` tables: rows with their own grids (Word lays each row out on its own) map onto one table grid made from every row's boundaries, with spans; the converted `.docx` now has each row's cells on the right columns. Page layout still differs from Word (12 pages vs 7): the layout engine's autofit squeezes a 551pt table into a 540pt text width |
 | 2026-10-12 | `.doc` tables: the column grid is chosen by the table's column count (rows of one table carry different grids; the first one won, so tables were 40% wider than the page); an empty end-of-row mark closes its row without adding a cell; cells without their own width take the grid's columns. Checked against a real appraisal form: columns, cell text and grid widths now match the original. Page layout still differs from Word (12 pages vs 7) |
 | 2026-10-12 | Copilot agent: messages (or `/edit`) change the document itself. The model works in rounds through WordCraft's own commands — an allowlist of editing, formatting, style, table and layout commands, never files, the clipboard, dialogs or macros — reading a compact outline of the document and each command's result, and one Undo reverts a whole run; it stops if the user edits meanwhile; an Agent toggle and settings (most rounds) |

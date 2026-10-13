@@ -323,7 +323,14 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 }
             }
         } else {
-            let mut t = Table { props: props.clone(), grid, rows: std::mem::take(rows) };
+            // Word keeps the widths of a table whose cells all state one: the columns don't
+            // re-share the page to fit their content (a narrow column with a long word would
+            // otherwise take width from the wide text column).
+            let mut props = props.clone();
+            if rows.iter().all(|r| !r.cells.is_empty() && r.cells.iter().all(|c| c.props.width.is_some())) {
+                props.fixed = true;
+            }
+            let mut t = Table { props, grid, rows: std::mem::take(rows) };
             // A continuation with no restart above it becomes an ordinary cell (its text shown).
             t.repair_orphan_continues();
             out.push(Arc::new(Block::Table(t)));
