@@ -85,12 +85,12 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **O** — `table.distributeRows` now averages total row height (`total / count`) instead of taking the max height.
     - **S** — `split_table` has a bounds guard (`if r <= t.rows.len()`) preventing panic on out-of-range row index.
     - Regression tests added for: `vmerge_repair_removes_orphan_continues`, `split_cell_does_not_widen_table`, `distribute_rows_averages_height`, `table_sort_total_order_and_currency`, `table_formula_unknown_function_errors`, `del_col_multi_column_selection`, `backspace_after_nested_table_scoped_to_parent_cell`.
-  - **Version 0.6.1 Upgrade & Release**:
-    - Bumped workspace version to `0.6.1` in `Cargo.toml`.
+  - **Version 0.6.2 Upgrade & Release**:
+    - Bumped workspace version to `0.6.2` in `Cargo.toml`.
     - Updated Windows Inno Setup script (`packaging/windows/wordcraft.iss`), `build-installer.ps1`, `packaging/android/AndroidManifest.xml`, and `packaging/android/build-apk.ps1`.
     - Recompiled optimized release binaries `wordcraft.exe` and `wordcraft-cli.exe`.
-    - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.1-windows-x64-setup.exe`.
-    - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.1-windows-x64-portable.zip`.
+    - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.2-windows-x64-setup.exe`.
+    - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.2-windows-x64-portable.zip`.
   - **Upstream Feature Integration Sprint (10 commits merged & verified)**:
     - **#626**: DOCX theme colors and theme fonts take precedence over fixed fallback values.
     - **#543, #553**: Find and Replace special characters (`^p`, `^t`, `^^`) and wildcard pattern compilation with capture replacements.
@@ -102,4 +102,7 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **#759**: Resizable Navigation pane truncates long headings with ellipses and provides hover tooltips.
     - **#907**: Hardened table formula engine per upstream maintainer review (table boundary clamping, 100k cell evaluation budget, power/sign recursion depth guards).
     - Cleanly integrated upstream fork PRs #1 and #2 without regressions to custom Bangla/AI capabilities.
-
+  - **Full Document Agent & Advanced .doc Tables (PRs #4 and #5)**:
+    - **M9.1–M9.3**: Full document AI agent in `crates/engine/src/agent.rs` running multi-round goal execution, compact AST outline representation, command execution with defensive guards, and single-stroke atomic undo.
+    - **Copilot Chat Pane**: Dedicated non-blocking Copilot UI (`crates/ui-egui/src/copilot.rs`) running provider requests off the main UI thread via `std::sync::mpsc`, slash command palette (`/edit`, `/check-doc`, `/proofread`, `/summarize`, `/rewrite`, `/draft`, `/table`, `/ask`), and model presets.
+    - **M3.4–M3.6**: `.doc` files automatically convert to `.docx` on save/edit; `.doc` binary tables support per-row column grids, proper row-end marks, and explicit cell width retention matching Microsoft Word behavior.
