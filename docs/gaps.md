@@ -39,7 +39,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 24 | **Customize Ribbon / Keyboard**, Quick Access Toolbar customization; ~100 of Word's ~250 shortcuts | | [ui-parity.md](ui-parity.md) | Power users | 10–16 | [ui-parity.md](ui-parity.md) |
 | 25 | **In-app AI assistant** (Copilot-style draft, rewrite, summarize) | | Chat pane with slash commands, settings and non-blocking provider calls, and an agent that edits the document through commands in rounds with one Undo, landed (2026-10-12); still missing: a preview/diff before the agent applies, provider calls in the web build | Users expecting Copilot | 15–30 + owner (provider) | [target-app-parity.md](target-app-parity.md) |
 | 26 | **Minor formats**: Flat OPC XML, Word 2003 XML, MHT, Works/WordPerfect | | | Rare | 20–35 | [file-format-parity.md](file-format-parity.md) |
-| 27 | **View windows**: Side by Side, Synchronous Scrolling, Arrange All, Switch Windows | | [parity-checklist.md](parity-checklist.md) (View 25/29) | Comparing documents | 3–5 | [ui-parity.md](ui-parity.md) |
+| 27 | **View windows**: landed (2026-10-13): New Window, Arrange All, Split, View Side by Side, Synchronous Scrolling, and Switch Windows on the View ribbon tab with full keytips and vector icons | | [parity-checklist.md](parity-checklist.md) (View 29/29) | Comparing documents | 0 | [ui-parity.md](ui-parity.md) |
 | 28 | **Dictate** | | `tools.dictate` missing | Dictation users | 8–15 + owner (speech model) | [hardware-parity.md](hardware-parity.md) |
 | 29 | **Equations**: ink equations | | #191 notes; long display equations wrap at operators (#326) | Maths-heavy documents | 2–3 | [layout-parity.md](layout-parity.md) |
 
@@ -66,6 +66,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | trivial | #27: View ribbon tab Window controls (Side by Side, Synchronous Scrolling, Switch Windows) with dedicated vector icons |
 | 2026-10-13 | minor | #6: full Backstage Print dashboard in File › Print with live printer discovery, copies, duplex, collation, color/grayscale, page ranges, and scaling |
 | 2026-10-11 | trivial | All 12 bibliography styles landed (#383); removed from References depth |
 | 2026-10-11 | trivial | Formatting revisions landed (#41); gap #5 narrowed to move tracking and content controls, 8–12 h |
