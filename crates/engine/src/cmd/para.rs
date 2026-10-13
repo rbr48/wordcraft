@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::numbering::ListKind;
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabLeader, TabStop};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, CharProps, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{Block, Pos};
 
@@ -690,33 +690,100 @@ fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 fn update_to_match(s: &mut Session, v: &Value) -> CmdResult {
-    let f = s.sel.focus.clone();
-    let Some(para) = s.doc.para_at(&f).cloned() else { return sel_result(s) };
+    let (a, b) = s.sel.ordered();
+    let Some(para) = s.doc.para_at(&a).cloned() else { return sel_result(s) };
     let id = match p::str(v, "style") {
         Some(n) => style_id(s, n)?,
         None => para.props.style.clone().unwrap_or_else(|| "Normal".into()),
     };
-    let mut chr = para.props_at(f.off).clone();
-    chr.style = None;
-    chr.link = None;
-    chr.ins = None;
-    chr.del = None;
-    chr.fmt_change = None;
-    let mut pp = para.props.formatting();
-    pp.style = None;
-    pp.numbering = None;
-    if let Some(st) = s.doc.styles.get_mut(&id) {
-        st.chr.overlay(&chr);
-        st.para.overlay(&pp);
+    let sheet = &s.doc.styles;
+    let Some(target) = sheet.get(&id).cloned() else { return Err(CmdError::Params(format!("no style `{id}`"))) };
+    if !matches!(target.kind, StyleKind::Paragraph | StyleKind::Character) {
+        return Err(CmdError::Failed(format!("`{}` can't be updated to match the selection", target.name)));
     }
-    // Remove the now-redundant direct formatting from the paragraph.
-    let p = s.doc.para_mut(f.story, &f.path)?;
-    let len = p.len();
-    p.format(0, len, &|c| *c = c.cleared())?;
-    let style = p.props.style.clone();
-    p.props = ParaProps { style, numbering: p.props.numbering, ..Default::default() };
+    let direct = if s.sel.is_collapsed() { para.props_at(a.off) } else { para.props_of_char(a.off) }.clone();
+    let para_style = para.props.style.clone().unwrap_or_else(|| "Normal".into());
+    // How the selection looks: document defaults, its paragraph style chain, its character
+    // style chain, direct formatting (the resolve order, before defaults are filled in).
+    let (mut want_p, mut want_c) = sheet.para_style_props(&para_style);
+    let char_chain = |c: &mut CharProps, style: Option<&str>| {
+        for st in style.map(|cs| sheet.chain(cs)).unwrap_or_default() {
+            if matches!(st.kind, StyleKind::Character | StyleKind::Paragraph) {
+                c.overlay(&st.chr);
+            }
+        }
+    };
+    char_chain(&mut want_c, direct.style.as_deref());
+    want_c.overlay(&CharProps { style: None, ..direct.formatting() });
+    want_p.overlay(&ParaProps { style: None, numbering: None, ..para.props.formatting() });
+    // How the style looks now, in the same terms.
+    let (have_p, have_c) = match target.kind {
+        StyleKind::Character => {
+            let (pp, mut cc) = sheet.para_style_props(&para_style);
+            char_chain(&mut cc, Some(&id));
+            (pp, cc)
+        }
+        _ => sheet.para_style_props(&id),
+    };
+    let chr = retarget(&target.chr, &have_c, &want_c, CHAR_KEEP)?;
+    let pp = if target.kind == StyleKind::Paragraph { retarget(&target.para, &have_p, &want_p, PARA_KEEP)? } else { target.para.clone() };
+    if let Some(st) = s.doc.styles.get_mut(&id) {
+        st.chr = chr;
+        st.para = pp;
+    }
+    if target.kind == StyleKind::Paragraph {
+        // The selected paragraphs take the style; what it now gives them needn't stay direct.
+        let paths = s.doc.paths_between(&a, &b);
+        for path in paths {
+            let p = s.doc.para_mut(a.story, &path)?;
+            p.props.style = Some(id.clone());
+            p.props = strip_matching(&p.props, &want_p, PARA_KEEP);
+            let len = p.len();
+            p.format(0, len, &|c| *c = strip_matching(c, &want_c, CHAR_KEEP))?;
+            p.mark = strip_matching(&p.mark, &want_c, CHAR_KEEP);
+        }
+    }
+    s.pending = None;
     touch_all(s);
     sel_result(s)
+}
+
+/// Character properties Update to Match leaves alone: the character style, links and revisions.
+const CHAR_KEEP: &[&str] = &["style", "link", "ins", "del", "fmtChange"];
+/// Paragraph properties Update to Match leaves alone: the style, its outline level (a heading
+/// stays a heading), list numbering and revisions.
+const PARA_KEEP: &[&str] = &["style", "outlineLevel", "numbering", "numChange", "fmtChange"];
+
+fn props_map<T: serde::Serialize>(t: &T) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(t) {
+        Ok(Value::Object(m)) => m,
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// A style's own properties `own`, changed so that its chain gives `want` where it gave `have`:
+/// a property that differs is set to the wanted value, or dropped (inherited again) when the
+/// selection doesn't set it at all.
+fn retarget<T: serde::Serialize + serde::de::DeserializeOwned>(own: &T, have: &T, want: &T, keep: &[&str]) -> Result<T, CmdError> {
+    let (mut out, have, want) = (props_map(own), props_map(have), props_map(want));
+    let keys: std::collections::BTreeSet<&String> = have.keys().chain(want.keys()).collect();
+    for k in keys {
+        if keep.contains(&k.as_str()) || have.get(k) == want.get(k) {
+            continue;
+        }
+        match want.get(k) {
+            Some(v) => out.insert(k.clone(), v.clone()),
+            None => out.remove(k),
+        };
+    }
+    serde_json::from_value(Value::Object(out)).map_err(|e| CmdError::Failed(e.to_string()))
+}
+
+/// `direct` without the properties that have the same value in `inherited` (outside `keep`).
+fn strip_matching<T: serde::Serialize + serde::de::DeserializeOwned + Clone>(direct: &T, inherited: &T, keep: &[&str]) -> T {
+    let (mut out, inherited) = (props_map(direct), props_map(inherited));
+    out.retain(|k, v| keep.contains(&k.as_str()) || inherited.get(k) != Some(v));
+    serde_json::from_value(Value::Object(out)).unwrap_or_else(|_| direct.clone())
 }
 
 /// Delete a custom style. Text that uses it falls back to the style it was based on (or the
