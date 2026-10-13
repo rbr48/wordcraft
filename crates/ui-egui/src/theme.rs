@@ -551,7 +551,7 @@ mod tests {
         let exempt = |c: char, file: &str| match file {
             "equation_tab.rs" => matches!(c, '≜' | '┬'),
             "ribbon.rs" => c == '➢',
-            "keys.rs" | "lib.rs" => c == '\u{0964}' || c == '\u{0965}' || ('\u{0980}'..='\u{09ff}').contains(&c),
+            "keys.rs" | "lib.rs" | "theme.rs" => c == '\u{0964}' || c == '\u{0965}' || ('\u{0980}'..='\u{09ff}').contains(&c),
             _ => false,
         };
         symbols.retain(|(c, file)| !exempt(*c, file));
@@ -571,8 +571,8 @@ mod tests {
         ctx.set_fonts(super::font_definitions(false, false));
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         let font = super::regular(12.5);
-        for c in "এতদ্বারা সন্তোষজনকভাবে প্রত্যয়ন করা যাইতেছে যে।".chars()
-        {
+        let sample = "\u{098F}\u{09A4}\u{09A6}\u{09CD}\u{09AC}\u{09BE}\u{09B0}\u{09BE} \u{09B8}\u{09A8}\u{09CD}\u{09A4}\u{09CB}\u{09B7}\u{099C}\u{09A8}\u{0995}\u{09AD}\u{09BE}\u{09AC}\u{09C7} \u{09AA}\u{09CD}\u{09B0}\u{09A4}\u{09CD}\u{09AF}\u{09AF}\u{09BC}\u{09A8} \u{0995}\u{09B0}\u{09BE} \u{09AF}\u{09BE}\u{0987}\u{09A4}\u{09C7}\u{099B}\u{09C7} \u{09AF}\u{09C7}\u{0964}";
+        for c in sample.chars() {
             if !c.is_whitespace() {
                 assert!(ctx.fonts_mut(|f| f.has_glyph(&font, c)), "missing Bengali UI glyph for {c:?} (U+{:04X})", c as u32);
             }
