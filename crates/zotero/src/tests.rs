@@ -512,6 +512,22 @@ fn a_note_with_other_text_stays_when_its_citation_leaves() {
     assert!(z.call("Document_convert", json!([1, [999], [], [1], 1])).is_err());
 }
 
+#[test]
+fn a_note_with_a_picture_stays_when_its_citation_leaves() {
+    let mut z = Z::new("Text.", 5);
+    z.begin();
+    let a = z.cite(1, "Doe, Title.");
+    let pid = *z.s.doc.parts.keys().next().unwrap();
+    let p = z.s.doc.para_mut(StoryRef::Part(pid), &Path::top(0)).unwrap();
+    let n = p.len();
+    let image = InlineObject::Image { media: "m".into(), w: 1.0, h: 1.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    p.insert_object(n, image, &Default::default()).unwrap();
+    z.ok("Field_convert", json!([1, a, "ReferenceMark", 0]));
+    assert_eq!(z.s.doc.parts.len(), 1);
+    assert!(z.s.doc.para(StoryRef::Part(pid), &Path::top(0)).unwrap().objects.iter().any(|o| matches!(o, InlineObject::Image { .. })));
+    assert!(z.text().ends_with("Doe, Title."));
+}
+
 /// Zotero reads a new bibliography field back before filling it, and unlinks it when it is
 /// empty (it takes that for a bibliography the user deleted). Seen with Zotero 10: Add/Edit
 /// Bibliography did nothing.

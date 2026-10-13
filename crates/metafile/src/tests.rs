@@ -927,3 +927,92 @@ fn take_pixels_returns_only_drawable_bitmaps() {
     assert!(pic(1.0, 2.0).has_size());
     assert!(!pic(0.0, 2.0).has_size() && !pic(f32::NAN, 2.0).has_size() && !pic(1.0, f32::INFINITY).has_size());
 }
+
+/// The rectangle a WMF RECTANGLE record covers, from its path's corners.
+fn rect_extent(item: &Item) -> (f32, f32, f32, f32) {
+    let (segs, ..) = path_segs(item);
+    let pts: Vec<(f32, f32)> = segs
+        .iter()
+        .filter_map(|s| match s {
+            Seg::Move(x, y) | Seg::Line(x, y) => Some((*x, *y)),
+            _ => None,
+        })
+        .collect();
+    let (xs, ys): (Vec<f32>, Vec<f32>) = pts.into_iter().unzip();
+    let lo = |v: &[f32]| v.iter().copied().fold(f32::MAX, f32::min);
+    let hi = |v: &[f32]| v.iter().copied().fold(f32::MIN, f32::max);
+    (lo(&xs), lo(&ys), hi(&xs), hi(&ys))
+}
+
+#[test]
+fn plain_anisotropic_wmf_without_a_viewport_fills_its_window() {
+    // Anisotropic, window 200 x 100, no viewport (a logo strip saved without a placeable header): the
+    // window is the target, not a 1 x 1 viewport that squeezes the picture to a point.
+    let recs = [
+        wrec(0x0103, &h16(8)),
+        wrec(0x020B, &cat(vec![h16(0), h16(0)])),
+        wrec(0x020C, &cat(vec![h16(100), h16(200)])),
+        wrec(0x041B, &cat(vec![h16(100), h16(200), h16(0), h16(0)])),
+    ];
+    let p = parse(&wmf(&recs, None)).unwrap();
+    assert_eq!((p.width, p.height), (200.0, 100.0));
+    let (x0, y0, x1, y1) = rect_extent(&p.items[0]);
+    assert!(close(x0, 0.0) && close(y0, 0.0) && close(x1, 200.0) && close(y1, 100.0), "{x0} {y0} {x1} {y1}");
+}
+
+#[test]
+fn placeable_wmf_window_records_replace_the_bounds() {
+    // The placeable bounds say 1440 square (72 points); the file then draws in a window centred on the
+    // origin, as a coat of arms saved by a drawing program does. The window maps onto the 72-point
+    // target, so the drawing fills it instead of being blown up around the bounds.
+    let recs = [
+        wrec(0x020C, &cat(vec![h16(2000), h16(2000)])),
+        wrec(0x020B, &cat(vec![h16(-1000), h16(-1000)])),
+        wrec(0x041B, &cat(vec![h16(1000), h16(1000), h16(-1000), h16(-1000)])),
+    ];
+    let p = parse(&wmf(&recs, Some([238, 539, 1678, 1979]))).unwrap();
+    assert_eq!((p.width, p.height), (72.0, 72.0));
+    let (x0, y0, x1, y1) = rect_extent(&p.items[0]);
+    assert!(close(x0, 0.0) && close(y0, 0.0) && close(x1, 72.0) && close(y1, 72.0), "{x0} {y0} {x1} {y1}");
+}
+
+#[test]
+fn placeable_wmf_keeps_its_target_when_the_window_changes_shape() {
+    // Bounds 600 x 300 (30 x 15 points), then a portrait window 100 x 200 for a bitmap-sized drawing:
+    // the drawing still fills the target (Word stretches it to the picture's box).
+    let recs = [wrec(0x0103, &h16(8)), wrec(0x020C, &cat(vec![h16(200), h16(100)])), wrec(0x041B, &cat(vec![h16(200), h16(100), h16(0), h16(0)]))];
+    let p = parse(&wmf(&recs, Some([0, 0, 600, 300]))).unwrap();
+    assert_eq!((p.width, p.height), (30.0, 15.0));
+    let (x0, y0, x1, y1) = rect_extent(&p.items[0]);
+    assert!(close(x0, 0.0) && close(y0, 0.0) && close(x1, 30.0) && close(y1, 15.0), "{x0} {y0} {x1} {y1}");
+}
+
+#[test]
+fn rop2_nop_draws_nothing_until_the_mode_changes() {
+    // A coat of arms that first draws its bounding rectangle with the R2_NOP mix mode (no output),
+    // then its shapes with R2_COPYPEN. Restoring a saved state brings R2_NOP back.
+    let rect = |n: i32| wrec(0x041B, &cat(vec![h16(n), h16(n), h16(0), h16(0)]));
+    let recs = [wrec(0x0104, &h16(11)), rect(100), wrec(0x001E, &[]), wrec(0x0104, &h16(13)), rect(50), wrec(0x0127, &h16(-1)), rect(20)];
+    let p = parse(&wmf(&recs, Some([0, 0, 100, 100]))).unwrap();
+    assert_eq!(p.items.len(), 1, "{:?}", p.items);
+    let (_, _, x1, y1) = rect_extent(&p.items[0]);
+    // 50 of 100 units in a 5-point picture.
+    assert!(close(x1, 2.5) && close(y1, 2.5), "{x1} {y1}");
+}
+
+#[test]
+fn plain_wmf_target_comes_from_a_window_that_was_read() {
+    // A window record too short to read, then the real one: the target is the real window, not the
+    // 1 x 1 default the short record left in place. A viewport origin set before it is kept.
+    let recs = [
+        wrec(0x0103, &h16(8)),
+        wrec(0x020D, &cat(vec![h16(0), h16(0)])),
+        wrec(0x020C, &[]),
+        wrec(0x020C, &cat(vec![h16(100), h16(200)])),
+        wrec(0x041B, &cat(vec![h16(100), h16(200), h16(0), h16(0)])),
+    ];
+    let p = parse(&wmf(&recs, None)).unwrap();
+    assert_eq!((p.width, p.height), (200.0, 100.0));
+    let (x0, y0, x1, y1) = rect_extent(&p.items[0]);
+    assert!(close(x0, 0.0) && close(y0, 0.0) && close(x1, 200.0) && close(y1, 100.0), "{x0} {y0} {x1} {y1}");
+}

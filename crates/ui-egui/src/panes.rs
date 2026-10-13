@@ -307,7 +307,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                 }
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(c.get("author").and_then(Value::as_str).unwrap_or("")).font(semibold(12.0)));
-                    ui.label(egui::RichText::new(c.get("date").and_then(Value::as_str).unwrap_or("").get(..10).unwrap_or("")).small().weak());
+                    ui.label(egui::RichText::new(comment_stamp(c.get("date").and_then(Value::as_str).unwrap_or(""))).small().weak());
                     if c.get("resolved").and_then(Value::as_bool).unwrap_or(false) {
                         ui.label(egui::RichText::new(tl!("Resolved")).small().color(t.green));
                     }
@@ -638,6 +638,11 @@ fn trim_num(x: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// `2026-10-12T04:44:00Z` → `2026-10-12 04:44` (date and time, no seconds) for comment cards.
+fn comment_stamp(iso: &str) -> String {
+    iso.chars().take(16).map(|c| if c == 'T' { ' ' } else { c }).collect()
+}
+
 /// `dotDash` → `Dot dash` (enum values from the document model).
 fn camel_words(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
@@ -652,6 +657,18 @@ fn camel_words(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::comment_stamp;
+
+    #[test]
+    fn comment_stamp_keeps_date_and_time() {
+        assert_eq!(comment_stamp("2026-10-12T04:44:31Z"), "2026-10-12 04:44");
+        assert_eq!(comment_stamp("2026-10-12"), "2026-10-12");
+        assert_eq!(comment_stamp(""), "");
+    }
 }
 
 #[cfg(test)]

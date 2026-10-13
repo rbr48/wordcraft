@@ -48,10 +48,13 @@ fn fixed(app: &WordApp, hit: &ObjectHit) -> bool {
     matches!(app.session.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)), Some(InlineObject::Graphic { .. }))
 }
 
-/// The story of the selected text box.
+/// The story of the selected text box (or the first text box of a selected group).
 fn selected_text_box(app: &WordApp) -> Option<u32> {
     match selected(app)? {
         (_, InlineObject::Shape { story: Some(id), .. }) if app.session.doc.parts.get(id).is_some_and(|p| p.kind == PartKind::TextBox) => Some(*id),
+        (_, g @ InlineObject::Group { .. }) => {
+            g.text_boxes().into_iter().find(|id| app.session.doc.parts.get(id).is_some_and(|p| p.kind == PartKind::TextBox))
+        }
         _ => None,
     }
 }
@@ -68,7 +71,7 @@ pub fn active(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, bool)> {
     }
 }
 
-fn screen(pages: &[Rect], scale: f32, page: usize, r: wordcraft_geom::Rect) -> Option<Rect> {
+pub(crate) fn screen(pages: &[Rect], scale: f32, page: usize, r: wordcraft_geom::Rect) -> Option<Rect> {
     pages.get(page).map(|p| frame::to_screen(*p, scale, r))
 }
 

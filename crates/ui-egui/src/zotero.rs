@@ -38,6 +38,8 @@ pub struct ZoteroLink {
     alert: Option<Alert>,
     /// The command in flight.
     pub busy: Option<Command>,
+    /// The document the command in flight started in; its calls are refused once another is open.
+    document: u64,
     /// How the last command ended.
     pub last: Option<Value>,
     /// Zotero's calls in the command in flight (logged when it ends).
@@ -96,6 +98,7 @@ fn start(app: &mut WordApp, cmd: Command, ctx: Option<egui::Context>) -> Result<
     if let Some(b) = app.zotero.busy {
         return Err(format!("Zotero is still working on {}; finish in Zotero's window first", b.wire_name()));
     }
+    let document = app.session.document_id();
     let (call_tx, call_rx) = channel::<Pending>();
     let (done_tx, done_rx) = channel();
     let wake = ctx.clone();
@@ -123,6 +126,7 @@ fn start(app: &mut WordApp, cmd: Command, ctx: Option<egui::Context>) -> Result<
     z.calls = Some(call_rx);
     z.done = Some(done_rx);
     z.busy = Some(cmd);
+    z.document = document;
     log::info!("Zotero: {} started", cmd.wire_name());
     app.status(tl!("Waiting for Zotero…"));
     Ok(json!({"started": cmd.wire_name()}))
@@ -156,7 +160,7 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     // One alert at a time: Zotero sends nothing else while it waits for the answer.
     while app.zotero.alert.is_none() {
         let Some(p) = app.zotero.calls.as_ref().and_then(|rx| rx.try_recv().ok()) else { break };
-        if p.call.method == "Document_displayAlert" {
+        if p.call.method == "Document_displayAlert" && app.session.document_id() == app.zotero.document {
             let text = p.call.args.get(1).and_then(Value::as_str).unwrap_or("").to_string();
             let buttons = p.call.args.get(3).and_then(Value::as_i64).unwrap_or(0);
             app.zotero.methods.push(p.call.method.clone());
@@ -164,6 +168,11 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
             continue;
         }
         app.zotero.methods.push(p.call.method.clone());
+        if app.session.document_id() != app.zotero.document {
+            // New or Open replaced the document this command started in: its edits must not land in the new one.
+            let _ = p.reply.send(Err("WordCraft replaced the document this command started in".into()));
+            continue;
+        }
         let rev = app.session.rev();
         let mut host = AppHost { ctx };
         let r = app.zotero.bridge.handle(&mut app.session, &mut host, &p.call);
@@ -311,6 +320,27 @@ mod tests {
         // One undo step.
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(app.session.doc.plain_text(StoryRef::Body), "Cite: ");
+    }
+
+    #[test]
+    fn a_pending_citation_does_not_insert_into_a_replacement_document() {
+        let (addr, server) = fake_zotero(vec![
+            json!(["Application_getActiveDocument", [3]]),
+            json!(["Document_insertField", [1, "ReferenceMark", 0]]),
+            json!(["Field_setCode", [1, 1, "ITEM CSL_CITATION {}"]]),
+            json!(["Field_setText", [1, 1, "(Sample, 2020)", false]]),
+            json!(["Document_complete", [1]]),
+        ]);
+        let mut app = WordApp::new(Session::new(Document::new()), Services::default());
+        app.zotero.options.addr = addr;
+        let ctx = egui::Context::default();
+        app.ctx = Some(ctx.clone());
+        app.run("ui.zotero.addEditCitation", json!({})).unwrap();
+        app.run("file.new", json!({"template": "blank"})).unwrap();
+        pump(&mut app, &ctx, |a| a.zotero.busy.is_none());
+        server.join().unwrap();
+        assert_eq!(app.session.doc.plain_text(StoryRef::Body), "");
+        assert!(!app.session.can_undo(), "the old command left no undo step in the new document");
     }
 
     #[test]

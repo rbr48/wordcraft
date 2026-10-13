@@ -51,7 +51,10 @@ impl Launcher {
             let dialog = rfd::AsyncFileDialog::new().set_parent(parent);
             let picking: Picking = match req {
                 FileDialogRequest::Open { purpose } => Box::pin(open_filters(dialog, &purpose).pick_file()),
-                FileDialogRequest::Save { name } => Box::pin(dialog.set_file_name(name).save_file()),
+                FileDialogRequest::Save { name } => {
+                    let exts = save_exts(&name);
+                    Box::pin(dialog.set_file_name(name).add_filter("Documents", &exts).save_file())
+                }
             };
             let ctx = self.ctx.clone();
             let waiting = std::thread::Builder::new().name("file dialog".into()).spawn(move || {
@@ -78,5 +81,45 @@ fn open_filters(d: rfd::AsyncFileDialog, purpose: &str) -> rfd::AsyncFileDialog 
         d.add_filter("Documents", &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json"])
             .add_filter("Word document", &["docx"])
             .add_filter("All files", &["*"])
+    }
+}
+
+/// The file types Save As offers: every format the engine saves, with the suggested name's own
+/// format first. rfd makes a filter's first extension the dialog's default, which the Windows,
+/// macOS and Linux panels append to a file name the user typed without one; with no filter at
+/// all the name came back bare and the save failed, since the format is chosen by extension
+/// (#689).
+fn save_exts(name: &str) -> Vec<String> {
+    let suggested = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()))
+        .unwrap_or_else(|| "docx".to_string());
+    let mut exts: Vec<String> = Vec::with_capacity(wordcraft_engine::io::SAVE_EXTS.len());
+    exts.push(suggested.clone());
+    exts.extend(wordcraft_engine::io::SAVE_EXTS.iter().filter(|e| **e != suggested).map(|e| (*e).to_string()));
+    exts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::save_exts;
+
+    /// #689: the Save dialog's default extension is the suggested name's own format, so a file
+    /// name the user types without one is saved in the document's format instead of coming back
+    /// bare and failing.
+    #[test]
+    fn save_dialog_defaults_to_the_suggested_format() {
+        assert_eq!(save_exts("novel.docx")[0], "docx");
+        assert_eq!(save_exts("report.odt")[0], "odt");
+        assert_eq!(save_exts("annual report.pdf")[0], "pdf");
+        // A suggested name always has an extension; anything unreadable falls back to Word's.
+        assert_eq!(save_exts("no extension")[0], "docx");
+        assert_eq!(save_exts("mystery.rtf2")[0], "docx");
+        // Every savable format is still offered, once.
+        let exts = save_exts("novel.docx");
+        assert!(wordcraft_engine::io::SAVE_EXTS.iter().all(|e| exts.iter().any(|x| x == e)));
+        assert_eq!(exts.len(), wordcraft_engine::io::SAVE_EXTS.len());
     }
 }

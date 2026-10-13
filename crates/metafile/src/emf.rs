@@ -88,6 +88,7 @@ fn record(cv: &mut Canvas, typ: u32, r: Bytes) {
         12 => xy32(r, 8).map(|p| cv.set_viewport_org(p)),
         17 => r.u32(8).map(|m| cv.set_map_mode(m)),
         19 => r.u32(8).map(|m| cv.set_polyfill(m)),
+        20 => r.u32(8).map(|m| cv.set_rop2(m)),
         33 => {
             cv.save_dc();
             Some(())

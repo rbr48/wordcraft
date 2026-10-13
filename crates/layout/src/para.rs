@@ -565,8 +565,14 @@ impl<'a> Builder<'a> {
             if let Some(f) = wordcraft_fonts::feature("liga") {
                 feats.push(f);
             }
-            if let Some(f) = wordcraft_fonts::feature("kern") {
-                feats.push(f);
+            // Word kerns only a run with Kerning for fonts at or above that size; the shaper kerns
+            // by default, so an unkerned run turns the feature off.
+            if rc.kerned() {
+                if let Some(f) = wordcraft_fonts::feature("kern") {
+                    feats.push(f);
+                }
+            } else {
+                feats.push(wordcraft_fonts::feature_value(b"kern", 0));
             }
             if rc.small_caps
                 && let Some(f) = wordcraft_fonts::feature("smcp")
@@ -1307,7 +1313,10 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
-            if c.kind == ClKind::Marker || c0 + k < dropped {
+            // Spaces and tabs never make a line taller, whatever their size: Word sizes a line by
+            // its other characters (a line of only them takes the paragraph mark's), measured in
+            // Word for Windows with 9 pt text and 11–20 pt tabs, spaces and ideographic spaces.
+            if matches!(c.kind, ClKind::Marker | ClKind::Space | ClKind::Tab) || c0 + k < dropped {
                 continue;
             }
             if let Some(st) = pl.styles.get(c.style as usize) {
@@ -1335,12 +1344,14 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
             asc = st.ascent;
             desc = st.descent;
         }
+        // A list label can make the line taller above the baseline, never below it: Word keeps
+        // the text's descent (measured in Word for Windows: a Symbol bullet's taller ascent
+        // counts, a Courier New label's deeper descent doesn't).
         if first
             && let Some(lab) = &pl.label
             && let Some(st) = pl.styles.get(lab.style as usize)
         {
             asc = asc.max(st.ascent);
-            desc = desc.max(st.descent);
         }
         // Line spacing scales the text's height, never a picture's: a line is at least as tall
         // as its tallest picture plus the descent below the baseline.
@@ -1354,7 +1365,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
             LineSpacing::AtLeast(v) => natural.max(pictures).max(v),
             LineSpacing::Exactly(v) => v,
         };
-        let baseline = top + height - desc;
+        let baseline = top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc));
 
         // Alignment / justification (trailing spaces hang).
         let mut content_end = xs.last().copied().unwrap_or(line_start_x);
@@ -1480,7 +1491,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
                 lines.push(Line {
                     top,
                     height: h,
-                    baseline: top + h - desc,
+                    baseline: top + baseline_offset(rp.line_spacing, asc, h, desc),
                     c0: n,
                     c1: n,
                     xs: vec![x0],
@@ -1597,6 +1608,18 @@ fn reorder_line(pl: &ParaLayout, line: &mut Line, width: f32) {
 /// Narrowest span text flows into beside a floating object, points. Word puts an empty
 /// paragraph beside a floating table in a 21.3pt gap but not in an 18.6pt one.
 const MIN_SPAN: f32 = 20.0;
+
+/// How far below a line's top its baseline sits. Multiple spacing at or above single keeps the
+/// text at the top of the line and puts the extra leading below the baseline; below single it
+/// shrinks the whole box, ascent included (Word's output for docxide-pdf's fixtures: 1.15-spaced
+/// Times New Roman 12pt sits one ascent below the line top, not 1.8pt lower). Exact and at-least
+/// spacing keep the descent below the baseline and the rest above it.
+fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f32 {
+    match spacing {
+        LineSpacing::Multiple(m) => asc * m.min(1.0),
+        LineSpacing::AtLeast(_) | LineSpacing::Exactly(_) => height - desc,
+    }
+}
 
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none

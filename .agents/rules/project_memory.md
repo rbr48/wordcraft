@@ -106,3 +106,51 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **M9.1–M9.3**: Full document AI agent in `crates/engine/src/agent.rs` running multi-round goal execution, compact AST outline representation, command execution with defensive guards, and single-stroke atomic undo.
     - **Copilot Chat Pane**: Dedicated non-blocking Copilot UI (`crates/ui-egui/src/copilot.rs`) running provider requests off the main UI thread via `std::sync::mpsc`, slash command palette (`/edit`, `/check-doc`, `/proofread`, `/summarize`, `/rewrite`, `/draft`, `/table`, `/ask`), and model presets.
     - **M3.4–M3.6**: `.doc` files automatically convert to `.docx` on save/edit; `.doc` binary tables support per-row column grids, proper row-end marks, and explicit cell width retention matching Microsoft Word behavior.
+  - **Version 0.6.3 Upgrade & Native Spooler Printing (PR #9)**:
+    - **M10**: Native OS spooler printing integrated via new crate `wordcraft-print` (Windows Print Spooler, macOS CUPS, Linux CUPS, with PDF intermediate rendering and PowerShell script driver).
+    - Bumped workspace version to `0.6.3` in `Cargo.toml`.
+    - Updated Windows Inno Setup script (`packaging/windows/wordcraft.iss`), `build-installer.ps1`, `packaging/android/AndroidManifest.xml`, and `packaging/android/build-apk.ps1`.
+  - **Upstream UI Polish & Bug Fixes Import (Commits up to 41d37e6)**:
+    - Safely imported 18 upstream polish and bug fix commits while preserving 100% of custom features (Full Document AI Agent, Copilot pane, Bangla typing engine & 77k vocabulary, table audit repairs):
+      1. Mini toolbar layout metrics and proper box-aligned dropdown menus (`#535`).
+      2. Space before suppression at the top of a page matching Word behavior (`#932`).
+      3. Multiple line spacing leading added below text runs (`3731898`).
+      4. Adjacent paragraph spacing collapses to larger of before/after margins (`be74745`).
+      5. Strict Word-parity kerning application (`681a57f`).
+      6. Ribbon tab Keytips matching Word for Windows: File (F), Design (G), References (S), Review (R), View (W), Help (Y) (`#922`).
+      7. Drawing view position preserved at ink point rather than jumping back to caret (`#859`).
+      8. Save confirmation prompt defaults focus to Save button for fast keyboard confirmation (`#861`).
+      9. AutoCorrect language scoping: English corrections restricted to English BCP-47 runs, insulating Bangla/non-English words (`#835`).
+      10. Track Changes Accept/Reject at caret covers changes split by comments (`#809`).
+      11. Comment cards display both date and time stamps (`#812`).
+      12. `Ctrl+F` auto-focuses Find input on opening (`#772`).
+      13. Paragraph alignment and ribbon clicks return focus immediately to canvas (`#690`).
+      14. Ellipses exempted from false-positive sentence capitalization proofing (`#742`).
+      15. WMF drawing aspect rendering fills frame like Word (`#739`).
+      16. Save As dialog preserves user-typed filenames without reset (`#689`).
+      17. Zotero citation note and picture positioning fixes (`#469`, `#470`).
+      18. Documentation, brand licensing, and AUR packaging notes (`#509`, `#664`, `#865`).
+    - All test suites passing (`wordcraft-layout` 154/154, `wordcraft-ui-egui` 183/183, `bangla` 17/17, `agent` 6/6, `hostile_params_never_panic` 1/1).
+    - Recompiled production release binaries (`wordcraft.exe`, `wordcraft-cli.exe`).
+    - Rebuilt Inno Setup Windows installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.0 MB).
+    - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.0 MB).
+  - **Word 97-2003 `.doc` OfficeArt & Bijoy-to-Kalpurush Layout Parity (Commit 9de59f6)**:
+    - **OfficeArt Floating Shapes, Logos & Textboxes (`crates/docbin/src/draw.rs`)**: Full MS-ODRAW parser for `DggInfo` (FIB pair 50), `PlcSpaMom` (pair 40), `PlcSpaHdr` (pair 41), `PlcfTxbxTxt` (pair 56), and `PlcfHdrTxbxTxt` (pair 58). Extracts grouped shapes (`OfficeArtSpgrContainer` with child coordinate mapping), delayed/inline BLIP pictures (`WordDocument` and `Data` streams), floating lines, and borderless/zero-inset textboxes (`dxTextLeft`/`dyTextTop = 0` inset compensation).
+    - **`.doc` Binary Style Chain & SPRM Fixes (`crates/docbin`)**: Fixed `SttbfFfn` `cbFfnM1` (+1 byte) font name offset, `StdfBase` `istd_base` bitfield extraction (`w1 >> 4`), 0-based `based_on` style inheritance in `stsh.rs`, complex-script character sprms (`sprmCHpsBi`, `sprmCFBoldBi`, `sprmCFItalicBi`), and 2-byte first-line indent sprms (`sprmPDxaLeft1`, `sprmPDxaLeft180`).
+    - **Bijoy-to-Unicode (`Kalpurush`) Font Size (`-2pt`) & Single Line Spacing (`1.0`) (`crates/engine/src/io.rs`, `crates/fonts/src/word.rs`)**:
+      - Automatically reduces font size by **2pt** (`(sz - 2.0).max(6.0)`, resolving inherited style sizes first) across all Bijoy runs, inline English runs inside Bijoy paragraphs, and Bijoy style definitions when converting to `Kalpurush`.
+      - Enforces `LineSpacing::Multiple(1.0)` on converted Bijoy paragraphs and styles, and normalizes `Kalpurush` line metrics (`0.95` ascent / `0.28` descent) so single line spacing matches `SutonnyMJ` / `Times New Roman`.
+      - Compacts redundant space padding around `\t` in converted Bijoy runs (`compact_bijoy_tab_spaces`) and sets `keep_next = true` on centered, bold, underlined Bijoy section headings so headings never orphan across page breaks.
+      - Fixed 3-consonant + Ra-fala/Ya-fala cluster vowel ordering (`যান্ত্রিক` instead of `যান্তি্রক`) across `ansi_to_unicode`, `unicode_to_ansi`, Jatiya live typing (`z` / `Z` after pre-kar), and automatic leftover repair (`is_leftover_word`).
+      - Fixed zero-height (`h == 0.0`) horizontal and zero-width (`w == 0.0`) vertical `ShapeKind::Line` paths in `crates/pdf/src/lib.rs` (`shape_path`) so horizontal header rules export to PDF and Print identically to the canvas.
+    - **Bengali UI Font Fallback & Bangla Converter Dialog Polish (`crates/fonts/src/ui_fallback.rs`, `crates/ui-egui/src/theme.rs`, `crates/ui-egui/src/dialogs.rs`)**:
+      - Added `system_bengali_ui_font()` in `crates/fonts/src/ui_fallback.rs` searching Windows (`Nirmala.ttf`/`.ttc`, `Kalpurush.ttf`, `vrinda.ttf`, `SolaimanLipi.ttf`), macOS, and Linux font directories.
+      - Integrated `system_bengali_font()` into egui's `font_definitions` across `Proportional`, `Monospace`, `"medium"`, and `"semibold"` font families in `crates/ui-egui/src/theme.rs`, eliminating tofu boxes (`□□□□`) in `Bangla Converter`, Find & Replace, Navigation pane, IME candidate popups, and Copilot pane.
+      - Auto-populates `result_text` upon opening `Bangla Converter` when document text is selected, and widened the modal (`min_width 580.0`) so action buttons (`Convert Selection to Unicode`, `Close`) no longer truncate.
+  - **Wrap Text & Picture Arrange Parity with MS Word (`crates/engine/src/cmd/objects.rs`, `crates/ui-egui`)**:
+    - **Interactive Ribbon Dropdown Menus (`crates/ui-egui/src/ribbon.rs`, `crates/ui-egui/src/widgets.rs`)**: Replaced non-interactive static buttons with full dropdown menus for "Wrap Text" and "Position" across Layout, Shape Format, and Picture Format tabs. Features all 7 Word wrap modes (`In Line with Text`, `Square`, `Tight`, `Through`, `Top and Bottom`, `Behind Text`, `In Front of Text`) with active checkmarks and state-aware disabled states when no object is selected.
+    - **Canvas Context Menu (`crates/ui-egui/src/canvas.rs`)**: Added right-click `Wrap Text ▸` flyout submenu for pictures and shapes with all 7 modes and live indicators.
+    - **On-Canvas Floating Layout Options Handle (`crates/ui-egui/src/canvas.rs`, `crates/ui-egui/src/objects.rs`)**: Implemented Word's signature `[=]` on-canvas handle pinned to the upper-right corner of selected images/shapes with quick-access popup menu.
+    - **Seamless Inline-to-Floating Position Preservation (`crates/engine/src/cmd/objects.rs`)**: When converting from `Wrap::Inline` to floating wrap modes, queries layout hit-testing to retain the object's relative screen position rather than jumping to (0, 0); added `"preset": "inline"` support to `arrange.position`. Passed unit test `wrap_text_modes_and_inline_transition`.
+
+

@@ -50,6 +50,11 @@ pub const AUTOCORRECT: &[(&str, &str)] = &[
     ("3/4", "¾"),
 ];
 
+/// A built-in entry that is an English word (letters and apostrophes only), not a symbol.
+fn is_english_entry(from: &str) -> bool {
+    from.chars().any(char::is_alphabetic) && from.chars().all(|c| c.is_alphabetic() || c == '\'')
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.repeat", "Repeat", "Quick Access Toolbar", |s, _| {
@@ -1635,8 +1640,18 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
         word = format!("{}{fixed}{}", word.get(..at).unwrap_or(""), word.get(at + letters.len()..).unwrap_or(""));
     }
     let user = s.autocorrect_user.iter().find(|(a, _)| *a == word).map(|(_, b)| b.clone());
+    // The word's language (run, paragraph style, document default) picks the list (#835).
+    // Text with no language at all or starting with "en" is English.
+    let english = s.doc.para_at(&f).is_none_or(|p| {
+        let rc = s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(start));
+        match rc.lang.as_deref() {
+            Some(tag) => tag.starts_with("en") || tag.starts_with("EN"),
+            None => true,
+        }
+    });
     let builtin = AUTOCORRECT
         .iter()
+        .filter(|(a, _)| english || !is_english_entry(a))
         .find(|(a, _)| {
             *a == word || (a.chars().all(|c| c.is_lowercase()) && word.to_lowercase() == *a && word.chars().next().is_some_and(char::is_uppercase))
         })

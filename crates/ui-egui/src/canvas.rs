@@ -881,6 +881,70 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if let Some(sel) = app.canvas.mini_anchor {
         crate::mini_toolbar::show(app, ui.ctx(), sel, area);
     }
+    if let Some((o, _)) = crate::objects::active(app, &layout)
+        && app.canvas.obj_drag.is_none()
+        && !app.canvas.context_menu_open
+        && let Some(f) = crate::objects::screen(&rects, geo.scale, o.page, o.rect)
+    {
+        layout_options_handle(app, ui.ctx(), f, &o, area);
+    }
+}
+
+/// Floating Layout Options handle shown right at the top-right corner of the selected picture/shape frame.
+fn layout_options_handle(app: &mut WordApp, ctx: &egui::Context, f: Rect, o: &wordcraft_layout::hit::ObjectHit, viewport: Rect) {
+    let t = Tokens::get(ctx);
+    let btn_size = vec2(22.0, 22.0);
+    let mut x = f.max.x + 4.0;
+    if x + btn_size.x > viewport.max.x - 4.0 {
+        x = (f.min.x - btn_size.x - 4.0).max(viewport.min.x + 4.0);
+    }
+    let y = f.min.y.clamp(viewport.min.y + 4.0, (viewport.max.y - btn_size.y - 4.0).max(viewport.min.y + 4.0));
+    let btn_rect = Rect::from_min_size(pos2(x, y), btn_size);
+
+    let area = egui::Area::new(egui::Id::new("wc_layout_options_btn")).order(egui::Order::Tooltip).interactable(true).fixed_pos(btn_rect.min);
+
+    area.show(ctx, |ui| {
+        let (r, resp) = ui.allocate_exact_size(btn_size, Sense::click());
+        let hovered = resp.hovered();
+        let painter = ui.painter();
+        painter.rect_filled(r.translate(vec2(0.0, 1.5)), egui::CornerRadius::same(3), t.page_shadow);
+        painter.rect_filled(r, egui::CornerRadius::same(3), if hovered { t.hover } else { t.menu });
+        painter.rect_stroke(
+            r,
+            egui::CornerRadius::same(3),
+            egui::Stroke::new(1.0, if hovered { t.accent } else { t.border_strong }),
+            egui::StrokeKind::Inside,
+        );
+        let ic_rect = r.shrink(3.0);
+        crate::icons::paint(painter, ic_rect, "wrapText", if hovered { t.accent } else { t.icon }, t.accent);
+
+        let resp = resp.on_hover_text(tl!("Layout Options"));
+        egui::Popup::menu(&resp).show(|ui| {
+            ui.set_min_width(210.0);
+            ui.label(egui::RichText::new(tl!("Layout Options")).strong());
+            ui.separator();
+            ui.label(egui::RichText::new(tl!("In Line with Text")).small().weak());
+            let cur_wrap = o.wrap;
+            let opt = |ui: &mut Ui, app: &mut WordApp, label: &str, mode: &str, checked: bool| {
+                let mark = egui::RichText::new("✓");
+                let mark = if checked { mark } else { mark.color(egui::Color32::TRANSPARENT) };
+                if ui.button((mark, tl!(label))).clicked() {
+                    let _ = app.run("arrange.wrap", json!({"wrap": mode}));
+                    ui.close();
+                }
+            };
+            opt(ui, app, "In Line with Text", "inline", cur_wrap == wordcraft_doc::para::Wrap::Inline);
+            ui.separator();
+            ui.label(egui::RichText::new(tl!("With Text Wrapping")).small().weak());
+            opt(ui, app, "Square", "square", cur_wrap == wordcraft_doc::para::Wrap::Square);
+            opt(ui, app, "Tight", "tight", cur_wrap == wordcraft_doc::para::Wrap::Tight);
+            opt(ui, app, "Through", "through", cur_wrap == wordcraft_doc::para::Wrap::Through);
+            opt(ui, app, "Top and Bottom", "topAndBottom", cur_wrap == wordcraft_doc::para::Wrap::TopAndBottom);
+            ui.separator();
+            opt(ui, app, "Behind Text", "behindText", cur_wrap == wordcraft_doc::para::Wrap::BehindText);
+            opt(ui, app, "In Front of Text", "inFrontOfText", cur_wrap == wordcraft_doc::para::Wrap::InFrontOfText);
+        });
+    });
 }
 
 enum BalloonAction {
@@ -1357,6 +1421,21 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
                 app.session.sel = wordcraft_engine::Selection::caret(pos);
             }
             return;
+        }
+        if let Some((_, o)) = crate::objects::selected(app)
+            && !o.text_boxes().is_empty()
+        {
+            let target_story = layout
+                .story_at(page, x, y)
+                .filter(|s| matches!(s, StoryRef::Part(id) if o.text_boxes().contains(id)))
+                .or_else(|| o.text_boxes().first().map(|id| StoryRef::Part(*id)));
+            if let Some(s) = target_story
+                && let Some(pos) = layout.hit(page, x, y, s)
+            {
+                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                let _ = app.run("select.word", json!({}));
+                return;
+            }
         }
         let _ = app.run("select.word", json!({}));
         return;
@@ -1988,11 +2067,33 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
-    if crate::ribbon::has_picture_selected(&app.session) {
+    if let Some((_, obj)) = wordcraft_engine::cmd::objects::selected(&app.session) {
         ui.separator();
-        item(ui, app, "Change Picture…", "ui.changePicture", json!({}));
-        item(ui, app, "Reset Picture", "picture.reset", json!({}));
-        item(ui, app, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
+        ui.menu_button(tl!("Wrap Text"), |ui| {
+            let cur_wrap = obj.frame().map(|(_, _, f)| f.wrap).unwrap_or(wordcraft_doc::para::Wrap::Inline);
+            let item_wrap = |ui: &mut Ui, app: &mut WordApp, label: &str, mode: &str, checked: bool| {
+                let mark = egui::RichText::new("✓");
+                let mark = if checked { mark } else { mark.color(egui::Color32::TRANSPARENT) };
+                if ui.button((mark, tl!(label))).clicked() {
+                    let _ = app.run("arrange.wrap", json!({"wrap": mode}));
+                    ui.close();
+                }
+            };
+            item_wrap(ui, app, "In Line with Text", "inline", cur_wrap == wordcraft_doc::para::Wrap::Inline);
+            ui.separator();
+            item_wrap(ui, app, "Square", "square", cur_wrap == wordcraft_doc::para::Wrap::Square);
+            item_wrap(ui, app, "Tight", "tight", cur_wrap == wordcraft_doc::para::Wrap::Tight);
+            item_wrap(ui, app, "Through", "through", cur_wrap == wordcraft_doc::para::Wrap::Through);
+            item_wrap(ui, app, "Top and Bottom", "topAndBottom", cur_wrap == wordcraft_doc::para::Wrap::TopAndBottom);
+            ui.separator();
+            item_wrap(ui, app, "Behind Text", "behindText", cur_wrap == wordcraft_doc::para::Wrap::BehindText);
+            item_wrap(ui, app, "In Front of Text", "inFrontOfText", cur_wrap == wordcraft_doc::para::Wrap::InFrontOfText);
+        });
+        if crate::ribbon::has_picture_selected(&app.session) {
+            item(ui, app, "Change Picture…", "ui.changePicture", json!({}));
+            item(ui, app, "Reset Picture", "picture.reset", json!({}));
+            item(ui, app, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
+        }
     }
     if app.session.sel.focus.path.cell().is_some() {
         ui.separator();

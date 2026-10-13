@@ -1,6 +1,6 @@
 # Layout and pagination parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first version; line breaking, pagination and object placement checked against Word's behaviour from the layout source on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** trivial (space before at the top of a page like Word); previously major (first version; line breaking, pagination and object placement checked against Word's behaviour from the layout source on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 A document only "opens correctly" if its pages break where Word breaks them: the same lines, the
 same page count, footnotes and pictures on the same pages. This checklist covers line breaking,
@@ -68,6 +68,7 @@ font can't match Word's metrics.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | trivial | Space before at the top of a page like Word: after a page break the paragraph's mark stays with the break (no space at the top of the next page), a paragraph starting with a page break keeps its space before on the new page, and the previous space after comes off after a page break before or a section break (32 cases measured in Word for Windows) |
 | 2026-10-11 | trivial | Group and Ungroup keep turned members' orientation and placement (#441, #443); Size resizes a group (#442); the eraser hits turned ink where it is drawn (#445) |
 | 2026-10-10 | trivial | Long footnotes continue onto the next page with a continuation separator (#352) |
 | 2026-10-10 | trivial | Rotated and flipped objects laid out and drawn (#332) |

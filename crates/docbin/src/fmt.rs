@@ -13,6 +13,8 @@ const C_STRIKE: u16 = 0x0837;
 const C_SMALL_CAPS: u16 = 0x083A;
 const C_CAPS: u16 = 0x083B;
 const C_HIDDEN: u16 = 0x083C; // sprmCFVanish
+const C_BOLD_BI: u16 = 0x085C; // sprmCFBoldBi
+const C_ITALIC_BI: u16 = 0x085D; // sprmCFItalicBi
 const C_KUL: u16 = 0x2A3E; // underline style (Kul)
 const C_ICO: u16 = 0x2A42; // palette colour
 const C_CR: u16 = 0x6870; // explicit COLORREF
@@ -21,6 +23,7 @@ const C_HPS_POS: u16 = 0x4845; // super/subscript by half-points
 const C_FTC0: u16 = 0x4A4F; // ASCII font index (sprmCRgFtc0)
 const C_FTC2: u16 = 0x4A51; // High-ANSI font index (sprmCRgFtc2)
 const C_FTC_BI: u16 = 0x4A5E; // Complex-script font index (sprmCFtcBi)
+const C_HPS_BI: u16 = 0x4A61; // Complex-script half-points (sprmCHpsBi)
 const C_HIGHLIGHT: u16 = 0x2A0C;
 const C_ISTD: u16 = 0x4A30; // character style
 
@@ -32,6 +35,7 @@ const P_DXA_LEFT80: u16 = 0x840F;
 const P_DXA_RIGHT: u16 = 0x845D;
 const P_DXA_RIGHT80: u16 = 0x840E;
 const P_DXA_FIRST: u16 = 0x8460; // sprmPDxaLeft1
+const P_DXA_FIRST80: u16 = 0x8411; // sprmPDxaLeft180
 const P_DYA_BEFORE: u16 = 0xA413;
 const P_DYA_AFTER: u16 = 0xA414;
 const P_DYA_LINE: u16 = 0x6412;
@@ -117,6 +121,18 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
     match op {
         C_BOLD => set(&mut p.bold, sprm::toggle(prl), base.bold.unwrap_or(false)),
         C_ITALIC => set(&mut p.italic, sprm::toggle(prl), base.italic.unwrap_or(false)),
+        C_BOLD_BI => {
+            set(&mut p.bold_cs, sprm::toggle(prl), base.bold_cs.or(base.bold).unwrap_or(false));
+            if p.bold.is_none() {
+                p.bold = p.bold_cs;
+            }
+        }
+        C_ITALIC_BI => {
+            set(&mut p.italic_cs, sprm::toggle(prl), base.italic_cs.or(base.italic).unwrap_or(false));
+            if p.italic.is_none() {
+                p.italic = p.italic_cs;
+            }
+        }
         C_STRIKE => set(&mut p.strike, sprm::toggle(prl), base.strike.unwrap_or(false)),
         C_SMALL_CAPS => set(&mut p.small_caps, sprm::toggle(prl), base.small_caps.unwrap_or(false)),
         C_CAPS => set(&mut p.caps, sprm::toggle(prl), base.caps.unwrap_or(false)),
@@ -160,6 +176,15 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
                 p.size = Some((hps as f32 / 2.0).clamp(1.0, 1638.0));
             }
         }
+        C_HPS_BI => {
+            if let Some(hps) = u16_of(prl) {
+                let sz = (hps as f32 / 2.0).clamp(1.0, 1638.0);
+                p.size_cs = Some(sz);
+                if p.size.is_none() {
+                    p.size = Some(sz);
+                }
+            }
+        }
         C_HPS_POS => {
             if let Some(pos) = s16_of(prl) {
                 p.vert_align = Some(match pos {
@@ -200,12 +225,6 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
 pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
     let tw = |v: i32| (v as f32 / 20.0).clamp(-1000.0, 1000.0);
     let s16 = |prl: &Prl| -> Option<i16> { u16_of(prl).map(|v| v as i16) };
-    let i32of = |prl: &Prl| -> Option<i32> {
-        match prl.operand {
-            [b0, b1, b2, b3, ..] => Some(i32::from_le_bytes([*b0, *b1, *b2, *b3])),
-            _ => None,
-        }
-    };
     match prl.op {
         P_JC | P_JC80 => {
             p.align = match prl.operand.first().copied().unwrap_or(0) {
@@ -226,9 +245,9 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
                 p.indent_right = Some(tw(v as i32));
             }
         }
-        P_DXA_FIRST => {
-            if let Some(v) = i32of(prl) {
-                p.indent_first = Some(tw(v));
+        P_DXA_FIRST | P_DXA_FIRST80 => {
+            if let Some(v) = s16(prl) {
+                p.indent_first = Some(tw(v as i32));
             }
         }
         P_DYA_BEFORE => {
@@ -295,21 +314,35 @@ pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String]) -> Sty
             4 => StyleKind::Numbering,
             _ => StyleKind::Paragraph,
         };
-        let base = st
-            .istd_base
-            .checked_sub(1)
-            .filter(|&i| (i as usize) < istd && raw.get(i as usize).is_some_and(|b| !b.name.is_empty()))
-            .map(|i| style_id(&raw[i as usize].name));
-        // Inherit: character props come from the base chain, then our own chpx.
+        // istd_base is a 0-based style index (0 = Normal, 0x0FFF = none).
+        let valid_base = |idx: u16, cur: usize| -> Option<usize> {
+            let i = idx as usize;
+            (idx != 0x0FFF && i != cur && raw.get(i).is_some_and(|b| !b.name.is_empty())).then_some(i)
+        };
+        let base = valid_base(st.istd_base, istd).map(|i| style_id(&raw[i].name));
+        // Walk up to 16 hops of the base chain so multi-level style inheritance resolves root-first.
+        let mut chain: Vec<usize> = Vec::new();
+        let mut cur_idx = istd;
+        let mut cur_base = st.istd_base;
+        while chain.len() < 16 {
+            let Some(b_idx) = valid_base(cur_base, cur_idx) else { break };
+            if chain.contains(&b_idx) {
+                break;
+            }
+            chain.push(b_idx);
+            cur_idx = b_idx;
+            cur_base = raw[b_idx].istd_base;
+        }
+        chain.reverse();
         let mut chr = CharProps::default();
-        if let Some(b) = st.istd_base.checked_sub(1).filter(|&i| (i as usize) < istd).and_then(|i| raw.get(i as usize)) {
-            apply_chain(&mut chr, &b.chpx, fonts);
+        let mut para = ParaProps::default();
+        for &b_idx in &chain {
+            if let Some(b) = raw.get(b_idx) {
+                apply_chain(&mut chr, &b.chpx, fonts);
+                apply_chain_para(&mut para, &b.papx);
+            }
         }
         apply_chain(&mut chr, &st.chpx, fonts);
-        let mut para = ParaProps::default();
-        if let Some(b) = st.istd_base.checked_sub(1).filter(|&i| (i as usize) < istd).and_then(|i| raw.get(i as usize)) {
-            apply_chain_para(&mut para, &b.papx);
-        }
         apply_chain_para(&mut para, &st.papx);
         if para.outline_level.is_none() && kind == StyleKind::Paragraph {
             let h = heading_level(&st.name);

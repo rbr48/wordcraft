@@ -623,7 +623,13 @@ impl WordApp {
 
     fn after_command(&mut self, id: &str) {
         self.canvas.caret_visible_since = now_ms();
-        if !id.starts_with("view.") && !id.starts_with("document.") && !id.starts_with("format.state") && !id.starts_with("table.") {
+        // Drawing leaves the caret where it was: following it would pull the view off the ink (#859).
+        if !id.starts_with("view.")
+            && !id.starts_with("document.")
+            && !id.starts_with("format.state")
+            && !id.starts_with("table.")
+            && !id.starts_with("draw.")
+        {
             self.canvas.scroll_to_caret = true;
         }
         for req in std::mem::take(&mut self.session.ui_requests) {
@@ -1296,6 +1302,7 @@ pub fn now_ms() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
 
     fn mod_key(key: egui::Key) -> egui::Event {
         egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
@@ -1373,6 +1380,35 @@ mod tests {
         assert!(t.props.rtl, "the table direction applies");
         assert_eq!((t.rows[0].props.height, t.rows[0].props.header), (Some(36.0), true));
         assert_eq!(dialogs::TableForm::read(&a).unwrap().changes(&f), json!({}), "the dialog reopens with the new values");
+    }
+
+    /// Issue #772: Ctrl/⌘+F left focus on the document, so typing didn't go into Find what.
+    #[test]
+    fn find_shortcut_focuses_find_what() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput { events, ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        // The first frames install fonts; the canvas appears after them.
+        for _ in 0..3 {
+            frame(&mut a, Vec::new());
+        }
+        let key = egui::Event::Key { key: egui::Key::F, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
+        frame(&mut a, vec![key]);
+        for _ in 0..2 {
+            frame(&mut a, Vec::new());
+        }
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("find_what"))), "Find what has the focus");
+        frame(&mut a, vec![egui::Event::Text("abc".into())]);
+        let Some(dialogs::Dialog::Find { query, .. }) = &a.dialog else { panic!("no Find dialog") };
+        assert!(query.ends_with("abc"), "typing went into Find what: {query:?}");
+        assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "nothing was typed into the document");
     }
 
     /// Issue #139: Ctrl+wheel over the page didn't zoom.
@@ -1883,6 +1919,46 @@ mod tests {
         h.step();
         assert!(h.state().session.dirty, "the keystroke reached the document");
         assert_eq!(reported.get(), Some(true), "the host was told before the frame ended");
+    }
+
+    #[test]
+    fn paragraph_alignment_keeps_the_canvas_focused_for_typing() {
+        use wordcraft_doc::Align;
+
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            typed(),
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+
+        for (label, alignment, text) in
+            [("Align Left", Align::Left, " left"), ("Center", Align::Center, " center"), ("Align Right", Align::Right, " right")]
+        {
+            h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+            h.step();
+
+            assert!(h.state().canvas.focused, "{label}: the canvas keeps keyboard focus");
+            let paragraph = h.state().session.doc.para_at(&h.state().session.sel.focus).expect("the caret remains in its paragraph");
+            assert_eq!(h.state().session.doc.styles.resolve_para(&paragraph.props).align, alignment);
+
+            h.event(egui::Event::Text(text.into()));
+            h.step();
+            assert!(body_text(h.state()).ends_with(text), "{label}: typing continues in the document");
+        }
+
+        // Every command button does the same, not only alignment: Bold, then type.
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Bold").click();
+        h.step();
+        assert!(h.state().canvas.focused, "Bold: the canvas keeps keyboard focus");
+        h.event(egui::Event::Text(" bold".into()));
+        h.step();
+        assert!(body_text(h.state()).ends_with(" bold"), "Bold: typing continues in the document");
     }
 
     /// Save writes the document first, then carries on with what the user asked for.
@@ -3176,6 +3252,57 @@ mod tests {
         });
         type_keys(&mut a, &ctx, "gfmfcv");
         assert_eq!(body_text(&a).trim(), "আমারে");
+
+        // 15. Pre-kar + conjunct + Ra-fala ('z') / Ya-fala ('Z') in Jatiya:
+        // যান্ত্রিক: w (য), f (া), d (ি), b (ন), g (্), k (ত), z (্র), j (ক) -> যান্ত্রিক (not যান্তি্রক)
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "wfdbgkzj");
+        assert_eq!(body_text(&a).trim(), "যান্ত্রিক");
+
+        // যান্ত্রিক with explicit 'g' before 'z': wfdbgk g z j -> যান্ত্রিক
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "wfdbgkgzj");
+        assert_eq!(body_text(&a).trim(), "যান্ত্রিক");
+
+        // প্রিয়: d (ি), r (প), z (্র), W (য়) -> প্রিয়
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "drzW");
+        assert_eq!(body_text(&a).trim(), "প্রিয়");
+
+        // প্রেম: c (ে), r (প), z (্র), m (ম) -> প্রেম
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "crzm");
+        assert_eq!(body_text(&a).trim(), "প্রেম");
+
+        // জ্যোতি: c (ে), u (জ), Z (্য), f (া), d (ি), k (ত) -> জ্যোতি
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "cuZfdk");
+        assert_eq!(body_text(&a).trim(), "জ্যোতি");
     }
 
     #[test]

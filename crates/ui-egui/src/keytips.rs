@@ -64,19 +64,20 @@ impl Target {
     }
 }
 
-/// Word's tab letters. `File` (Backstage only) and `Help` (dialog-only content) have none.
+/// Word's tab letters, as Word for Windows shows them after Alt (File F, Design G, References S,
+/// Review R, View W, Help Y). File opens the Backstage.
 const TAB_LETTERS: [(&str, &str); 11] = [
-    ("File", ""),
+    ("File", "F"),
     ("Home", "H"),
     ("Insert", "N"),
     ("Draw", "D"),
-    ("Design", "L"),
+    ("Design", "G"),
     ("Layout", "P"),
-    ("References", "R"),
+    ("References", "S"),
     ("Mailings", "M"),
-    ("Review", "S"),
-    ("View", "V"),
-    ("Help", ""),
+    ("Review", "R"),
+    ("View", "W"),
+    ("Help", "Y"),
 ];
 
 /// The letter badge for a tab (empty when it has none).
@@ -528,7 +529,8 @@ pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
                         match hit {
                             Some(tab) => {
                                 let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
-                                app.ui.keytips = Phase::Commands;
+                                // File opens the Backstage: no ribbon commands to badge.
+                                app.ui.keytips = if tab == "File" { Phase::Off } else { Phase::Commands };
                             }
                             None => app.ui.keytips = Phase::Off,
                         }
@@ -679,16 +681,17 @@ mod tests {
 
     #[test]
     fn tab_letters_match_word() {
+        // Observed in Word for Windows (Microsoft 365): Alt shows these over the tabs.
+        assert_eq!(tab_letter("File"), "F");
         assert_eq!(tab_letter("Home"), "H");
         assert_eq!(tab_letter("Insert"), "N");
-        assert_eq!(tab_letter("Design"), "L");
+        assert_eq!(tab_letter("Design"), "G");
         assert_eq!(tab_letter("Layout"), "P");
-        assert_eq!(tab_letter("References"), "R");
+        assert_eq!(tab_letter("References"), "S");
         assert_eq!(tab_letter("Mailings"), "M");
-        assert_eq!(tab_letter("Review"), "S");
-        assert_eq!(tab_letter("View"), "V");
-        assert_eq!(tab_letter("File"), "");
-        assert_eq!(tab_letter("Help"), "");
+        assert_eq!(tab_letter("Review"), "R");
+        assert_eq!(tab_letter("View"), "W");
+        assert_eq!(tab_letter("Help"), "Y");
     }
 
     #[test]
@@ -808,5 +811,20 @@ mod tests {
         assert_eq!(a.ui.keytips, Phase::Commands);
         assert!(handle_key(&mut a, egui::Key::F));
         assert_eq!(a.ui.keytips, Phase::Off);
+        // Alt, F: the Backstage, and keytips end.
+        a.ui.backstage = false;
+        activate(&mut a);
+        assert!(handle_key(&mut a, egui::Key::F));
+        assert!(a.ui.backstage, "Alt, F opens File");
+        assert_eq!(a.ui.keytips, Phase::Off);
+        // Alt, W: View; Alt, R: Review (Word's letters, not V and S).
+        a.ui.backstage = false;
+        activate(&mut a);
+        assert!(handle_key(&mut a, egui::Key::W));
+        assert_eq!((a.ui.tab.as_str(), a.ui.keytips), ("View", Phase::Commands));
+        a.ui.keytips = Phase::Off;
+        activate(&mut a);
+        assert!(handle_key(&mut a, egui::Key::R));
+        assert_eq!(a.ui.tab, "Review");
     }
 }

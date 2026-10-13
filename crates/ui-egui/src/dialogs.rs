@@ -180,6 +180,8 @@ pub enum Dialog {
         extra: FindExtra,
         replace_mode: bool,
         message: String,
+        /// Put the caret in Find what on the first frame, so typing searches (#772).
+        focus: bool,
     },
     Goto {
         page: String,
@@ -913,6 +915,7 @@ impl Dialog {
                 },
                 replace_mode: name == "replace",
                 message: String::new(),
+                focus: true,
             },
             "goto" => Dialog::Goto { page: String::new() },
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
@@ -975,10 +978,17 @@ impl Dialog {
                 selected_cmd: String::new(),
                 new_key: String::new(),
             },
-            "banglaConverter" => Dialog::BanglaConverter {
-                source_text: if app.session.sel.is_collapsed() { String::new() } else { app.session.selected_text() },
-                result_text: String::new(),
-            },
+            "banglaConverter" => {
+                let source_text = if app.session.sel.is_collapsed() { String::new() } else { app.session.selected_text() };
+                let result_text = if source_text.is_empty() {
+                    String::new()
+                } else if source_text.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c)) {
+                    wordcraft_engine::cmd::bangla::unicode_to_ansi(&source_text)
+                } else {
+                    wordcraft_engine::cmd::bangla::ansi_to_unicode(&source_text)
+                };
+                Dialog::BanglaConverter { source_text, result_text }
+            }
             "checkUpdates" => Dialog::CheckUpdates {
                 checking: false,
                 latest_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1402,7 +1412,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::Tabs { form } => crate::dialogs_para::tabs(app, ui, form),
         Dialog::Borders { form } => crate::dialogs_para::borders(app, ui, form),
-        Dialog::Find { query, replace, match_case, whole_word, regex, extra, replace_mode, message } => {
+        Dialog::Find { query, replace, match_case, whole_word, regex, extra, replace_mode, message, focus } => {
             ui.horizontal(|ui| {
                 if ui.selectable_label(!*replace_mode, tl!("Find")).clicked() {
                     *replace_mode = false;
@@ -1413,7 +1423,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Find what:"));
-                if ui.add(egui::TextEdit::singleline(query).desired_width(240.0)).gained_focus() {
+                let r = ui.add(egui::TextEdit::singleline(query).id(egui::Id::new("find_what")).desired_width(240.0));
+                if std::mem::take(focus) {
+                    r.request_focus();
+                }
+                if r.gained_focus() {
                     extra.to_replace = false;
                 }
             });
@@ -2039,6 +2053,14 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 .inner
             });
             let buttons = buttons.inner;
+            // The keyboard alone answers, as in Word (#861): Save has focus when the prompt opens,
+            // so Enter saves, and the arrow keys (egui's focus navigation) or Tab move between the
+            // buttons, shown as Save, Don't Save, Cancel.
+            if ui.memory(|m| m.focused().is_none())
+                && let Some((save, _)) = buttons.get(2)
+            {
+                save.request_focus();
+            }
             // Enter clicks the focused button; it means Save only when none of them has focus.
             let focused = buttons.iter().any(|(b, _)| b.has_focus());
             let answer = if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -2357,6 +2379,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             close || ui.input(|i| i.key_pressed(egui::Key::Escape))
         }
         Dialog::BanglaConverter { source_text, result_text } => {
+            ui.set_min_width(580.0);
             ui.heading(tl!("Bangla Converter (Unicode <-> ANSI / SutonnyMJ)"));
             ui.label(tl!("Convert text between modern Unicode and legacy Bijoy/SutonnyMJ ANSI without external software."));
             ui.add_space(8.0);

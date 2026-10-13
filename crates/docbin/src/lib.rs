@@ -8,6 +8,7 @@
 //! capped), so hostile input yields an error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod draw;
 mod fib;
 mod fkp;
 mod fmt;
@@ -40,7 +41,7 @@ use table::ParaOut;
 /// Largest stream we materialise (bytes); the engine already caps whole files at 2 GB.
 const MAX_STREAM: u64 = 1 << 30;
 /// Most header/footer parts we create (matches the docx reader's cap).
-const MAX_PARTS: usize = 50_000;
+pub(crate) const MAX_PARTS: usize = 50_000;
 /// `sprmCPicLocation`: the fc of a picture in the Data stream.
 const C_PIC_LOCATION: u16 = 0x6A03;
 /// `sprmPIlvl` / `sprmPIlfo`: the paragraph's list level and list.
@@ -126,6 +127,8 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
     let ftn_base = fib.ccp.text;
     let hdd_base = fib.ccp.text.saturating_add(fib.ccp.ftn);
     let edn_base = hdd_base.saturating_add(fib.ccp.hdd).saturating_add(fib.ccp.atn);
+    let txbx_base = edn_base.saturating_add(fib.ccp.edn);
+    let hdr_txbx_base = txbx_base.saturating_add(fib.ccp.txbx);
     let mut pics = media::Pictures::default();
 
     let ctx = WalkCtx {
@@ -139,7 +142,12 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
         sheet: &sheet,
         notes: &[],
         marks: &[],
+        spas: &[],
     };
+
+    // OfficeArt floating drawings and text box stories (main document and headers).
+    let spas = draw::parse_drawings(&word, &table, &fib, &ctx, &mut doc, &mut pics, txbx_base, hdr_txbx_base);
+    let ctx = WalkCtx { spas: &spas, ..ctx };
 
     // Header and footer parts: skip the six separator stories, then six stories per section
     // in the order even header, odd (default) header, even footer, odd (default) footer,
@@ -224,7 +232,7 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
 
 /// A story's CP range `[a, b)`, relative to a subdocument starting at `base` with `len`
 /// CPs, as absolute CPs clamped to that subdocument; `None` when empty.
-fn story(base: u32, len: u32, (a, b): (u32, u32)) -> Option<(u32, u32)> {
+pub(crate) fn story(base: u32, len: u32, (a, b): (u32, u32)) -> Option<(u32, u32)> {
     let (a, b) = (a.min(len), b.min(len));
     if b <= a {
         return None;
@@ -233,19 +241,21 @@ fn story(base: u32, len: u32, (a, b): (u32, u32)) -> Option<(u32, u32)> {
 }
 
 /// Everything the walker needs besides its CP range.
-struct WalkCtx<'a> {
-    word: &'a [u8],
-    data: &'a [u8],
-    pieces: &'a PieceTable,
-    chpx_bins: &'a Bins,
-    papx_bins: &'a Bins,
-    fonts: &'a [String],
-    raw_styles: &'a [stsh::RawStyle],
-    sheet: &'a StyleSheet,
+pub(crate) struct WalkCtx<'a> {
+    pub(crate) word: &'a [u8],
+    pub(crate) data: &'a [u8],
+    pub(crate) pieces: &'a PieceTable,
+    pub(crate) chpx_bins: &'a Bins,
+    pub(crate) papx_bins: &'a Bins,
+    pub(crate) fonts: &'a [String],
+    pub(crate) raw_styles: &'a [stsh::RawStyle],
+    pub(crate) sheet: &'a StyleSheet,
     /// (reference CP in the main document, kind, part id) for notes.
-    notes: &'a [(u32, NoteKind, u32)],
+    pub(crate) notes: &'a [(u32, NoteKind, u32)],
     /// Bookmark boundaries (main-document CPs), sorted for a sequential walk.
-    marks: &'a [(u32, notes::Mark)],
+    pub(crate) marks: &'a [(u32, notes::Mark)],
+    /// OfficeArt floating drawing anchors (absolute CPs), sorted for binary search.
+    pub(crate) spas: &'a [(u32, InlineObject)],
 }
 
 /// State while assembling one paragraph from per-CP formatting.
@@ -310,7 +320,7 @@ fn huge_papx(data: &[u8], papx: &[u8]) -> Option<Vec<u8>> {
 /// The range is clamped to the last piece's CP, and unreadable stretches (gaps, truncated
 /// pieces) are skipped a whole piece at a time, so the work is bounded by the text that
 /// really exists, not by the CP numbers a file claims.
-fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pics: &mut media::Pictures) -> Vec<ParaOut> {
+pub(crate) fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pics: &mut media::Pictures) -> Vec<ParaOut> {
     let cp_end = cp_end.min(ctx.pieces.cp_end());
     let mut out = Vec::new();
     let mut pb = ParaBuild::default();
@@ -451,6 +461,14 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pics: &mut media::Pictures) -
                 if let Some((_, kind, id)) = ctx.notes.get(at).filter(|(c, _, _)| *c == cp) {
                     pb.push('\u{FFFC}', CharProps::default());
                     pb.objects.push(InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() });
+                }
+            }
+            '\u{8}' => {
+                // OfficeArt floating drawing anchor (PlcSpaMom / PlcSpaHdr).
+                let at = ctx.spas.partition_point(|(c, _)| *c < cp);
+                for (_, obj) in ctx.spas.get(at..).unwrap_or(&[]).iter().take_while(|(c, _)| *c == cp) {
+                    pb.push('\u{FFFC}', CharProps::default());
+                    pb.objects.push(obj.clone());
                 }
             }
             '\t' => push_formatted(&mut pb, cp, '\t', ctx, field.as_mut()),

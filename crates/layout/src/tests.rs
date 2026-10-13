@@ -1999,6 +1999,40 @@ fn line_spacing_does_not_scale_pictures() {
 }
 
 #[test]
+fn multiple_line_spacing_adds_its_leading_below_the_text() {
+    use wordcraft_doc::props::LineSpacing;
+    // (spacing, expected baseline below the line top as a share of the ascent)
+    for (spacing, share) in [(LineSpacing::Multiple(1.15), 1.0), (LineSpacing::Multiple(2.0), 1.0), (LineSpacing::Multiple(0.8), 0.8)] {
+        let mut d = Document::from_text(&"Several words wrap onto more lines. ".repeat(30));
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.line_spacing = Some(spacing);
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let asc = para.styles[0].ascent;
+        assert!(para.lines.len() > 1);
+        for line in &para.lines {
+            // Word's 1.15-spaced Times New Roman 12pt sits one ascent below the line top; the
+            // 0.15 extra goes below the descent (docxide-pdf's hyphenation fixtures).
+            assert!(
+                (line.baseline - line.top - asc * share).abs() < 0.01,
+                "{spacing:?}: baseline {} below the top, ascent {asc}",
+                line.baseline - line.top
+            );
+        }
+    }
+    // Exact spacing still keeps the descent below the baseline.
+    let mut d = Document::from_text("Exact");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Exactly(30.0));
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let line = &para.lines[0];
+    assert!((line.top + line.height - line.baseline - para.styles[0].descent).abs() < 0.01);
+}
+
+#[test]
 fn body_starts_right_below_a_tall_header() {
     let mut d = Document::from_text("Body");
     let mut hp = wordcraft_doc::Paragraph::with_text("", Default::default());
@@ -3134,4 +3168,116 @@ fn footnote_longer_than_pages_ends() {
     let pieces = note_pieces(&l, id);
     assert!(pieces.len() >= 3 && l.pages.len() == pieces.len(), "{} pages, {pieces:?}", l.pages.len());
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
+}
+
+/// Space before at the top of a page, measured in Word for Windows (32 cases): a paragraph that
+/// ends with a page break keeps its mark with the break (nothing of it goes to the new page) and the
+/// next paragraph gets no space before there; a paragraph that starts with a page break starts on
+/// the new page with its space before; a page break before keeps the space before in compatibility
+/// modes up to 14 (less the previous paragraph's space after) and drops it in mode 15.
+#[test]
+fn space_before_at_the_top_of_a_page_like_word() {
+    let para = |text: &str, before: f32, pbb: bool| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props = ParaProps { space_before: Some(before), space_after: Some(0.0), page_break_before: Some(pbb), ..Default::default() };
+        wordcraft_doc::para_block(p)
+    };
+    let probe_top = |blocks: Vec<std::sync::Arc<wordcraft_doc::Block>>, mode: u32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = mode;
+        let n = blocks.len();
+        d.body = blocks;
+        let l = lay(&d);
+        let c = l.caret(&Pos::body(n - 1, 0)).unwrap();
+        (c.page, c.top)
+    };
+    let plain_top = probe_top(vec![para("first", 0.0, false), para("PROBE", 0.0, true)], 15).1;
+    let brk = wordcraft_doc::para::PAGE_BREAK;
+    // A paragraph ending with a page break, then one with 24 pt before: no space, in both modes.
+    for mode in [12, 15] {
+        let (page, top) = probe_top(vec![para(&format!("first{brk}"), 0.0, false), para("PROBE", 24.0, false)], mode);
+        assert_eq!(page, 1, "mode {mode}");
+        assert!((top - plain_top).abs() < 0.05, "mode {mode}: the mark stays with the break and the space goes: {top} vs {plain_top}");
+    }
+    // A paragraph starting with a page break: its space before on the new page.
+    let mut d = Document::new();
+    d.body = vec![para("first", 0.0, false), para(&format!("{brk}PROBE"), 24.0, false)];
+    let l = lay(&d);
+    let c = l.caret(&Pos::body(1, brk.len_utf8())).unwrap();
+    assert_eq!(c.page, 1);
+    assert!((c.top - plain_top - 24.0).abs() < 0.05, "{} vs {}", c.top, plain_top + 24.0);
+    // Page break before: kept up to mode 14, dropped in 15.
+    let (_, kept) = probe_top(vec![para("first", 0.0, false), para("PROBE", 24.0, true)], 14);
+    let (_, dropped) = probe_top(vec![para("first", 0.0, false), para("PROBE", 24.0, true)], 15);
+    assert!((kept - plain_top - 24.0).abs() < 0.05 && (dropped - plain_top).abs() < 0.05, "{kept} {dropped} {plain_top}");
+    // After a page break before (mode 14) the previous paragraph's space after comes off: 24 - 10.
+    let mut first = wordcraft_doc::Paragraph::with_text("first", Default::default());
+    first.props = ParaProps { space_before: Some(0.0), space_after: Some(10.0), ..Default::default() };
+    let (_, top) = probe_top(vec![wordcraft_doc::para_block(first.clone()), para("PROBE", 24.0, true)], 14);
+    assert!((top - plain_top - 14.0).abs() < 0.05, "{top} vs {}", plain_top + 14.0);
+    // More after than before: nothing left.
+    first.props.space_after = Some(30.0);
+    let (_, top) = probe_top(vec![wordcraft_doc::para_block(first), para("PROBE", 24.0, true)], 14);
+    assert!((top - plain_top).abs() < 0.05, "{top} vs {plain_top}");
+    // The caret can still reach the end of a paragraph whose mark stayed with its page break.
+    let mut d = Document::new();
+    d.body = vec![para(&format!("first{brk}"), 0.0, false), para("next", 0.0, false)];
+    let l = lay(&d);
+    assert!(l.caret(&Pos::body(0, "first".len() + brk.len_utf8())).is_some(), "caret after the break");
+}
+
+#[test]
+fn group_text_boxes_are_placed_and_hit_testable() {
+    let mut d = Document::new();
+    let p = wordcraft_doc::Paragraph::with_text("Inside Group Box", Default::default());
+    let id = d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(p)]);
+    let child_box = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 200.0,
+        h: 60.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(id),
+        effects: Default::default(),
+        freeform: None,
+    };
+    let group = InlineObject::Group {
+        w: 300.0,
+        h: 100.0,
+        float: wordcraft_doc::para::Float {
+            wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+            h_rel: wordcraft_doc::para::Anchor::Margin,
+            v_rel: wordcraft_doc::para::Anchor::Margin,
+            x: 50.0,
+            y: 50.0,
+            ..Default::default()
+        },
+        ch_w: 300.0,
+        ch_h: 100.0,
+        children: vec![wordcraft_doc::para::GroupChild { x: 10.0, y: 10.0, obj: child_box }],
+    };
+    let mut host = wordcraft_doc::Paragraph::new();
+    host.insert_object(0, group, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(host)];
+
+    let l = lay(&d);
+    // 1. Layout finds the text box by part ID
+    let hit_box = l.text_box(id, 0);
+    assert!(hit_box.is_some(), "child text box must be registered in layout");
+    let r = hit_box.unwrap().rect;
+
+    // 2. Clicking inside the text box returns its Part story
+    let click_x = r.x + 20.0;
+    let click_y = r.y + 20.0;
+    assert_eq!(l.story_at(0, click_x, click_y), Some(StoryRef::Part(id)), "story_at must identify the child text box");
+
+    // 3. Hit testing in the text box returns a valid character position in the text box
+    let pos = l.hit(0, click_x, click_y, StoryRef::Part(id));
+    assert!(pos.is_some(), "hit testing inside child text box must succeed");
+    assert_eq!(pos.unwrap().story, StoryRef::Part(id));
+
+    // 4. object_at does NOT grab the enclosing group when clicking in the interior of the text
+    assert!(l.object_at(0, click_x, click_y, 5.0).is_none(), "object_at must not grab the group inside text");
 }

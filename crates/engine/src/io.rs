@@ -353,15 +353,40 @@ fn char_props_has_bijoy(c: &wordcraft_doc::CharProps) -> bool {
 fn normalize_bijoy_char_props(props: &mut wordcraft_doc::CharProps) {
     props.font = Some("Kalpurush".into());
     props.font_cs = Some("Kalpurush".into());
-    if props.size.is_some() {
-        props.size_cs = props.size;
+    // Kalpurush renders slightly larger than SutonnyMJ at the same nominal point size.
+    // Reduce by 2 pt (clamped to a minimum of 6 pt) so converted documents look the
+    // same as they did in Word / Bijoy.
+    if props.size.is_none() {
+        props.size = props.size_cs;
     }
+    if let Some(sz) = props.size.as_mut() {
+        *sz = (*sz - 2.0).max(6.0);
+    }
+    // Keep size_cs in sync with the adjusted size.
+    props.size_cs = props.size;
     if props.bold.is_some() {
         props.bold_cs = props.bold;
     }
     if props.italic.is_some() {
         props.italic_cs = props.italic;
     }
+}
+
+fn resolve_style_size(styles: &wordcraft_doc::StyleSheet, style_id: Option<&str>) -> Option<f32> {
+    let mut cur = style_id;
+    let mut hops = 0usize;
+    while let Some(id) = cur {
+        hops += 1;
+        if hops > 32 {
+            break;
+        }
+        let Some(st) = styles.styles.iter().find(|s| s.id == id) else { break };
+        if let Some(sz) = st.chr.size.or(st.chr.size_cs) {
+            return Some(sz);
+        }
+        cur = st.based_on.as_deref();
+    }
+    styles.default_chr.size.or(styles.default_chr.size_cs)
 }
 
 fn is_sutonny_glyph(c: char) -> bool {
@@ -388,7 +413,10 @@ fn is_leftover_word(word: &str) -> bool {
     let chars: Vec<char> = word.chars().collect();
     chars.iter().enumerate().any(|(i, ch)| {
         let near = |j: Option<usize>| j.and_then(|j| chars.get(j)).is_some_and(|c| is_bn_letter(*c));
-        matches!(ch, 'w' | 'z') && (near(i.checked_sub(1)) || near(i.checked_add(1)))
+        let malformed_cluster = matches!(ch, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ')
+            && chars.get(i + 1) == Some(&'্')
+            && chars.get(i + 2).copied().is_some_and(crate::cmd::bangla::is_bn_consonant);
+        malformed_cluster || (matches!(ch, 'w' | 'z') && (near(i.checked_sub(1)) || near(i.checked_add(1))))
     })
 }
 
@@ -454,18 +482,72 @@ fn slice_safe(s: &str, start: usize, end: usize) -> &str {
     s.get(start..end).unwrap_or("")
 }
 
+/// Legacy Bijoy documents often align right-hand header fields (such as `তারিখ`) using spaces
+/// plus multiple tabs plus long runs of spaces (`   \t\t\t                `). Because Unicode
+/// `Kalpurush` glyphs and spaces are slightly wider than `SutonnyMJ`, trailing spaces before `\t`
+/// can push a tab past a 36pt stop and long space runs after `\t` can wrap the date onto line 2.
+fn compact_bijoy_tab_spaces(s: &str) -> String {
+    if !s.contains('\t') {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0usize;
+    let mut after_tab = false;
+    while i < chars.len() {
+        let Some(&ch) = chars.get(i) else { break };
+        if ch == ' ' {
+            let mut j = i;
+            while chars.get(j) == Some(&' ') {
+                j += 1;
+            }
+            let space_count = j - i;
+            if chars.get(j) == Some(&'\t') {
+                // Strip spaces immediately preceding a tab stop.
+                i = j;
+                continue;
+            }
+            if after_tab && space_count >= 4 {
+                let keep = (space_count / 4).max(1);
+                for _ in 0..keep {
+                    out.push(' ');
+                }
+                after_tab = false;
+                i = j;
+                continue;
+            }
+            for _ in 0..space_count {
+                out.push(' ');
+            }
+            after_tab = false;
+            i = j;
+        } else if ch == '\t' {
+            out.push('\t');
+            after_tab = true;
+            i += 1;
+        } else {
+            out.push(ch);
+            after_tab = false;
+            i += 1;
+        }
+    }
+    out
+}
+
 fn normalize_blocks_bijoy(
-    blocks: &mut Vec<std::sync::Arc<wordcraft_doc::Block>>,
+    blocks: &mut [std::sync::Arc<wordcraft_doc::Block>],
     default_is_bijoy: bool,
     bijoy_style_ids: &std::collections::HashSet<String>,
+    styles: &wordcraft_doc::StyleSheet,
 ) {
-    for b in blocks {
+    for b in blocks.iter_mut() {
         let block = std::sync::Arc::make_mut(b);
         match block {
             wordcraft_doc::Block::Para(p) => {
                 // A paragraph is Bijoy if: doc default is Bijoy, or the paragraph mark says so,
                 // or any run has a Bijoy font, or the named paragraph style resolves to Bijoy.
                 let style_is_bijoy = p.props.style.as_deref().is_some_and(|s| bijoy_style_ids.contains(s));
+                let style_size = resolve_style_size(styles, p.props.style.as_deref());
 
                 let mut para_has_bijoy = default_is_bijoy || char_props_has_bijoy(&p.mark) || style_is_bijoy;
                 if !para_has_bijoy {
@@ -478,7 +560,10 @@ fn normalize_blocks_bijoy(
                 }
                 let para_is_partial = !para_has_bijoy && has_leftover_bijoy(&p.text);
 
-                if para_has_bijoy || para_is_partial {
+                if para_has_bijoy {
+                    if p.mark.size.is_none() && p.mark.size_cs.is_none() {
+                        p.mark.size = style_size;
+                    }
                     normalize_bijoy_char_props(&mut p.mark);
                     // Also normalize the paragraph mark's tracked-change old props
                     if let Some(fc) = &mut p.mark.fmt_change
@@ -486,6 +571,11 @@ fn normalize_blocks_bijoy(
                     {
                         normalize_bijoy_char_props(&mut fc.old);
                     }
+                    // Force single line spacing (1.0×) on converted Bijoy paragraphs (including empty ones).
+                    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+                } else if para_is_partial {
+                    p.mark.font = Some("Kalpurush".into());
+                    p.mark.font_cs = Some("Kalpurush".into());
                 }
 
                 if (para_has_bijoy || para_is_partial || (p.runs.is_empty() && default_is_bijoy)) && !p.text.is_empty() {
@@ -512,7 +602,10 @@ fn normalize_blocks_bijoy(
                         let is_partial = !is_bijoy && has_leftover_bijoy(run_slice);
 
                         let mut props = r.props.clone();
-                        if is_bijoy || is_partial {
+                        if is_bijoy {
+                            if props.size.is_none() && props.size_cs.is_none() {
+                                props.size = style_size;
+                            }
                             normalize_bijoy_char_props(&mut props);
                             // Normalize the run's tracked-change old formatting too
                             if let Some(fc) = &mut props.fmt_change
@@ -520,6 +613,23 @@ fn normalize_blocks_bijoy(
                             {
                                 normalize_bijoy_char_props(&mut fc.old);
                             }
+                        } else if is_partial {
+                            props.font = Some("Kalpurush".into());
+                            props.font_cs = Some("Kalpurush".into());
+                        } else if para_has_bijoy {
+                            // Inline Latin/English runs inside a Bijoy paragraph also reduce
+                            // their font size by 2pt so they stay proportional to the surrounding
+                            // Bengali sentence.
+                            if props.size.is_none() && props.size_cs.is_none() {
+                                props.size = style_size;
+                            }
+                            if props.size.is_none() {
+                                props.size = props.size_cs;
+                            }
+                            if let Some(sz) = props.size.as_mut() {
+                                *sz = (*sz - 2.0).max(6.0);
+                            }
+                            props.size_cs = props.size;
                         }
 
                         // Coalesce consecutive Bijoy runs that share identical formatting OR split a single word
@@ -550,11 +660,11 @@ fn normalize_blocks_bijoy(
 
                     for item in staged {
                         if item.is_bijoy {
-                            let converted = crate::cmd::bangla::ansi_to_unicode(&item.slice);
+                            let converted = compact_bijoy_tab_spaces(&crate::cmd::bangla::ansi_to_unicode(&item.slice));
                             new_runs.push(wordcraft_doc::Run { len: converted.len(), props: item.props });
                             new_text.push_str(&converted);
                         } else if item.is_partial {
-                            let converted = repair_partial_bijoy(&item.slice);
+                            let converted = compact_bijoy_tab_spaces(&repair_partial_bijoy(&item.slice));
                             new_runs.push(wordcraft_doc::Run { len: converted.len(), props: item.props });
                             new_text.push_str(&converted);
                         } else {
@@ -564,8 +674,9 @@ fn normalize_blocks_bijoy(
                     }
 
                     if new_runs.is_empty() {
-                        let converted = if para_is_partial { repair_partial_bijoy(&p.text) } else { crate::cmd::bangla::ansi_to_unicode(&p.text) };
-                        let mut props = wordcraft_doc::CharProps::default();
+                        let raw = if para_is_partial { repair_partial_bijoy(&p.text) } else { crate::cmd::bangla::ansi_to_unicode(&p.text) };
+                        let converted = compact_bijoy_tab_spaces(&raw);
+                        let mut props = wordcraft_doc::CharProps { size: style_size, ..Default::default() };
                         normalize_bijoy_char_props(&mut props);
                         new_runs.push(wordcraft_doc::Run { len: converted.len(), props });
                         new_text = converted;
@@ -573,15 +684,41 @@ fn normalize_blocks_bijoy(
 
                     p.text = new_text;
                     p.runs = new_runs;
+                    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
                 }
             }
             wordcraft_doc::Block::Table(t) => {
                 for row in &mut t.rows {
                     for cell in &mut row.cells {
-                        normalize_blocks_bijoy(&mut cell.blocks, default_is_bijoy, bijoy_style_ids);
+                        normalize_blocks_bijoy(&mut cell.blocks, default_is_bijoy, bijoy_style_ids, styles);
                     }
                 }
             }
+        }
+    }
+
+    // Keep centered bold underlined Bijoy section headings (and any single empty spacing
+    // paragraph right below them) together with the following body paragraph so reducing
+    // font sizes by 2pt never orphans a section title at the bottom of a page.
+    let mut keep_empty = false;
+    for b in blocks.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            if p.text.trim().is_empty() {
+                if keep_empty {
+                    p.props.keep_next = Some(true);
+                    keep_empty = false;
+                }
+            } else {
+                keep_empty = false;
+                let is_centered = p.props.align == Some(wordcraft_doc::props::Align::Center);
+                let is_bold_ul = p.mark.bold == Some(true) && p.mark.underline.is_some();
+                if is_centered && is_bold_ul && p.mark.font.as_deref() == Some("Kalpurush") {
+                    p.props.keep_next = Some(true);
+                    keep_empty = true;
+                }
+            }
+        } else {
+            keep_empty = false;
         }
     }
 }
@@ -633,11 +770,11 @@ pub fn normalize_bijoy_fonts(doc: &mut Document) {
     let bijoy_style_ids = bijoy_style_set(&doc.styles);
 
     // Decode all body blocks recursively (including tables)
-    normalize_blocks_bijoy(&mut doc.body, default_is_bijoy, &bijoy_style_ids);
+    normalize_blocks_bijoy(&mut doc.body, default_is_bijoy, &bijoy_style_ids, &doc.styles);
 
     // Decode all secondary parts (headers, footers, footnotes, endnotes, comments, text boxes)
     for part in doc.parts.values_mut() {
-        normalize_blocks_bijoy(&mut part.blocks, default_is_bijoy, &bijoy_style_ids);
+        normalize_blocks_bijoy(&mut part.blocks, default_is_bijoy, &bijoy_style_ids, &doc.styles);
     }
 
     // Update style sheet default font and any named styles that referenced Bijoy
@@ -647,6 +784,7 @@ pub fn normalize_bijoy_fonts(doc: &mut Document) {
     for st in &mut doc.styles.styles {
         if char_props_has_bijoy(&st.chr) {
             normalize_bijoy_char_props(&mut st.chr);
+            st.para.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
         }
     }
 
@@ -691,13 +829,16 @@ mod tests {
         assert_eq!(p_out.runs.len(), 1);
         assert_eq!(p_out.runs[0].props.font.as_deref(), Some("Kalpurush"));
         assert_eq!(p_out.runs[0].props.font_cs.as_deref(), Some("Kalpurush"));
-        assert_eq!(p_out.runs[0].props.size, Some(26.0));
-        assert_eq!(p_out.runs[0].props.size_cs, Some(26.0));
+        // Font size reduced by 2 pt (26 pt Bijoy → 24 pt Kalpurush).
+        assert_eq!(p_out.runs[0].props.size, Some(24.0));
+        assert_eq!(p_out.runs[0].props.size_cs, Some(24.0));
         assert_eq!(p_out.runs[0].props.bold, Some(true));
         assert_eq!(p_out.runs[0].props.bold_cs, Some(true));
         assert_eq!(p_out.runs[0].props.color, Some(green));
         assert_eq!(p_out.mark.font.as_deref(), Some("Kalpurush"));
         assert_eq!(p_out.mark.font_cs.as_deref(), Some("Kalpurush"));
+        // Line spacing is forced to single after conversion.
+        assert_eq!(p_out.props.line_spacing, Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)));
     }
 
     #[test]
@@ -726,9 +867,10 @@ mod tests {
     fn normalize_bijoy_style_chain_and_watermark() {
         use wordcraft_doc::{Style, StyleKind, Watermark};
 
-        // Base style with SutonnyMJ
+        // Base style with SutonnyMJ 14pt
         let mut st1 = Style { id: "BaseBangla".into(), name: "Base Bangla".into(), kind: StyleKind::Paragraph, ..Default::default() };
         st1.chr.font = Some("SutonnyMJ".into());
+        st1.chr.size = Some(14.0);
 
         // Child style inheriting from BaseBangla
         let st2 = Style {
@@ -743,7 +885,7 @@ mod tests {
         doc.styles.styles.push(st1);
         doc.styles.styles.push(st2);
 
-        // Paragraph using ChildBangla with no explicit font on runs
+        // Paragraph using ChildBangla with no explicit font or size on runs
         let text = "evsjv‡`k".to_string();
         let mut p = Paragraph::new();
         p.props.style = Some("ChildBangla".into());
@@ -759,6 +901,8 @@ mod tests {
         let p_out = doc.body[0].as_para().unwrap();
         assert_eq!(p_out.text, "বাংলাদেশ");
         assert_eq!(p_out.runs[0].props.font.as_deref(), Some("Kalpurush"));
+        assert_eq!(p_out.runs[0].props.size, Some(12.0));
+        assert_eq!(p_out.props.line_spacing, Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)));
 
         let wm = doc.settings.watermark.unwrap();
         assert_eq!(wm.text, "বাংলাদেশ");

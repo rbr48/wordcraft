@@ -682,8 +682,12 @@ pub fn check_grammar(text: &str) -> Vec<Issue> {
             });
         }
         let tail = text.get(*b..).unwrap_or("");
-        let next_non_space = tail.trim_start_matches(['"', '”', ')', '\'']).chars().next();
-        after_end = matches!(next_non_space, Some('.' | '!' | '?')) && tail.trim_start_matches(['.', '!', '?', '"', '”', ')']).starts_with(' ');
+        let punctuation = tail.trim_start_matches(['"', '”', ')', '\'']);
+        // Two or more dots are an ellipsis, not a full stop ending a sentence.
+        // A Unicode ellipsis (U+2026) does not match sentence-ending punctuation either.
+        after_end = matches!(punctuation.chars().next(), Some('.' | '!' | '?'))
+            && !punctuation.starts_with("..")
+            && punctuation.trim_start_matches(['.', '!', '?', '"', '”', ')']).starts_with(' ');
     }
     v.sort_by_key(|i| i.start);
     v
@@ -752,6 +756,28 @@ mod tests {
         assert!(msgs.iter().any(|m| m.contains("Capitalize")), "{msgs:?}");
         assert!(msgs.iter().any(|m| m.contains("Extra space")), "{msgs:?}");
         assert!(check_grammar("A university is an hour away.").is_empty(), "{:?}", check_grammar("A university is an hour away."));
+    }
+
+    #[test]
+    fn ellipses_do_not_start_sentences() {
+        for text in [
+            "I saw... a figure right outside.",
+            "I saw… a figure right outside.",
+            "I saw.... a figure right outside.",
+            "I saw... \"a figure\" right outside.",
+            "I saw… “a figure” right outside.",
+        ] {
+            let capitals: Vec<_> =
+                check_grammar(text).into_iter().filter(|issue| issue.message == "Capitalize the first word of a sentence").collect();
+            assert!(capitals.is_empty(), "{text}: {capitals:?}");
+        }
+
+        for text in ["I saw. a figure.", "I saw! a figure.", "I saw? a figure.", "I saw.\" a figure."] {
+            let capitals: Vec<_> =
+                check_grammar(text).into_iter().filter(|issue| issue.message == "Capitalize the first word of a sentence").collect();
+            assert_eq!(capitals.len(), 1, "{text}: {capitals:?}");
+            assert_eq!(capitals[0].suggestions, ["A"], "{text}");
+        }
     }
 
     #[test]

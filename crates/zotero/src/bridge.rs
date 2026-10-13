@@ -568,6 +568,10 @@ fn remove_empty_note(s: &mut Session, f: &ZField) -> Option<Pos> {
     for b in blocks {
         if let Some(p) = b.as_para() {
             rest.push_str(&p.text);
+            // A picture, shape, equation... is content too, even though it has no text.
+            if !p.objects.iter().all(|o| o.is_marker() || matches!(o, InlineObject::NoteRef { .. })) {
+                return None;
+            }
         }
     }
     if rest.chars().any(|c| c != OBJ && !c.is_whitespace()) {

@@ -57,15 +57,15 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
             out.push(RawStyle::default());
             continue;
         };
-        // StdfBase (10 bytes): sti(12)+flags(4); stk(4)+istdNext(12); cupx(4)+istdBase(12);
+        // StdfBase (10 bytes): sti(12)+flags(4); stk(4)+istdBase(12); cupx(4)+istdNext(12);
         // bchUpe(16) (= cbStd); grfstd(16). Validated against Word's own files: bchUpe equals
         // cbStd and style 0 is sti 0 ("Normal").
         let stk = (stdf.get(2).copied().unwrap_or(1) & 0x0F).max(1);
         let w1 = stdf.get(2..4).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0xFFF1);
-        let _istd_next = w1 >> 4; // next-paragraph style; unused for now
+        let istd_base = w1 >> 4;
         let w2 = stdf.get(4..6).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0);
         let cupx = (w2 & 0x0F) as usize;
-        let istd_base = w2 >> 4;
+        let _istd_next = w2 >> 4; // next-paragraph style; unused for now
         let mut at = 2 + cb_std_base;
         // xstzName: Xst (cch u16 + UTF-16LE) + terminator u16.
         let mut name = String::new();
@@ -106,8 +106,9 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
 }
 
 /// Font names from the `SttbfFfn` at `table[fc..fc+lcb]`: an STTB of FFN records. Extended
-/// tables carry a 2-byte length per record; non-extended ones rely on each FFN's NUL-
-/// terminated name ([MS-DOC] §2.9.243/§2.9.247).
+/// tables carry a 2-byte length per record; non-extended ones carry a 1-byte `cbFfnM1`
+/// length prefix (or rely on the NUL-terminated name in minimal synthetic fixtures)
+/// ([MS-DOC] §2.9.243/§2.9.247).
 pub(crate) fn fonts(table: &[u8], fc: u32, lcb: u32) -> Vec<String> {
     let end = match (fc as usize).checked_add(lcb as usize) {
         Some(e) if e <= table.len() => e,
@@ -144,6 +145,8 @@ pub(crate) fn fonts(table: &[u8], fc: u32, lcb: u32) -> Vec<String> {
         }
     } else {
         // Non-extended: cData, cbExtra (0 for Ffn tables), then self-delimiting FFNs.
+        // In Word's SttbfFfn each record begins with 1-byte cbFfnM1 (length - 1), which
+        // includes any alternate font name (xszAlt) after the primary NUL terminator.
         let cdata = first.min(1024) as usize;
         let cb_extra = u16at(2).unwrap_or(0) as usize;
         let mut at = 4usize;
@@ -152,9 +155,14 @@ pub(crate) fn fonts(table: &[u8], fc: u32, lcb: u32) -> Vec<String> {
             if rest.is_empty() {
                 break;
             }
-            // The name ends at the UTF-16 NUL; keep a cap for hostile inputs.
-            let name_len = rest[40.min(rest.len())..].as_chunks::<2>().0.iter().position(|c| c == &[0, 0]).unwrap_or(64).saturating_mul(2);
-            let rec_len = 40 + name_len + 2;
+            let cb = rest.first().copied().unwrap_or(0) as usize;
+            let rec_len = if cb >= 40 {
+                1 + cb
+            } else {
+                // Synthetic test records with a zero cbFfnM1: scan to the UTF-16 NUL.
+                let name_len = rest[40.min(rest.len())..].as_chunks::<2>().0.iter().position(|c| c == &[0, 0]).unwrap_or(64).saturating_mul(2);
+                40 + name_len + 2
+            };
             out.push(name_of(rest));
             at += rec_len + cb_extra;
         }

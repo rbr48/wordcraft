@@ -417,7 +417,7 @@ fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) 
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
-        let _ = app.run(id, params);
+        crate::widgets::run_from_ribbon(app, id, params);
         ui.close();
     }
 }
@@ -430,7 +430,7 @@ fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled(enabled, egui::Button::new((mark, tl!(label))).selected(checked).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
-        let _ = app.run(id, params);
+        crate::widgets::run_from_ribbon(app, id, params);
         ui.close();
     }
 }
@@ -1067,8 +1067,8 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
-        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        position_menu(ui, app);
+        wrap_menu(ui, app);
         stack(ui, |ui| {
             small(ui, app, "bringForward", Some("Bring Forward"), "Bring Forward", "arrange.bringForward", json!({}), false);
             small(ui, app, "sendBackward", Some("Send Backward"), "Send Backward", "arrange.sendBackward", json!({}), false);
@@ -1111,6 +1111,52 @@ fn group_menu(ui: &mut Ui, app: &mut WordApp, label: Option<&str>) {
     menu_button(ui, app, "group", label, "Group", false, |ui, app| {
         mi(ui, app, "Group", "arrange.group", json!({}));
         mi(ui, app, "Ungroup", "arrange.ungroup", json!({}));
+    });
+}
+
+/// Arrange › Wrap Text: all 7 Word-style text wrapping options.
+fn wrap_menu(ui: &mut Ui, app: &mut WordApp) {
+    let on = crate::widgets::enabled(app, "arrange.wrap");
+    let cur_wrap = wordcraft_engine::cmd::objects::selected(&app.session)
+        .and_then(|(_, o)| o.frame().map(|(_, _, f)| f.wrap))
+        .unwrap_or(wordcraft_doc::para::Wrap::Inline);
+    crate::widgets::menu_button_enabled(ui, app, "wrapText", Some("Wrap\nText"), "Wrap Text", true, on, |ui, app| {
+        mi_check(ui, app, "In Line with Text", cur_wrap == wordcraft_doc::para::Wrap::Inline, "arrange.wrap", json!({"wrap": "inline"}));
+        ui.separator();
+        mi_check(ui, app, "Square", cur_wrap == wordcraft_doc::para::Wrap::Square, "arrange.wrap", json!({"wrap": "square"}));
+        mi_check(ui, app, "Tight", cur_wrap == wordcraft_doc::para::Wrap::Tight, "arrange.wrap", json!({"wrap": "tight"}));
+        mi_check(ui, app, "Through", cur_wrap == wordcraft_doc::para::Wrap::Through, "arrange.wrap", json!({"wrap": "through"}));
+        mi_check(ui, app, "Top and Bottom", cur_wrap == wordcraft_doc::para::Wrap::TopAndBottom, "arrange.wrap", json!({"wrap": "topAndBottom"}));
+        ui.separator();
+        mi_check(ui, app, "Behind Text", cur_wrap == wordcraft_doc::para::Wrap::BehindText, "arrange.wrap", json!({"wrap": "behindText"}));
+        mi_check(ui, app, "In Front of Text", cur_wrap == wordcraft_doc::para::Wrap::InFrontOfText, "arrange.wrap", json!({"wrap": "inFrontOfText"}));
+    });
+}
+
+/// Arrange › Position: In Line with Text and 9 page anchor positions with text wrapping.
+fn position_menu(ui: &mut Ui, app: &mut WordApp) {
+    let on = crate::widgets::enabled(app, "arrange.position");
+    let cur_wrap = wordcraft_engine::cmd::objects::selected(&app.session)
+        .and_then(|(_, o)| o.frame().map(|(_, _, f)| f.wrap))
+        .unwrap_or(wordcraft_doc::para::Wrap::Inline);
+    crate::widgets::menu_button_enabled(ui, app, "position", Some("Position"), "Position", true, on, |ui, app| {
+        ui.label(egui::RichText::new(tl!("In Line with Text")).small().strong());
+        mi_check(ui, app, "In Line with Text", cur_wrap == wordcraft_doc::para::Wrap::Inline, "arrange.wrap", json!({"wrap": "inline"}));
+        ui.separator();
+        ui.label(egui::RichText::new(tl!("With Text Wrapping")).small().strong());
+        for (l, preset) in [
+            ("Top Left", "topLeft"),
+            ("Top Center", "topCenter"),
+            ("Top Right", "topRight"),
+            ("Middle Left", "middleLeft"),
+            ("Middle Center", "middleCenter"),
+            ("Middle Right", "middleRight"),
+            ("Bottom Left", "bottomLeft"),
+            ("Bottom Center", "bottomCenter"),
+            ("Bottom Right", "bottomRight"),
+        ] {
+            mi(ui, app, l, "arrange.position", json!({"preset": preset}));
+        }
     });
 }
 
@@ -1454,8 +1500,8 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
-        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        position_menu(ui, app);
+        wrap_menu(ui, app);
         stack(ui, |ui| {
             rotate_menu(ui, app, Some("Rotate"));
             small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);
@@ -1566,8 +1612,8 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
-        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        position_menu(ui, app);
+        wrap_menu(ui, app);
         stack(ui, |ui| {
             rotate_menu(ui, app, Some("Rotate"));
             small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);

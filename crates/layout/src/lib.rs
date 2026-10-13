@@ -550,11 +550,16 @@ fn layout_box(
                 let mut pl = ctx.para_labelled(p, width, table, &[], label.clone());
                 let ctxl = pl.rp.contextual_spacing;
                 let same = prev_style.as_ref().is_some_and(|(s, c)| *s == pl.rp.style && (*c || ctxl));
-                let before = if same && ctxl { 0.0 } else { pl.rp.space_before };
+                let mut before = if same && ctxl { 0.0 } else { pl.rp.space_before };
                 if same && ctxl {
                     y -= prev_after;
+                    prev_after = 0.0;
                 }
-                // Word: space between paragraphs is before + after (no collapsing).
+                // Word: the space between two paragraphs is the larger of the space after the one
+                // above and the space before this one, not their sum.
+                if i > 0 && before > 0.0 && prev_after > 0.0 {
+                    before = (before - prev_after).max(0.0);
+                }
                 y += if i == 0 { before } else { before.max(0.0) };
                 // Floating objects anchored here: place them, then wrap the text around them.
                 // One left out of the layout (hidden, or deleted in the final text) takes no room.
@@ -588,7 +593,7 @@ fn layout_box(
                     items.extend(front);
                 }
                 y += pl.height + pl.rp.space_after;
-                prev_after = if same && ctxl { 0.0 } else { pl.rp.space_after };
+                prev_after = pl.rp.space_after;
                 prev_style = Some((pl.rp.style.clone(), ctxl));
             }
             Block::Table(t) => {
@@ -810,6 +815,9 @@ struct PageBuilder<'a> {
     orig_bottom: f32,
     /// The previous paragraph: (style, contextual spacing, space after) for contextual spacing.
     prev: Option<(String, bool, f32)>,
+    /// The previous paragraph ended with a page break (its mark stayed with the break): the next
+    /// paragraph, first on the new page, gets no space before (Word).
+    after_break_mark: bool,
     /// Wrap areas of floating objects on this page (see [`wrap_area`]).
     excl: Vec<(Rect, bool, ContourKind)>,
     /// Wrap areas of the floating tables on this page, which others may not overlap.
@@ -1294,6 +1302,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         carry: Vec::new(),
         orig_bottom: 0.0,
         prev: None,
+        after_break_mark: false,
         excl: Vec::new(),
         float_tables: Vec::new(),
         line_no: 0,
@@ -1727,6 +1736,20 @@ fn place_objects(
                 let inner = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None).items;
                 ctx.boxes.leave();
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+                // Also place an Object hit target for each child text box in a group so hit testing,
+                // caret positioning, and in_text_box framing work for group text boxes.
+                if matches!(obj, InlineObject::Group { .. }) {
+                    layer.push(Placed::Object {
+                        rect,
+                        spin: float.spin(),
+                        story,
+                        path: Path(path.to_vec()),
+                        off: c.start,
+                        text_box: Some(id),
+                        wrap: float.wrap,
+                        origin: Point::new(at.col.0, at.para_y),
+                    });
+                }
                 // Text that doesn't fit inside the margins is hidden, as in Word.
                 for mut it in fit_box(inner, rect.h - 2.0 * BOX_INSET_Y) {
                     it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
@@ -1770,11 +1793,27 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
     let mut anchor_y = guess;
     let spot = |pb: &PageBuilder| (pb.pages.len(), pb.col);
     let placed_at = spot(pb);
-    if pl.rp.page_break_before && !pb.at_top() && !pb.web {
+    let broke_before = pl.rp.page_break_before && !pb.at_top() && !pb.web;
+    if broke_before {
         pb.new_page(block, body_top);
     }
     // Contextual spacing: no space between paragraphs of the same style when either asks for it.
     let mut before = pl.rp.space_before;
+    let prev_para = pb.prev.clone();
+    // At the top of a page, measured in Word for Windows: no space before after a paragraph that
+    // ended with a page break, nor (from Word 2013's layout, compatibility mode 15) for a page
+    // break before; a section break or, in older modes, a page break before keeps it.
+    let after_break_mark = std::mem::take(&mut pb.after_break_mark);
+    if pb.at_top() && (after_break_mark || (broke_before && ctx.doc.settings.compat_mode >= 15)) {
+        before = 0.0;
+    } else if pb.at_top()
+        && let Some((_, _, after)) = &prev_para
+    {
+        // After a page break before or a section break the space between the paragraphs is
+        // still counted as one: the previous paragraph's space after (left on its page) comes
+        // off the space before here (Word: 24 pt before after 10 pt after leaves 14 pt).
+        before = (before - after.max(0.0)).max(0.0);
+    }
     if let Some((style, ctxl, after)) = pb.prev.take()
         && style == pl.rp.style
         && !pb.at_top()
@@ -1810,6 +1849,9 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
         let lead = if l0 == 0 { first.top.max(0.0) } else { 0.0 };
         let mut l1 = l0;
         let mut forced_break = None;
+        // A page break followed only by the paragraph mark: the mark's (empty) line stays on this
+        // page with the break, so nothing of the paragraph goes to the next page (Word).
+        let mut mark_with_break = false;
         let mut new_notes: Vec<NoteBox> = Vec::new();
         let notes = para_notes(ctx.doc, p, &pl);
         while l1 < n {
@@ -1855,6 +1897,10 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
             l1 += 1;
             if matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak) && !pb.web {
                 forced_break = Some(l.end);
+                if l.end == LineEnd::PageBreak && l1 + 1 == n && pl.lines.get(l1).is_some_and(|m| m.start >= m.stop) {
+                    l1 += 1;
+                    mark_with_break = true;
+                }
                 break;
             }
             if split {
@@ -1952,7 +1998,21 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
             pb.y = y + (l.top + l.height - f.top);
         }
         l0 = l1;
+        // A paragraph that starts with a page break starts on the new page, its space before
+        // there (Word).
+        let starts_with_break = l0 == 1
+            && pl.lines.first().is_some_and(|l| {
+                p.text.get(l.start..l.stop).is_some_and(|t| !t.is_empty() && t.chars().all(|c| c == wordcraft_doc::para::PAGE_BREAK))
+            });
         match forced_break {
+            Some(LineEnd::PageBreak) if mark_with_break => {
+                pb.new_page(block, body_top);
+                pb.after_break_mark = true;
+            }
+            Some(LineEnd::PageBreak) if starts_with_break && !pb.web => {
+                pb.new_page(block, body_top);
+                pb.y += pl.rp.space_before.max(0.0);
+            }
             Some(LineEnd::PageBreak) => pb.new_page(block, body_top),
             Some(LineEnd::ColumnBreak) => pb.advance(block, body_top),
             _ if l0 < n => pb.advance(block, body_top),

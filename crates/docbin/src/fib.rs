@@ -33,8 +33,13 @@ pub(crate) mod pair {
     pub(crate) const PLCF_BKF: usize = 22;
     pub(crate) const PLCF_BKL: usize = 23;
     pub(crate) const CLX: usize = 33;
+    pub(crate) const PLCF_SPA_MOM: usize = 40;
+    pub(crate) const PLCF_SPA_HDR: usize = 41;
     pub(crate) const PLCF_END_REF: usize = 46;
     pub(crate) const PLCF_END_TXT: usize = 47;
+    pub(crate) const DGG_INFO: usize = 50;
+    pub(crate) const PLCF_TXBX_TXT: usize = 56;
+    pub(crate) const PLCF_HDR_TXBX_TXT: usize = 58;
     /// `fcPlfLst`: the list definitions (LSTF array, with the LVLs appended after the blob).
     pub(crate) const PLF_LST: usize = 73;
     /// `fcPlfLfo`: the list format overrides (LFO array with LFOData appended).
