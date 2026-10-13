@@ -565,8 +565,14 @@ impl<'a> Builder<'a> {
             if let Some(f) = wordcraft_fonts::feature("liga") {
                 feats.push(f);
             }
-            if let Some(f) = wordcraft_fonts::feature("kern") {
-                feats.push(f);
+            // Word kerns only a run with Kerning for fonts at or above that size; the shaper kerns
+            // by default, so an unkerned run turns the feature off.
+            if rc.kerned() {
+                if let Some(f) = wordcraft_fonts::feature("kern") {
+                    feats.push(f);
+                }
+            } else {
+                feats.push(wordcraft_fonts::feature_value(b"kern", 0));
             }
             if rc.small_caps
                 && let Some(f) = wordcraft_fonts::feature("smcp")
@@ -1307,7 +1313,10 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
-            if c.kind == ClKind::Marker || c0 + k < dropped {
+            // Spaces and tabs never make a line taller, whatever their size: Word sizes a line by
+            // its other characters (a line of only them takes the paragraph mark's), measured in
+            // Word for Windows with 9 pt text and 11–20 pt tabs, spaces and ideographic spaces.
+            if matches!(c.kind, ClKind::Marker | ClKind::Space | ClKind::Tab) || c0 + k < dropped {
                 continue;
             }
             if let Some(st) = pl.styles.get(c.style as usize) {
@@ -1335,12 +1344,14 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
             asc = st.ascent;
             desc = st.descent;
         }
+        // A list label can make the line taller above the baseline, never below it: Word keeps
+        // the text's descent (measured in Word for Windows: a Symbol bullet's taller ascent
+        // counts, a Courier New label's deeper descent doesn't).
         if first
             && let Some(lab) = &pl.label
             && let Some(st) = pl.styles.get(lab.style as usize)
         {
             asc = asc.max(st.ascent);
-            desc = desc.max(st.descent);
         }
         // Line spacing scales the text's height, never a picture's: a line is at least as tall
         // as its tallest picture plus the descent below the baseline.

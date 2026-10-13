@@ -32,6 +32,9 @@ pub struct ResolvedChar {
     pub spacing: f32,
     pub scale: f32,
     pub position: f32,
+    /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
+    #[serde(default)]
+    pub kern: f32,
     pub outline: bool,
     pub shadow: bool,
     pub emboss: bool,
@@ -76,6 +79,7 @@ impl ResolvedChar {
             spacing: c.spacing.unwrap_or(0.0).clamp(-100.0, 100.0),
             scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
             position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
+            kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
             outline: c.outline.unwrap_or(false),
             shadow: c.shadow.unwrap_or(false),
             emboss: c.emboss.unwrap_or(false),
@@ -97,6 +101,11 @@ impl ResolvedChar {
     /// The formatting complex-script text in this run is drawn with: the complex-script font,
     /// size, bold and italic in place of the others (Word formats Arabic, Persian and Hebrew
     /// characters, and every character of an `rtl`/`cs` run, this way).
+    /// Whether the text is kerned: Word kerns only a run with Kerning for fonts set (`w:kern`) at
+    /// a size of at least that many points, never by default (measured in Word for Windows).
+    pub fn kerned(&self) -> bool {
+        self.kern > 0.0 && self.size >= self.kern
+    }
     pub fn complex(&self) -> ResolvedChar {
         ResolvedChar { font: self.font_cs.clone(), size: self.size_cs, bold: self.bold_cs, italic: self.italic_cs, ..self.clone() }
     }
