@@ -166,27 +166,55 @@ fn hidden_text_adds_no_line_break_opportunity_when_not_shown() {
     }
 }
 
-/// How much longer laying out `doc(4n)` takes than `doc(n)` (fastest of three each, after a
-/// warm-up): ~4 when linear, ~16 when quadratic, whatever the machine.
-/// How much bigger the second document is in the linear-time tests. At 8x a linear layout takes
-/// about 8x as long and a quadratic one about 64x, so a limit of 24x stays far from both, however
-/// busy the machine running the tests is.
+/// How much bigger the second document is in the linear-time tests. At 8x a linear layout costs
+/// about 8x as much and a quadratic one about 64x, so a limit of 24x stays far from both.
 const SCALE: usize = 8;
 
-fn layout_time_ratio(doc: impl Fn(usize) -> Document, n: usize, opts: &LayoutOptions) -> (f64, f64, f64) {
-    let fastest = |d: &Document| {
-        (0..3)
-            .map(|_| {
-                let t = std::time::Instant::now();
-                layout(d, &mut LayoutCache::new(), opts);
-                t.elapsed().as_secs_f64()
-            })
-            .fold(f64::INFINITY, f64::min)
+/// The CPU time `f` takes on this thread, in seconds. On Linux it is the scheduler's count of the
+/// time the thread actually ran, so the time it waits while other work on a busy machine has the
+/// CPU is left out; elsewhere, wall-clock time.
+fn cpu_cost(f: &mut impl FnMut()) -> f64 {
+    let ran = || {
+        let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+        s.split_whitespace().next()?.parse::<u64>().ok()
     };
-    let (small, big) = (doc(n), doc(SCALE * n));
-    layout(&small, &mut LayoutCache::new(), opts);
-    let (t1, tk) = (fastest(&small), fastest(&big));
+    let (t, before) = (std::time::Instant::now(), ran());
+    f();
+    match (before, ran()) {
+        (Some(a), Some(b)) => b.saturating_sub(a) as f64 * 1e-9,
+        _ => t.elapsed().as_secs_f64(),
+    }
+}
+
+/// How much more `big` costs than `small`, for `big` an input `scale` times the size of `small`'s:
+/// (small, big, big / small), ~`scale` when linear and ~`scale`² when quadratic. Each is the
+/// cheapest of several runs after a warm-up, the runs alternating so a busy spell slows both sizes
+/// alike; `small` is timed `scale` times over per run, so both timings are long against the clock's
+/// resolution.
+fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (f64, f64, f64) {
+    small();
+    big();
+    let mut small_scaled = || (0..scale).for_each(|_| small());
+    let (mut t1, mut tk) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        t1 = t1.min(cpu_cost(&mut small_scaled) / scale as f64);
+        tk = tk.min(cpu_cost(&mut big));
+    }
     (t1, tk, tk / t1.max(1e-9))
+}
+
+/// [`cost_ratio`] of laying out `doc(SCALE * n)` against `doc(n)`.
+fn layout_time_ratio(doc: impl Fn(usize) -> Document, n: usize, opts: &LayoutOptions) -> (f64, f64, f64) {
+    let (small, big) = (doc(n), doc(SCALE * n));
+    cost_ratio(
+        SCALE,
+        || {
+            layout(&small, &mut LayoutCache::new(), opts);
+        },
+        || {
+            layout(&big, &mut LayoutCache::new(), opts);
+        },
+    )
 }
 
 #[test]
