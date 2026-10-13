@@ -3225,3 +3225,28 @@ fn print_native_only_sends_pdfs_the_spooler_can_read() {
         assert!(refused.is_err(), "{path} must not reach the spooler: {refused:?}");
     }
 }
+
+#[test]
+fn list_printers_returns_printers_array() {
+    let mut s = s();
+    let r = s.run("file.printers", &json!({})).unwrap();
+    assert!(r.get("printers").and_then(|v| v.as_array()).is_some(), "file.printers returns array");
+}
+
+#[test]
+fn print_native_validates_page_ranges_and_parameters() {
+    let mut s = s();
+    let refused = s.run(
+        "file.printNative",
+        &json!({
+            "path": "/nonexistent-wordcraft-folder/none.pdf",
+            "copies": 2,
+            "collate": true,
+            "duplex": "long-edge",
+            "scaling": "shrink-to-fit",
+            "grayscale": true,
+            "pages": "1-3, 5"
+        }),
+    );
+    assert!(refused.is_err());
+}

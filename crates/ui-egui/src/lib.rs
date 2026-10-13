@@ -201,6 +201,36 @@ pub struct UiState {
     /// Copilot settings, Agent: plain messages change the document; the most rounds per request.
     pub ai_agent: bool,
     pub ai_agent_rounds: u32,
+    /// Print settings in File › Print.
+    pub print: PrintSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PrintSettings {
+    pub printer: String,
+    pub copies: u32,
+    pub collate: bool,
+    pub duplex: String,
+    pub pages_mode: String,
+    pub custom_range: String,
+    pub scaling: String,
+    pub grayscale: bool,
+}
+
+impl Default for PrintSettings {
+    fn default() -> Self {
+        Self {
+            printer: String::new(),
+            copies: 1,
+            collate: true,
+            duplex: "default".into(),
+            pages_mode: "all".into(),
+            custom_range: String::new(),
+            scaling: "exact".into(),
+            grayscale: false,
+        }
+    }
 }
 
 impl Default for UiState {
@@ -255,6 +285,7 @@ impl Default for UiState {
             ai_remember_chat: true,
             ai_agent: true,
             ai_agent_rounds: wordcraft_engine::agent::DEFAULT_ROUNDS as u32,
+            print: PrintSettings::default(),
         }
     }
 }

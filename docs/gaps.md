@@ -16,7 +16,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 3 | **Crashes and freezes in the field**: startup crash on Intel UHD Graphics (#170) (lag on GPUs without a DirectX 12 driver fixed, #316), freezes (#77, #59 Thai fonts, #31 font selector), no writes without admin on Windows 11 (#218), broken shape tool (#142), images can't be moved (#82) | B | 62 open issues, ~15 of them crashes, hangs or data-path failures | Anyone hit loses work or trust; the never-crash standard covers panics, not hangs or GPU driver faults | 20–30 | [target-app-parity.md](target-app-parity.md) (Stability) |
 | 4 | **Pagination differs from Word**: Aptos has no metric-matched substitute; columns don't balance; custom footnote continuation separators and notices aren't read; legacy compatibility options ignored; no page-by-page comparison harness | B | [layout-parity.md](layout-parity.md); [typing-parity.md](typing-parity.md) Known gaps | Page counts and line breaks differ, which matters for forms, legal and academic work | 30–50 + owner (font) | [layout-parity.md](layout-parity.md) |
 | 5 | **Move tracking and content controls** are lost (`w:moveFrom`/`w:moveTo` read as insert/delete; `w:sdt` unwrapped). Formatting revisions landed (#41): `w:rPrChange`/`w:pPrChange`/`w:tblPrChange`/`w:trPrChange`/`w:tcPrChange`/`w:sectPrChange`/`w:numberingChange` round-trip, are recorded while tracking, accepted/rejected and shown in balloons; still missing: tracked style-definition changes and table/section changes made in WordCraft | B | Issue #41; source grep | Legal and editorial review workflows; templates with form controls | 8–12 | [file-format-parity.md](file-format-parity.md) |
-| 6 | **No print dialog** on desktop: File › Print (Native) sends copies and a printer to the system spooler (CUPS, the Windows spooler), but there is no dialog of our own for duplex, tray, page ranges or scaling (the crate has them); web prints through the browser (#209) | B | `ui.print` → `apps/wordcraft/src/print.rs`; issue #15 | Everyone who prints | 5–8 | [hardware-parity.md](hardware-parity.md) |
+| 6 | **Print dashboard**: landed (2026-10-13): File › Print features live printer discovery, copies, duplex, collation, color/grayscale, page ranges (all, current, custom), and scaling through `file.printNative` | | `crates/ui-egui/src/backstage.rs`, `crates/engine/src/cmd/file.rs` | Everyone who prints | 0 | [hardware-parity.md](hardware-parity.md) |
 | 7 | **Dialog depth**: 22 modal dialogs vs Word's ~100 (Define Multilevel List, Track Changes Options, Options panes…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
 | 7 | **Dialog depth**: 19 modal dialogs vs Word's ~100 (Tabs, Borders and Shading, Define Multilevel List, Track Changes Options, Options panes…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
 | 7 | **Dialog depth**: 18 modal dialogs vs Word's ~100 (Tabs, Borders and Shading, Columns, Symbol, Field, Options panes…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
@@ -43,7 +43,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 28 | **Dictate** | | `tools.dictate` missing | Dictation users | 8–15 + owner (speech model) | [hardware-parity.md](hardware-parity.md) |
 | 29 | **Equations**: ink equations | | #191 notes; long display equations wrap at operators (#326) | Maths-heavy documents | 2–3 | [layout-parity.md](layout-parity.md) |
 
-**Beta needs #1–#7** (~150–230 h with the stability and layout work they imply): they are the
+**Beta needs #1–#5, #7** (~145–222 h with the stability and layout work they imply): they are the
 blocking gaps, and closing them lifts file formats, layout, stability and UI enough to take the
 full number from ~60% to ~75%. Everything else is depth on the way to full parity.
 
@@ -58,7 +58,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 - **UI/UX gaps:** #7, #18, #24; crop handles on the canvas (rotation handle landed, #332); table column drag on the
   ruler landed 2026-10-12 (#49, #217) and tables have a context menu; context menus for objects; Linux title bar theming (#78).
 - **File-format gaps:** #1, #2, #5, #9, #14, #19, #23, #26; embedded fonts; glossary/building blocks.
-- **Hardware gaps:** #6, #12, #28; scanner/Continuity Camera insert; KDE soft text (#140).
+- **Hardware gaps:** #12, #28; scanner/Continuity Camera insert; KDE soft text (#140). (Print dashboard landed, #6).
 - **Localization gaps:** #8, #11, #16, #17; native-speaker review of every catalog (human).
 - **Stability and performance gaps:** #3, #20.
 
@@ -66,6 +66,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | #6: full Backstage Print dashboard in File › Print with live printer discovery, copies, duplex, collation, color/grayscale, page ranges, and scaling |
 | 2026-10-11 | trivial | All 12 bibliography styles landed (#383); removed from References depth |
 | 2026-10-11 | trivial | Formatting revisions landed (#41); gap #5 narrowed to move tracking and content controls, 8–12 h |
 | 2026-10-10 | trivial | Draw Table and Eraser landed (#303); removed from the feature-gap list |
