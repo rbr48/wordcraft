@@ -335,11 +335,7 @@ fn nudge_size(s: &mut Session, d: f32) -> CmdResult {
 
 fn color(s: &mut Session, v: &Value) -> CmdResult {
     let c = p::req_str(v, "color")?;
-    let tc = if c.eq_ignore_ascii_case("auto") || c.eq_ignore_ascii_case("automatic") {
-        TextColor::Auto
-    } else {
-        TextColor::Rgb(Rgb::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB or auto".into()))?)
-    };
+    let tc = TextColor::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB or auto".into()))?;
     apply(s, &|x| x.color = Some(tc))
 }
 
