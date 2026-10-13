@@ -2732,6 +2732,71 @@ mod tests {
         assert!(!a.recipient_list_pending);
     }
 
+    /// Real sentences from the evaluation corpus, typed one key at a time through the same event
+    /// path the keyboard uses. Needs `WORDCRAFT_BANGLA_CORPUS` (see wordcraft-engine's
+    /// `tests_bangla_eval`), so it is ignored by default.
+    #[test]
+    #[ignore = "needs WORDCRAFT_BANGLA_CORPUS; run with --ignored"]
+    fn bangla_real_sentences_typed_end_to_end() {
+        let path = std::env::var("WORDCRAFT_BANGLA_CORPUS").expect("set WORDCRAFT_BANGLA_CORPUS");
+        let text = std::fs::read_to_string(path).expect("corpus readable");
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).take(40).collect();
+        let word_of = |w: &str| wordcraft_engine::cmd::bangla::BANGLA_VOCAB.iter().find(|&&(_, v)| v == w).map(|&(k, _)| k);
+        let is_bn = |c: char| ('\u{0980}'..='\u{09FF}').contains(&c);
+        let reset = |a: &mut WordApp| {
+            a.session.doc = wordcraft_doc::Document::new();
+            a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+                story: wordcraft_doc::StoryRef::Body,
+                path: wordcraft_doc::Path(vec![0]),
+                off: 0,
+            });
+        };
+        let ctx = egui::Context::default();
+
+        // Phonetic: type each word's dictionary spelling, space-separated, and expect the words back.
+        let mut phonetic_done = 0usize;
+        for line in &lines {
+            let words: Vec<&str> = line.split(|c: char| !is_bn(c)).filter(|s| !s.is_empty()).collect();
+            let keys: Option<Vec<&str>> = words.iter().map(|w| word_of(w)).collect();
+            let Some(keys) = keys else { continue };
+            let mut a = app();
+            a.session.bangla_mode = wordcraft_engine::cmd::bangla::BanglaMode::Phonetic;
+            reset(&mut a);
+            let typed = keys.join(" ");
+            type_keys(&mut a, &ctx, &typed);
+            let want = words.join(" ");
+            assert_eq!(body_text(&a).trim(), want, "phonetic typing of {typed:?}");
+            phonetic_done += 1;
+        }
+        assert!(phonetic_done > 0, "no corpus line was fully covered by the dictionary");
+
+        // ANSI: press the physical keys whose Bijoy glyphs spell each line, and expect those glyphs.
+        // Only single-key glyphs are invertible here, so lines with conjunct glyphs are skipped.
+        let mut key_of: std::collections::HashMap<char, char> = std::collections::HashMap::new();
+        for b in 0x21u8..0x7f {
+            if let Some(glyph) = wordcraft_engine::cmd::bangla::bijoy_ansi_key(b as char) {
+                let mut it = glyph.chars();
+                if let (Some(g), None) = (it.next(), it.next()) {
+                    key_of.entry(g).or_insert(b as char);
+                }
+            }
+        }
+        let mut ansi_done = 0usize;
+        for line in &lines {
+            let ansi = wordcraft_engine::cmd::bangla::unicode_to_ansi(line);
+            let keys: Option<String> = ansi.chars().map(|c| if c.is_whitespace() { Some(c) } else { key_of.get(&c).copied() }).collect();
+            let Some(keys) = keys else { continue };
+            let mut a = app();
+            a.session.bangla_mode = wordcraft_engine::cmd::bangla::BanglaMode::Ansi;
+            reset(&mut a);
+            type_keys(&mut a, &ctx, &keys);
+            assert_eq!(body_text(&a).trim(), ansi.trim(), "ANSI typing of keys {keys:?}");
+            ansi_done += 1;
+        }
+        // Coverage, not a pass/fail gate: most real lines need conjunct key sequences this test does not type.
+        println!("ANSI keystroke check: {ansi_done}/{} corpus lines use only single-key Bijoy glyphs", lines.len());
+    }
+
     fn type_keys(a: &mut WordApp, ctx: &egui::Context, keys: &str) {
         for ch in keys.chars() {
             ctx.input_mut(|i| {
