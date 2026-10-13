@@ -75,6 +75,40 @@ pub fn system_cjk_ui_font(hans: bool) -> Option<SystemUiFont> {
     find_ui_font(&crate::system_font_dirs(), &candidates(hans), probe(hans), hans)
 }
 
+/// The installed Bengali Unicode font for the interface, if one is found. Prevents Bengali text in
+/// UI text boxes, dialogs, candidate popups and navigation panes from drawing as missing-glyph
+/// boxes (`□`). Reads at most one font file per candidate; never panics on damaged files.
+pub fn system_bengali_ui_font() -> Option<SystemUiFont> {
+    let names: &[&str] = if cfg!(windows) {
+        &[
+            "Nirmala.ttf",
+            "Nirmala.ttc",
+            "NirmalaB.ttf",
+            "Kalpurush.ttf",
+            "kalpurush.ttf",
+            "vrinda.ttf",
+            "Shonar.ttf",
+            "SolaimanLipi.ttf",
+            "Nikosh.ttf",
+            "Siyamrupali.ttf",
+        ]
+    } else if cfg!(target_os = "macos") {
+        &["KohinoorBangla.ttc", "Bangla MN.ttc", "Bangla Sangam MN.ttc"]
+    } else {
+        &[
+            "noto/NotoSansBengali-Regular.ttf",
+            "truetype/noto/NotoSansBengali-Regular.ttf",
+            "google-noto-vf/NotoSansBengali[wdth,wght].ttf",
+            "noto/NotoSerifBengali-Regular.ttf",
+            "truetype/noto/NotoSerifBengali-Regular.ttf",
+            "lohit-bengali/Lohit-Bengali.ttf",
+            "truetype/lohit-bengali/Lohit-Bengali.ttf",
+            "truetype/freefont/FreeSans.ttf",
+        ]
+    };
+    find_ui_font(&crate::system_font_dirs(), names, 'ক', false)
+}
+
 /// The first of `names` (tried in order, each in every folder of `dirs`) that is a font file
 /// with a face mapping `probe`.
 pub(crate) fn find_ui_font(dirs: &[std::path::PathBuf], names: &[&str], probe: char, hans: bool) -> Option<SystemUiFont> {

@@ -322,6 +322,18 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
         data.index = f.index;
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(f) = system_bengali_font() {
+        let mut data = FontData::from_static(&f.bytes);
+        data.index = f.index;
+        let name = format!("system {}", f.family);
+        fonts.font_data.insert(name.clone(), Arc::new(data));
+        for fam in [FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
+            if let Some(v) = fonts.families.get_mut(&fam) {
+                v.push(name.clone());
+            }
+        }
+    }
     #[cfg(target_arch = "wasm32")]
     let _ = system_cjk;
     // Symbols and emoji fall back to egui's defaults (kept in the families).
@@ -334,6 +346,14 @@ fn system_cjk_font(hans: bool) -> Option<&'static wordcraft_fonts::SystemUiFont>
     static ZH: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
     static OTHER: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
     (if hans { &ZH } else { &OTHER }).get_or_init(|| wordcraft_fonts::system_cjk_ui_font(hans)).as_ref()
+}
+
+/// The installed Bengali interface font, read once so Bengali text in dialogs, text boxes,
+/// candidate popups and navigation panes renders as Bengali glyphs instead of boxes.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_bengali_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
+    static BENGALI: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    BENGALI.get_or_init(wordcraft_fonts::system_bengali_ui_font).as_ref()
 }
 
 pub fn medium(size: f32) -> FontId {
@@ -540,5 +560,22 @@ mod tests {
             symbols.iter().filter(|(c, _)| !f.has_glyph(&font, *c)).map(|(c, file)| format!("{c} U+{:04X} in {file}", *c as u32)).collect()
         });
         assert!(missing.is_empty(), "symbols without a glyph: {missing:#?}");
+    }
+
+    #[test]
+    fn bengali_ui_text_has_glyphs_when_system_font_available() {
+        if wordcraft_fonts::system_bengali_ui_font().is_none() {
+            return;
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(super::font_definitions(false, false));
+        ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+        let font = super::regular(12.5);
+        for c in "এতদ্বারা সন্তোষজনকভাবে প্রত্যয়ন করা যাইতেছে যে।".chars()
+        {
+            if !c.is_whitespace() {
+                assert!(ctx.fonts_mut(|f| f.has_glyph(&font, c)), "missing Bengali UI glyph for {c:?} (U+{:04X})", c as u32);
+            }
+        }
     }
 }

@@ -1979,12 +1979,11 @@ fn cmd_bangla_convert(s: &mut Session, v: &Value) -> CmdResult {
     let target_font = font.unwrap_or(if is_to_ansi { "SutonnyMJ" } else { "Kalpurush" });
 
     if target == "selection" && !s.sel.is_collapsed() {
-        let (a, b) = s.sel.ordered();
-        let current_text = s.doc.para_at(&a).and_then(|p| p.text.get(a.off..b.off)).unwrap_or("").to_string();
+        let current_text = s.selected_text();
         if !current_text.is_empty() {
             let converted = if is_to_ansi { unicode_to_ansi(&current_text) } else { ansi_to_unicode(&current_text) };
-            s.run("text.insert", &json!({"text": converted}))?;
             s.run("format.font", &json!({"name": target_font}))?;
+            s.run("text.insert", &json!({"text": converted}))?;
             return Ok(json!({"converted": true, "count": 1, "target": "selection"}));
         }
     }

@@ -978,10 +978,17 @@ impl Dialog {
                 selected_cmd: String::new(),
                 new_key: String::new(),
             },
-            "banglaConverter" => Dialog::BanglaConverter {
-                source_text: if app.session.sel.is_collapsed() { String::new() } else { app.session.selected_text() },
-                result_text: String::new(),
-            },
+            "banglaConverter" => {
+                let source_text = if app.session.sel.is_collapsed() { String::new() } else { app.session.selected_text() };
+                let result_text = if source_text.is_empty() {
+                    String::new()
+                } else if source_text.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c)) {
+                    wordcraft_engine::cmd::bangla::unicode_to_ansi(&source_text)
+                } else {
+                    wordcraft_engine::cmd::bangla::ansi_to_unicode(&source_text)
+                };
+                Dialog::BanglaConverter { source_text, result_text }
+            }
             "checkUpdates" => Dialog::CheckUpdates {
                 checking: false,
                 latest_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -2372,6 +2379,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             close || ui.input(|i| i.key_pressed(egui::Key::Escape))
         }
         Dialog::BanglaConverter { source_text, result_text } => {
+            ui.set_min_width(580.0);
             ui.heading(tl!("Bangla Converter (Unicode <-> ANSI / SutonnyMJ)"));
             ui.label(tl!("Convert text between modern Unicode and legacy Bijoy/SutonnyMJ ANSI without external software."));
             ui.add_space(8.0);
