@@ -152,5 +152,16 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **Canvas Context Menu (`crates/ui-egui/src/canvas.rs`)**: Added right-click `Wrap Text ▸` flyout submenu for pictures and shapes with all 7 modes and live indicators.
     - **On-Canvas Floating Layout Options Handle (`crates/ui-egui/src/canvas.rs`, `crates/ui-egui/src/objects.rs`)**: Implemented Word's signature `[=]` on-canvas handle pinned to the upper-right corner of selected images/shapes with quick-access popup menu.
     - **Seamless Inline-to-Floating Position Preservation (`crates/engine/src/cmd/objects.rs`)**: When converting from `Wrap::Inline` to floating wrap modes, queries layout hit-testing to retain the object's relative screen position rather than jumping to (0, 0); added `"preset": "inline"` support to `arrange.position`. Passed unit test `wrap_text_modes_and_inline_transition`.
+  - **Upstream Bug Fixes & Phonetic Evaluation Integration (Commits through 992b0ba)**:
+    - **Phonetic Transliteration Accuracy (`crates/engine/src/cmd/bangla.rs`)**: Recognized `chh` as a single Bengali letter `ছ` rather than decomposing into `চ` + `হ` (`achho` -> `আছো`); added dual reading for medial `o` (inherent vowel candidate generation).
+    - **Bangla Corpus & Keystroke Evaluation Harness (`crates/engine/src/tests_bangla_eval.rs`, `crates/ui-egui/src/lib.rs`)**: Added end-to-end typing tests and dictionary coverage evaluation.
+    - **Track Changes Paragraph Mark Revision Isolation (`crates/doc/src/para.rs`, #864 / #914)**: Emptying a paragraph preserves paragraph mark formatting without copying the deleted text's revision IDs, preventing erroneous paragraph joins during "Accept All".
+    - **Word Count List Label Parity (`crates/doc/src/lib.rs`, #893 / #908)**: Numbered list labels are counted as independent words matching Microsoft Word document statistics (`story_word_count`).
+    - **Hex Colors in `styles.modify` (`crates/doc/src/props.rs`, #865 / #881)**: Style modifications accept hex color strings (`#RRGGBB` / `RRGGBB`).
+    - **Full Style Chain & Inheritance in `styles.updateToMatch` (`crates/engine/src/cmd/para.rs`)**: Retargets and strips direct formatting across paragraph and character style chains.
+    - Recompiled production release binaries (`wordcraft.exe`, `wordcraft-cli.exe`).
+    - Rebuilt Inno Setup Windows installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.1 MB).
+    - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.1 MB).
+
 
 
