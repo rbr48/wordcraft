@@ -8,22 +8,38 @@ use serde_json::{Value, json};
 use crate::theme::Tokens;
 use crate::{WordApp, widgets};
 
-/// Height of the bar (a little taller than the ribbon's 22 pt button row).
-const BAR_H: f32 = 30.0;
 /// Vertical gap between the bar and the selection's first line.
 const VGAP: f32 = 8.0;
 /// Distance from the selection's left edge at which the bar is centred.
 const ANCHOR_INSET: f32 = 4.0;
-/// Horizontal padding inside the bar.
+/// Padding inside the bar.
 const PAD_X: f32 = 4.0;
-/// Width of the font and size combos (the ribbon's metrics).
-const COMBO_FONT_W: f32 = 150.0;
-const COMBO_SIZE_W: f32 = 52.0;
-/// Width of one icon button (the ribbon's small-button metric).
+const PAD_Y: f32 = 3.0;
+/// Height of one row of controls (the ribbon's 22 pt buttons plus a little air), and the gap
+/// between the two rows.
+const ROW_H: f32 = 24.0;
+const ROW_GAP: f32 = 2.0;
+/// Horizontal gap between neighbouring controls.
+const SPACING: f32 = 1.0;
+/// The ribbon's widget metrics: a small icon button, a split button (icon part plus its 11 pt
+/// arrow, two allocations), a group divider and the size box.
 const BTN_W: f32 = 24.0;
+const SPLIT_W: f32 = 24.0 + SPACING + 11.0;
+const SEP_W: f32 = 9.0;
+const COMBO_SIZE_W: f32 = 52.0;
+/// Gap between the size box and the grow/shrink buttons.
+const GAP: f32 = 3.0;
+/// Row 2, like Word's: B I U S | highlight, font colour | the four alignments. Fourteen
+/// allocations, so thirteen gaps; the two inside the split buttons are counted in `SPLIT_W`.
+const ROW2_W: f32 = 8.0 * BTN_W + 2.0 * SPLIT_W + 2.0 * SEP_W + 11.0 * SPACING;
+/// Row 1: font, size, grow, shrink. The font box takes what row 2 leaves, so both rows end
+/// together and the box starts at the bar's left edge.
+const COMBO_FONT_W: f32 = ROW2_W - (COMBO_SIZE_W + GAP + 2.0 * BTN_W + 3.0 * SPACING);
 
-/// Fixed bar width, so it never jitters as the selection changes.
-pub const BAR_W: f32 = PAD_X * 2.0 + COMBO_FONT_W + COMBO_SIZE_W + 3.0 + 8.0 * BTN_W + 3.0 * 9.0;
+/// The bar's size: fixed, so it never jitters as the selection changes, and wide enough for every
+/// control of both rows (#535: one row of a fixed width cut off everything after Align Left).
+pub const BAR_W: f32 = PAD_X * 2.0 + ROW2_W;
+pub const BAR_H: f32 = PAD_Y * 2.0 + ROW_H * 2.0 + ROW_GAP;
 
 /// Where the bar sits for a selection line and viewport; `None` for degenerate inputs (NaN
 /// rects must never reach egui). Pure geometry, unit tested without a window.
@@ -38,6 +54,12 @@ pub fn anchor_rect(selection_top: f32, selection_left: f32, viewport: Rect) -> O
     let above = selection_top - VGAP - BAR_H;
     let y = if above >= viewport.top() { above } else { selection_top + VGAP };
     Some(Rect::from_min_size(pos2(x, y), Vec2::new(BAR_W, BAR_H)))
+}
+
+/// Where the bar and the controls in it were drawn last frame (`[bar, controls]`), kept in the
+/// context's memory under this id so tests can check that no control spills out of the bar.
+pub fn shown_id() -> egui::Id {
+    egui::Id::new("wc_mini_toolbar").with("shown")
 }
 
 /// Whether the bar may be shown for the current app state.
@@ -82,63 +104,78 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, selection: Rect, viewport: R
         painter.rect_filled(bar.translate(Vec2::new(0.0, 2.0)), CornerRadius::same(6), t.page_shadow);
         painter.rect_filled(bar, CornerRadius::same(6), t.menu);
         painter.rect_stroke(bar, CornerRadius::same(6), egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-        let inner = bar.shrink2(Vec2::new(PAD_X, 0.0));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)));
-        child.spacing_mut().item_spacing = Vec2::new(1.0, 0.0);
+        let inner = bar.shrink2(Vec2::new(PAD_X, PAD_Y));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(Layout::top_down(Align::Min)));
+        child.spacing_mut().item_spacing = Vec2::new(SPACING, ROW_GAP);
         content(app, &mut child, &t);
+        let used = child.min_rect();
+        ctx.data_mut(|d| d.insert_temp(shown_id(), [bar, used]));
     });
 }
 
-/// The controls, reusing the ribbon's widgets so the bar matches the ribbon exactly.
+/// The controls in two rows like Word's mini toolbar, reusing the ribbon's widgets so the bar
+/// matches the ribbon exactly.
 fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
     let st: Value = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
     let align = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props).align).unwrap_or_default();
+    let row = |ui: &mut egui::Ui, app: &mut WordApp, add: &dyn Fn(&mut egui::Ui, &mut WordApp)| {
+        ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), ROW_H), Layout::left_to_right(Align::Center), |ui| {
+            ui.set_min_height(ROW_H);
+            add(ui, app);
+        });
+    };
 
-    let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
-    let fams = app.previews.families();
-    let prev = app.previews.font_preview_fn();
-    if let Some(f) = widgets::font_combo(ui, "mini_font", COMBO_FONT_W, &font, &fams, Some(&*prev)) {
-        let _ = app.run("format.font", json!({"name": f}));
-    }
-    let size = st.get("size").and_then(Value::as_f64).map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).unwrap_or_default();
-    let sizes: Vec<String> =
-        wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
-    if let Some(v) = widgets::combo(ui, "mini_size", COMBO_SIZE_W, &size, &sizes, None)
-        && let Ok(x) = v.trim().parse::<f64>()
-    {
-        let _ = app.run("format.size", json!({"size": x}));
-    }
-    ui.add_space(3.0);
-    sep(ui, t);
-
-    widgets::small(ui, app, "bold", None, "Bold", "format.bold", json!({}), flag("bold"));
-    widgets::small(ui, app, "italic", None, "Italic", "format.italic", json!({}), flag("italic"));
-    widgets::small(ui, app, "underline", None, "Underline", "format.underline", json!({}), flag("underline"));
-    widgets::small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
-    sep(ui, t);
-
-    let hl = app.canvas.last_highlight.clone();
-    widgets::split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), false, None, |ui, app| {
-        highlight_menu(ui, app);
+    row(ui, app, &|ui, app| {
+        let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+        let fams = app.previews.families();
+        let prev = app.previews.font_preview_fn();
+        if let Some(f) = widgets::font_combo(ui, "mini_font", COMBO_FONT_W, &font, &fams, Some(&*prev)) {
+            let _ = app.run("format.font", json!({"name": f}));
+        }
+        let size =
+            st.get("size").and_then(Value::as_f64).map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).unwrap_or_default();
+        let sizes: Vec<String> =
+            wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
+        if let Some(v) = widgets::combo(ui, "mini_size", COMBO_SIZE_W, &size, &sizes, None)
+            && let Ok(x) = v.trim().parse::<f64>()
+        {
+            let _ = app.run("format.size", json!({"size": x}));
+        }
+        ui.add_space(GAP);
+        widgets::small(ui, app, "grow", None, "Increase Font Size", "format.growFont", json!({}), false);
+        widgets::small(ui, app, "shrink", None, "Decrease Font Size", "format.shrinkFont", json!({}), false);
     });
-    let fc = app.canvas.last_font_color.clone();
-    let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
-    widgets::split(ui, app, "fontcolor", "Font Color", "format.color", json!({"color": fc}), false, sw, |ui, app| {
-        font_color_menu(ui, app);
-    });
-    sep(ui, t);
 
-    use wordcraft_doc::Align as A;
-    widgets::small(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
-    widgets::small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
-    widgets::small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
-    widgets::small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
+    row(ui, app, &|ui, app| {
+        widgets::small(ui, app, "bold", None, "Bold", "format.bold", json!({}), flag("bold"));
+        widgets::small(ui, app, "italic", None, "Italic", "format.italic", json!({}), flag("italic"));
+        widgets::small(ui, app, "underline", None, "Underline", "format.underline", json!({}), flag("underline"));
+        widgets::small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
+        sep(ui, t);
+
+        let hl = app.canvas.last_highlight.clone();
+        widgets::split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), false, None, |ui, app| {
+            highlight_menu(ui, app);
+        });
+        let fc = app.canvas.last_font_color.clone();
+        let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
+        widgets::split(ui, app, "fontcolor", "Font Color", "format.color", json!({"color": fc}), false, sw, |ui, app| {
+            font_color_menu(ui, app);
+        });
+        sep(ui, t);
+
+        use wordcraft_doc::Align as A;
+        widgets::small(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
+        widgets::small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
+        widgets::small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
+        widgets::small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
+    });
 }
 
 /// A hairline divider between the bar's groups.
 fn sep(ui: &mut egui::Ui, t: &Tokens) {
-    let (r, _) = ui.allocate_exact_size(Vec2::new(9.0, 20.0), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(Vec2::new(SEP_W, 20.0), Sense::hover());
     let p = ui.painter();
     p.vline(r.center().x, r.y_range().shrink(4.0), egui::Stroke::new(1.0, t.border));
 }
@@ -245,11 +282,35 @@ mod tests {
         assert!(r.min.x.is_finite() && r.min.y.is_finite());
     }
 
+    /// #535: the bar was one fixed-width row that cut off everything after Align Left. Draw it
+    /// over a real selection: every control fits inside the bar, and the bar is no wider than its
+    /// controls (both rows end together).
     #[test]
-    fn bar_width_covers_exactly_its_controls() {
-        // The position maths uses BAR_W, so it must equal the width the widgets actually take:
-        // padding + two combos + a gap + eight 24 pt buttons + three 9 pt dividers.
-        let expected = PAD_X * 2.0 + COMBO_FONT_W + COMBO_SIZE_W + 3.0 + 8.0 * BTN_W + 3.0 * 9.0;
-        assert_eq!(BAR_W, expected);
+    fn every_control_fits_inside_the_bar() {
+        use wordcraft_engine::Session;
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "The quick brown fox jumps over the lazy dog"})).unwrap();
+        a.run("select.text", json!({"text": "brown fox"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let [bar, used] = h.ctx.data(|d| d.get_temp::<[Rect; 2]>(shown_id())).expect("the bar is shown over a selection");
+        let inner = bar.shrink2(Vec2::new(PAD_X, PAD_Y));
+        assert!(
+            inner.expand(0.1).contains_rect(used),
+            "controls {:?} spill out of the bar {:?}",
+            [used.min.x, used.min.y, used.max.x, used.max.y],
+            [inner.min.x, inner.min.y, inner.max.x, inner.max.y]
+        );
+        assert!((used.width() - inner.width()).abs() < 0.5, "the bar ({}) should be as wide as its controls ({})", inner.width(), used.width());
+        assert!(used.min.x - inner.min.x < 0.5, "the font box starts at the bar's left edge");
     }
 }

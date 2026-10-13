@@ -66,9 +66,6 @@ impl Pen<'_> {
         self.closed(&[(x0, y0), (x1 - 4.0, y0), (x1, y0 + 4.0), (x1, y1), (x0, y1)], self.c);
         self.line(&[(x1 - 4.0, y0), (x1 - 4.0, y0 + 4.0), (x1, y0 + 4.0)]);
     }
-    fn arrow_down(&self, x: f32, y: f32, c: Color32) {
-        self.fill(&[(x - 2.5, y - 1.2), (x + 2.5, y - 1.2), (x, y + 1.5)], c);
-    }
 }
 
 /// Paint icon `name` into `r`. `c` is the line colour; the accent comes from the theme.
@@ -1080,7 +1077,9 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(5.0, 5.0), (15.0, 15.0)]);
             pen.line(&[(15.0, 5.0), (5.0, 15.0)]);
         }
-        "dropdown" => pen.arrow_down(10.0, 10.0, c),
+        // A triangle filling most of its box: it is drawn at 9–12 pt beside combos and split
+        // buttons, where a smaller one shrank to a dot (#535).
+        "dropdown" => pen.fill(&[(3.0, 7.0), (17.0, 7.0), (10.0, 14.0)], c),
         "more" => {
             for x in [5.0, 10.0, 15.0] {
                 pen.fcircle(x, 10.0, 1.3, c);
