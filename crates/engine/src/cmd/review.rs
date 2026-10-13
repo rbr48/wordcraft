@@ -636,7 +636,11 @@ fn word_count(s: &mut Session, v: &Value) -> CmdResult {
     } else {
         s.selected_text()
     };
-    let words = wordcraft_doc::count_words(&text);
+    let words = if s.sel.is_collapsed() || super::objects::object_selection(s).is_some() {
+        stories.iter().map(|st| s.doc.story_word_count(*st)).sum()
+    } else {
+        wordcraft_doc::count_words(&text)
+    };
     let chars = text.chars().filter(|c| *c != '\n').count();
     let chars_no_spaces = text.chars().filter(|c| !c.is_whitespace()).count();
     let paragraphs = text.split('\n').filter(|l| !l.trim().is_empty()).count();

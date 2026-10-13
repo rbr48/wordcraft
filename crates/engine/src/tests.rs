@@ -1642,6 +1642,25 @@ fn word_count_includes_text_boxes_by_default() {
     assert_eq!(s.word_count(), 2);
 }
 
+#[test]
+fn word_count_includes_numbered_list_labels_in_words_but_not_characters() {
+    let mut d = wordcraft_doc::Document::new();
+    let num_id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let mut p = wordcraft_doc::Paragraph::with_text("Apple", wordcraft_doc::CharProps::default());
+    p.props.numbering = Some(wordcraft_doc::props::NumRef { num: num_id, level: 0 });
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))];
+    let mut s = Session::new(d);
+
+    let v = run(&mut s, "review.wordCount", json!({}));
+    // Generated label "1." + "Apple" = 2 words.
+    assert_eq!(v["words"].as_u64(), Some(2));
+    assert_eq!(s.word_count(), 2);
+    // Generated list label "1." is formatting metadata and not run characters,
+    // so Word excludes it from character counts: "Apple" has 5 characters.
+    assert_eq!(v["characters"].as_u64(), Some(5));
+    assert_eq!(v["charactersWithSpaces"].as_u64(), Some(5));
+}
+
 /// The laid-out area of the only text box.
 fn box_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
     let l = s.layout();
