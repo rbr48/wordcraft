@@ -3135,3 +3135,59 @@ fn footnote_longer_than_pages_ends() {
     assert!(pieces.len() >= 3 && l.pages.len() == pieces.len(), "{} pages, {pieces:?}", l.pages.len());
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
 }
+
+/// Space before at the top of a page, measured in Word for Windows (32 cases): a paragraph that
+/// ends with a page break keeps its mark with the break (nothing of it goes to the new page) and the
+/// next paragraph gets no space before there; a paragraph that starts with a page break starts on
+/// the new page with its space before; a page break before keeps the space before in compatibility
+/// modes up to 14 (less the previous paragraph's space after) and drops it in mode 15.
+#[test]
+fn space_before_at_the_top_of_a_page_like_word() {
+    let para = |text: &str, before: f32, pbb: bool| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props = ParaProps { space_before: Some(before), space_after: Some(0.0), page_break_before: Some(pbb), ..Default::default() };
+        wordcraft_doc::para_block(p)
+    };
+    let probe_top = |blocks: Vec<std::sync::Arc<wordcraft_doc::Block>>, mode: u32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = mode;
+        let n = blocks.len();
+        d.body = blocks;
+        let l = lay(&d);
+        let c = l.caret(&Pos::body(n - 1, 0)).unwrap();
+        (c.page, c.top)
+    };
+    let plain_top = probe_top(vec![para("first", 0.0, false), para("PROBE", 0.0, true)], 15).1;
+    let brk = wordcraft_doc::para::PAGE_BREAK;
+    // A paragraph ending with a page break, then one with 24 pt before: no space, in both modes.
+    for mode in [12, 15] {
+        let (page, top) = probe_top(vec![para(&format!("first{brk}"), 0.0, false), para("PROBE", 24.0, false)], mode);
+        assert_eq!(page, 1, "mode {mode}");
+        assert!((top - plain_top).abs() < 0.05, "mode {mode}: the mark stays with the break and the space goes: {top} vs {plain_top}");
+    }
+    // A paragraph starting with a page break: its space before on the new page.
+    let mut d = Document::new();
+    d.body = vec![para("first", 0.0, false), para(&format!("{brk}PROBE"), 24.0, false)];
+    let l = lay(&d);
+    let c = l.caret(&Pos::body(1, brk.len_utf8())).unwrap();
+    assert_eq!(c.page, 1);
+    assert!((c.top - plain_top - 24.0).abs() < 0.05, "{} vs {}", c.top, plain_top + 24.0);
+    // Page break before: kept up to mode 14, dropped in 15.
+    let (_, kept) = probe_top(vec![para("first", 0.0, false), para("PROBE", 24.0, true)], 14);
+    let (_, dropped) = probe_top(vec![para("first", 0.0, false), para("PROBE", 24.0, true)], 15);
+    assert!((kept - plain_top - 24.0).abs() < 0.05 && (dropped - plain_top).abs() < 0.05, "{kept} {dropped} {plain_top}");
+    // After a page break before (mode 14) the previous paragraph's space after comes off: 24 - 10.
+    let mut first = wordcraft_doc::Paragraph::with_text("first", Default::default());
+    first.props = ParaProps { space_before: Some(0.0), space_after: Some(10.0), ..Default::default() };
+    let (_, top) = probe_top(vec![wordcraft_doc::para_block(first.clone()), para("PROBE", 24.0, true)], 14);
+    assert!((top - plain_top - 14.0).abs() < 0.05, "{top} vs {}", plain_top + 14.0);
+    // More after than before: nothing left.
+    first.props.space_after = Some(30.0);
+    let (_, top) = probe_top(vec![wordcraft_doc::para_block(first), para("PROBE", 24.0, true)], 14);
+    assert!((top - plain_top).abs() < 0.05, "{top} vs {plain_top}");
+    // The caret can still reach the end of a paragraph whose mark stayed with its page break.
+    let mut d = Document::new();
+    d.body = vec![para(&format!("first{brk}"), 0.0, false), para("next", 0.0, false)];
+    let l = lay(&d);
+    assert!(l.caret(&Pos::body(0, "first".len() + brk.len_utf8())).is_some(), "caret after the break");
+}
