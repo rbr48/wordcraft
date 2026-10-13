@@ -550,11 +550,16 @@ fn layout_box(
                 let mut pl = ctx.para_labelled(p, width, table, &[], label.clone());
                 let ctxl = pl.rp.contextual_spacing;
                 let same = prev_style.as_ref().is_some_and(|(s, c)| *s == pl.rp.style && (*c || ctxl));
-                let before = if same && ctxl { 0.0 } else { pl.rp.space_before };
+                let mut before = if same && ctxl { 0.0 } else { pl.rp.space_before };
                 if same && ctxl {
                     y -= prev_after;
+                    prev_after = 0.0;
                 }
-                // Word: space between paragraphs is before + after (no collapsing).
+                // Word: the space between two paragraphs is the larger of the space after the one
+                // above and the space before this one, not their sum.
+                if i > 0 && before > 0.0 && prev_after > 0.0 {
+                    before = (before - prev_after).max(0.0);
+                }
                 y += if i == 0 { before } else { before.max(0.0) };
                 // Floating objects anchored here: place them, then wrap the text around them.
                 // One left out of the layout (hidden, or deleted in the final text) takes no room.
@@ -588,7 +593,7 @@ fn layout_box(
                     items.extend(front);
                 }
                 y += pl.height + pl.rp.space_after;
-                prev_after = if same && ctxl { 0.0 } else { pl.rp.space_after };
+                prev_after = pl.rp.space_after;
                 prev_style = Some((pl.rp.style.clone(), ctxl));
             }
             Block::Table(t) => {
