@@ -1239,6 +1239,55 @@ fn accept_all_keeps_a_tracked_paragraph_break() {
     assert_eq!(run(&mut s, "review.changes", json!({})), json!([]));
 }
 
+/// Issue #864: five paragraphs, a tracked deletion from the end of the first to the end of the
+/// third. The two breaks inside the range and the text of the second and third paragraphs are
+/// deleted; the third paragraph's own break is not.
+fn tracked_delete_from_paragraph_end() -> Session {
+    let mut s = s();
+    for (i, word) in ["Alpha", "Bravo", "Charlie", "Delta", "Echo"].iter().enumerate() {
+        if i > 0 {
+            run(&mut s, "text.newParagraph", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": word}));
+    }
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    let range = json!({"anchor": {"path": [0], "off": 5, "story": "body"}, "focus": {"path": [2], "off": 7, "story": "body"}});
+    run(&mut s, "select.range", range);
+    run(&mut s, "text.delete", json!({}));
+    s
+}
+
+#[test]
+fn accept_all_after_a_tracked_delete_from_a_paragraph_end_keeps_the_next_paragraph() {
+    let mut s = tracked_delete_from_paragraph_end();
+    assert_eq!(body_texts(&s), ["Alpha", "Bravo", "Charlie", "Delta", "Echo"], "tracked deletions stay in the text");
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(body_texts(&s), ["Alpha", "Delta", "Echo"]);
+    assert!(s.doc.revisions.is_empty());
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.mark.ins.is_none() && p.mark.del.is_none()));
+    // Rejecting instead restores everything, as it already did.
+    let mut s = tracked_delete_from_paragraph_end();
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(body_texts(&s), ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]);
+}
+
+#[test]
+fn reject_all_after_typing_into_an_empty_paragraph_keeps_the_paragraph() {
+    // Same cause as #864 seen from the other side: rejecting the typed text emptied the
+    // paragraph, and its mark picked up the text's insertion, so it was rejected as well.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Three"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    assert_eq!(body_texts(&s), ["One", "Two", "Three"]);
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(body_texts(&s), ["One", "", "Three"]);
+}
+
 #[test]
 fn reject_one_paragraph_break_and_rejecting_a_typed_paragraph() {
     // Reject with the caret on the break (Next Change selects it), or at the end of its paragraph.
