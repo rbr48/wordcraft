@@ -5257,6 +5257,7 @@ dependencies = [
  "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-pdf",
+ "wordcraft-print",
  "wordcraft-proof",
  "wordcraft-render",
  "zeroize",
@@ -5349,6 +5350,14 @@ dependencies = [
  "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-metafile",
+]
+
+[[package]]
+name = "wordcraft-print"
+version = "0.6.2"
+dependencies = [
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
