@@ -51,6 +51,8 @@ pub(crate) struct RowInfo {
     pub(crate) depth: u32,
     /// Column widths (points) from `sprmTDefTable`.
     pub(crate) grid: Vec<f32>,
+    /// The column boundaries (points, from the table's left edge) of the row's own grid.
+    pub(crate) edges: Vec<f32>,
     height: Option<f32>,
     height_rule: HeightRule,
     header: bool,
@@ -87,7 +89,10 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             P_IN_TABLE => r.in_table = prl.operand.first().copied().unwrap_or(0) != 0,
             P_TTP => r.ttp = prl.operand.first().copied().unwrap_or(0) != 0,
             P_ITAP => r.depth = i32_of(&prl).unwrap_or(0).max(0) as u32,
-            T_DEF_TABLE => r.grid = def_table_grid(prl.operand),
+            T_DEF_TABLE => {
+                r.edges = def_table_edges(prl.operand);
+                r.grid = widths_of(&r.edges);
+            }
             T_TABLE_HEADER => r.header = prl.operand.first().copied().unwrap_or(0) != 0,
             T_CANT_SPLIT | T_CANT_SPLIT_90 => r.cant_split = prl.operand.first().copied().unwrap_or(0) != 0,
             T_ROW_HEIGHT => {
@@ -199,7 +204,12 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut rows: Vec<Row> = Vec::new();
     let mut cells: Vec<Cell> = Vec::new();
     let mut cell: Blocks = Vec::new();
-    let mut grid: Vec<f32> = Vec::new();
+    // Every column grid the table's rows carry. Rows of one table can carry different
+    // grids (a row may describe a grid with fewer columns than the table has), so the grid
+    // is chosen by the table's column count, not by whichever row came first.
+    let mut grids: Vec<Vec<f32>> = Vec::new();
+    // The row's own column boundaries, parallel to `rows`.
+    let mut row_edges: Vec<Vec<f32>> = Vec::new();
     let mut props = TableProps::default();
     let mut open = false;
     let mut depth_seen = 0u32;
@@ -255,20 +265,55 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             cells,
         }
     }
-    fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
+    fn flush_table(
+        out: &mut Blocks,
+        rows: &mut Vec<Row>,
+        row_edges: &mut Vec<Vec<f32>>,
+        cells: &mut Vec<Cell>,
+        cell: &mut Blocks,
+        grids: &[Vec<f32>],
+        props: &TableProps,
+        nested: bool,
+    ) {
         if !cells.is_empty() || !cell.is_empty() {
             flush_cell(cells, cell);
             // A stray trailing row (no TTP of its own): size its cells from the grid.
-            let mut stray = build_row(std::mem::take(cells), &RowInfo::default());
-            for (i, c) in stray.cells.iter_mut().enumerate() {
-                if c.props.width.is_none() && c.props.span == 1 {
-                    c.props.width = grid.get(i).copied();
-                }
-            }
+            let stray = build_row(std::mem::take(cells), &RowInfo::default());
             rows.push(stray);
+            row_edges.push(Vec::new());
         }
         if rows.is_empty() {
+            row_edges.clear();
             return;
+        }
+        // Rows of one table can each have their own column grid, and Word lays each row out on
+        // its own. The table's grid is every boundary any row uses; each row's cells then span
+        // the table columns their own boundaries cover.
+        let mut all_edges: Vec<f32> = row_edges.iter().flatten().copied().collect();
+        all_edges.sort_by(|a, b| a.total_cmp(b));
+        all_edges.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+        let (grid, edges) = if all_edges.len() >= 2 && all_edges.len() - 1 <= MAX_COLS {
+            (widths_of(&all_edges), all_edges)
+        } else {
+            let cols = Table { props: props.clone(), grid: Vec::new(), rows: rows.clone() }.cols();
+            (choose_grid(grids, cols), Vec::new())
+        };
+        for (r, own) in rows.iter_mut().zip(row_edges.iter()) {
+            map_row_onto(r, own, &edges, &grid);
+        }
+        row_edges.clear();
+        // A cell without its own width takes the grid columns it covers (a merged cell covers
+        // its span). Cells with a width from their row's properties keep it.
+        for r in rows.iter_mut() {
+            let mut col = 0usize;
+            for c in r.cells.iter_mut() {
+                let span = (c.props.span as usize).max(1);
+                if c.props.width.is_none() && col < grid.len() {
+                    let end = (col + span).min(grid.len());
+                    c.props.width = Some(grid[col..end].iter().sum());
+                }
+                col += span;
+            }
         }
         if nested {
             // Unclosed or nested deeper than we model: keep the text, drop the table shape.
@@ -278,7 +323,14 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 }
             }
         } else {
-            let mut t = Table { props: props.clone(), grid: grid.to_vec(), rows: std::mem::take(rows) };
+            // Word keeps the widths of a table whose cells all state one: the columns don't
+            // re-share the page to fit their content (a narrow column with a long word would
+            // otherwise take width from the wide text column).
+            let mut props = props.clone();
+            if rows.iter().all(|r| !r.cells.is_empty() && r.cells.iter().all(|c| c.props.width.is_some())) {
+                props.fixed = true;
+            }
+            let mut t = Table { props, grid, rows: std::mem::take(rows) };
             // A continuation with no restart above it becomes an ordinary cell (its text shown).
             t.repair_orphan_continues();
             out.push(Arc::new(Block::Table(t)));
@@ -291,7 +343,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         let is_table = info.in_table || info.ttp || info.cell_mark;
         if !is_table {
             if open {
-                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+                flush_table(&mut out, &mut rows, &mut row_edges, &mut cells, &mut cell, &grids, &props, depth_seen > 1);
+                grids.clear();
                 open = false;
                 depth_seen = 0;
             }
@@ -302,8 +355,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             open = true;
         }
         depth_seen = depth_seen.max(info.depth);
-        if !info.grid.is_empty() && grid.is_empty() {
-            grid = info.grid.clone();
+        if !info.grid.is_empty() {
+            grids.push(info.grid.clone());
         }
         if info.borders.is_some() && props.borders.is_none() {
             props.borders = info.borders;
@@ -315,27 +368,75 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             props.indent = info.indent;
         }
         if info.cell_mark {
-            if !p.para.text.is_empty() {
-                cell.push(para_block(p.para));
+            // An empty row-end mark (Word's end-of-row mark: no text, sprmPTtp) closes the row
+            // without a cell of its own; a cell end with text, or a row end with text, is a cell.
+            let row_end_only = info.ttp && p.para.text.is_empty();
+            if !row_end_only || !cell.is_empty() {
+                if !p.para.text.is_empty() {
+                    cell.push(para_block(p.para));
+                }
+                flush_cell(&mut cells, &mut cell);
             }
-            flush_cell(&mut cells, &mut cell);
             if info.ttp {
                 let row = build_row(std::mem::take(&mut cells), &info);
                 rows.push(row);
+                row_edges.push(info.edges.clone());
             }
         } else {
             cell.push(para_block(p.para));
         }
     }
     if open {
-        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+        flush_table(&mut out, &mut rows, &mut row_edges, &mut cells, &mut cell, &grids, &props, depth_seen > 1);
+        grids.clear();
     }
     out
 }
 
+/// Map a row's cells onto the table's columns. A row whose own boundaries are known and whose
+/// cells are one per own column takes the table columns between its boundaries (a span where
+/// the row is wider in fewer columns). Other rows keep their cells and get widths from the grid.
+fn map_row_onto(row: &mut Row, own: &[f32], edges: &[f32], grid: &[f32]) {
+    let n = own.len().saturating_sub(1);
+    let plain = !own.is_empty() && edges.len() >= 2 && row.cells.len() == n && row.cells.iter().all(|c| c.props.span == 1);
+    if plain {
+        let nearest =
+            |x: f32| -> usize { edges.iter().enumerate().min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map(|(i, _)| i).unwrap_or(0) };
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            let (j, k) = (nearest(own[c]), nearest(own[c + 1]));
+            let span = k.saturating_sub(j).max(1);
+            cell.props.span = span.min(63) as u32;
+            if cell.props.width.is_none() {
+                cell.props.width = Some(grid.get(j..(j + span).min(grid.len())).map(|w| w.iter().sum()).unwrap_or(0.0));
+            }
+        }
+        return;
+    }
+    let mut col = 0usize;
+    for c in row.cells.iter_mut() {
+        let span = (c.props.span as usize).max(1);
+        if c.props.width.is_none() && col < grid.len() {
+            let end = (col + span).min(grid.len());
+            c.props.width = Some(grid[col..end].iter().sum());
+        }
+        col += span;
+    }
+}
+
+/// The grid for a table with `cols` columns: the shortest one that covers every column (an exact
+/// match when a row has one), else the longest one there is. Empty when the table has none.
+fn choose_grid(grids: &[Vec<f32>], cols: usize) -> Vec<f32> {
+    grids.iter().filter(|g| g.len() >= cols).min_by_key(|g| g.len()).or_else(|| grids.iter().max_by_key(|g| g.len())).cloned().unwrap_or_default()
+}
+
 /// Column widths (points) from a `sprmTDefTable` operand: cb u16, itcMac u8, then itcMac+1
 /// twip boundaries followed by the TC80s (skipped).
-fn def_table_grid(operand: &[u8]) -> Vec<f32> {
+fn widths_of(edges: &[f32]) -> Vec<f32> {
+    edges.windows(2).map(|w| (w[1] - w[0]).max(0.0)).collect()
+}
+
+/// The column boundaries (points) of a `sprmTDefTable` operand (see [`def_table_grid`]).
+fn def_table_edges(operand: &[u8]) -> Vec<f32> {
     let itc = operand.get(2).copied().unwrap_or(0) as usize;
     if itc == 0 || itc > MAX_COLS {
         return Vec::new();
@@ -347,7 +448,7 @@ fn def_table_grid(operand: &[u8]) -> Vec<f32> {
             None => break,
         }
     }
-    edges.windows(2).map(|w| (w[1] - w[0]).max(0.0)).collect()
+    edges
 }
 
 /// Table borders from `sprmTTableBorders80`: cb (0x18) then six Brc80s in the order top,
