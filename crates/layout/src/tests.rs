@@ -3338,4 +3338,3 @@ fn bare_code_wingdings_bullet_draws_its_square() {
     };
     assert_eq!(label.text, expected);
 }
-

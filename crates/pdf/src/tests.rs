@@ -864,4 +864,3 @@ fn internal_links_export_in_linear_time() {
     let ratio = fastest(&big) / fastest(&small).max(1e-9);
     assert!(ratio < 9.0, "4x the paragraphs and links took {ratio:.1}x as long (quadratic would be ~16x)");
 }
-
