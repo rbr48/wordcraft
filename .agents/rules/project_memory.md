@@ -110,4 +110,29 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **M10**: Native OS spooler printing integrated via new crate `wordcraft-print` (Windows Print Spooler, macOS CUPS, Linux CUPS, with PDF intermediate rendering and PowerShell script driver).
     - Bumped workspace version to `0.6.3` in `Cargo.toml`.
     - Updated Windows Inno Setup script (`packaging/windows/wordcraft.iss`), `build-installer.ps1`, `packaging/android/AndroidManifest.xml`, and `packaging/android/build-apk.ps1`.
+  - **Upstream UI Polish & Bug Fixes Import (Commits up to 41d37e6)**:
+    - Safely imported 18 upstream polish and bug fix commits while preserving 100% of custom features (Full Document AI Agent, Copilot pane, Bangla typing engine & 77k vocabulary, table audit repairs):
+      1. Mini toolbar layout metrics and proper box-aligned dropdown menus (`#535`).
+      2. Space before suppression at the top of a page matching Word behavior (`#932`).
+      3. Multiple line spacing leading added below text runs (`3731898`).
+      4. Adjacent paragraph spacing collapses to larger of before/after margins (`be74745`).
+      5. Strict Word-parity kerning application (`681a57f`).
+      6. Ribbon tab Keytips matching Word for Windows: File (F), Design (G), References (S), Review (R), View (W), Help (Y) (`#922`).
+      7. Drawing view position preserved at ink point rather than jumping back to caret (`#859`).
+      8. Save confirmation prompt defaults focus to Save button for fast keyboard confirmation (`#861`).
+      9. AutoCorrect language scoping: English corrections restricted to English BCP-47 runs, insulating Bangla/non-English words (`#835`).
+      10. Track Changes Accept/Reject at caret covers changes split by comments (`#809`).
+      11. Comment cards display both date and time stamps (`#812`).
+      12. `Ctrl+F` auto-focuses Find input on opening (`#772`).
+      13. Paragraph alignment and ribbon clicks return focus immediately to canvas (`#690`).
+      14. Ellipses exempted from false-positive sentence capitalization proofing (`#742`).
+      15. WMF drawing aspect rendering fills frame like Word (`#739`).
+      16. Save As dialog preserves user-typed filenames without reset (`#689`).
+      17. Zotero citation note and picture positioning fixes (`#469`, `#470`).
+      18. Documentation, brand licensing, and AUR packaging notes (`#509`, `#664`, `#865`).
+    - All test suites passing (`wordcraft-layout` 154/154, `wordcraft-ui-egui` 183/183, `bangla` 17/17, `agent` 6/6, `hostile_params_never_panic` 1/1).
+    - Recompiled production release binaries (`wordcraft.exe`, `wordcraft-cli.exe`).
+    - Rebuilt Inno Setup Windows installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.0 MB).
+    - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.0 MB).
+
 
