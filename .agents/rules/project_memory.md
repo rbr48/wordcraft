@@ -106,3 +106,8 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **M9.1–M9.3**: Full document AI agent in `crates/engine/src/agent.rs` running multi-round goal execution, compact AST outline representation, command execution with defensive guards, and single-stroke atomic undo.
     - **Copilot Chat Pane**: Dedicated non-blocking Copilot UI (`crates/ui-egui/src/copilot.rs`) running provider requests off the main UI thread via `std::sync::mpsc`, slash command palette (`/edit`, `/check-doc`, `/proofread`, `/summarize`, `/rewrite`, `/draft`, `/table`, `/ask`), and model presets.
     - **M3.4–M3.6**: `.doc` files automatically convert to `.docx` on save/edit; `.doc` binary tables support per-row column grids, proper row-end marks, and explicit cell width retention matching Microsoft Word behavior.
+  - **Version 0.6.3 Upgrade & Native Spooler Printing (PR #9)**:
+    - **M10**: Native OS spooler printing integrated via new crate `wordcraft-print` (Windows Print Spooler, macOS CUPS, Linux CUPS, with PDF intermediate rendering and PowerShell script driver).
+    - Bumped workspace version to `0.6.3` in `Cargo.toml`.
+    - Updated Windows Inno Setup script (`packaging/windows/wordcraft.iss`), `build-installer.ps1`, `packaging/android/AndroidManifest.xml`, and `packaging/android/build-apk.ps1`.
+
