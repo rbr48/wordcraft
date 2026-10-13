@@ -371,7 +371,8 @@ fn shape_effects(s: &mut Surface, kind: ShapeKind, rect: &Rect, fx: &wordcraft_d
 
 /// Outline of a basic shape in a rectangle (same geometry as the raster renderer).
 fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
-    if !(ok(r.x) && ok(r.y) && ok(r.w) && ok(r.h)) || r.w <= 0.0 || r.h <= 0.0 {
+    let empty = if kind == ShapeKind::Line { r.w < 0.0 || r.h < 0.0 || (r.w == 0.0 && r.h == 0.0) } else { r.w <= 0.0 || r.h <= 0.0 };
+    if !(ok(r.x) && ok(r.y) && ok(r.w) && ok(r.h)) || empty {
         return None;
     }
     let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.w, r.y + r.h);

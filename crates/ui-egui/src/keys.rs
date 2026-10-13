@@ -382,6 +382,59 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                                     continue;
                                 }
 
+                                // 7.5. Ra-fala ('z' = "্র") and Ya-fala ('Z' = "্য"):
+                                // In Unicode Bengali, consonant phalas (্র / ্য) are part of the consonant cluster
+                                // and MUST precede any vowel sign (ি, ে, ৈ, া, ী, ু, ূ, ৃ, ো, ৌ) on that syllable.
+                                // When a pre-kar (ি/ে/ৈ) was typed before the consonant or conjunct (e.g. w+f+d+b+g+k+z+j
+                                // for "যান্ত্রিক", d+r+z+W for "প্রিয়", or c+r+z+m for "প্রেম"), the pre-kar is currently at
+                                // the end of `before_caret` ("যান্তি", "পি", "পে"). Move that vowel sign AFTER the fala
+                                // so the syllable becomes "যান্ত্রি", "প্রি", "প্রে".
+                                if c == 'z' || c == 'Z' {
+                                    let fala = if c == 'z' { "্র" } else { "্য" };
+                                    let f = app.session.sel.focus.clone();
+                                    let before_caret = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                    let prev_char = before_caret.chars().next_back();
+                                    let mut moved_kar: Option<char> = None;
+
+                                    if let Some(kar @ ('ি' | 'ে' | 'ৈ' | 'া' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ো' | 'ৌ')) = prev_char {
+                                        let kar_len = kar.len_utf8();
+                                        if f.off >= kar_len {
+                                            let start_off = f.off - kar_len;
+                                            let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                            if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                                moved_kar = Some(kar);
+                                            }
+                                        }
+                                    }
+
+                                    // Also strip any redundant trailing '্' (e.g. if the user pressed 'g' right before 'z'/'Z'):
+                                    let f2 = app.session.sel.focus.clone();
+                                    let before2 = app.session.doc.para_at(&f2).and_then(|p| p.text.get(..f2.off)).unwrap_or("");
+                                    if before2.ends_with('্') && f2.off >= '্'.len_utf8() {
+                                        let start_off = f2.off - '্'.len_utf8();
+                                        let a = wordcraft_doc::Pos { off: start_off, ..f2.clone() };
+                                        if let Ok(pos) = app.session.doc.delete_range(&a, &f2) {
+                                            app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                        }
+                                    }
+
+                                    let mut out = String::new();
+                                    if app.ui.jatiya_reph {
+                                        out.push_str("র্");
+                                        app.ui.jatiya_reph = false;
+                                    }
+                                    out.push_str(fala);
+                                    if let Some(kar) = moved_kar {
+                                        out.push(kar);
+                                    }
+                                    if let Some(stashed_kar) = app.ui.jatiya_pre_kar.take() {
+                                        out.push_str(stashed_kar);
+                                    }
+                                    let _ = app.run("text.insert", json!({"text": out}));
+                                    continue;
+                                }
+
                                 // 8. Normal character lookup:
                                 if let Some(s) = wordcraft_engine::cmd::bangla::jatiya_key(c) {
                                     let mut out = String::new();
@@ -490,28 +543,23 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                                 }
 
                                 // 3.6. Ra-fala key 'z':
-                                if c == 'z'
-                                    && let Some(prev) = app.ui.ansi_prev_bn.take()
-                                {
-                                    let rafala_lig = match prev {
-                                        'ত' => Some("Î"),  // ত্র
-                                        'ক' => Some("µ"),  // ক্র
-                                        'ভ' => Some("å"),  // ভ্র
-                                        'প' => Some("cÖ"), // প্র
-                                        'গ' => Some("MÖ"), // গ্র
-                                        'ব' => Some("eª"), // ব্র
-                                        'শ' => Some("kÖ"), // শ্র
-                                        'স' => Some("mÖ"), // স্র
-                                        'ধ' => Some("aÖ"), // ধ্র
-                                        'ম' => Some("gÖ"), // ম্র
-                                        'হ' => Some("nÖ"), // হ্র
-                                        _ => None,
+                                if c == 'z' {
+                                    let f = app.session.sel.focus.clone();
+                                    let before_caret = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                    let conj_rafala = if before_caret.ends_with("šÍ") {
+                                        Some(("šÍ", "š¿")) // ন্ত + ্র -> ন্ত্র
+                                    } else if before_caret.ends_with("¯Í") {
+                                        Some(("¯Í", "¯¿")) // স্ত + ্র -> স্ত্র
+                                    } else if before_caret.ends_with("¯‹") {
+                                        Some(("¯‹", "¯Œ")) // স্ক + ্র -> স্ক্র
+                                    } else {
+                                        None
                                     };
-                                    if let Some(lig) = rafala_lig {
-                                        for _ in 0..app.ui.ansi_prev_ansi_len {
+                                    if let Some((old_conj, new_conj)) = conj_rafala {
+                                        for _ in 0..old_conj.chars().count() {
                                             let _ = app.run("text.backspace", json!({}));
                                         }
-                                        let mut out_lig = lig.to_string();
+                                        let mut out_lig = new_conj.to_string();
                                         if app.ui.ansi_reph {
                                             out_lig.push('©');
                                             app.ui.ansi_reph = false;
@@ -520,6 +568,36 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                                         app.ui.ansi_prev_bn = None;
                                         app.ui.ansi_prev_ansi_len = out_lig.chars().count();
                                         continue;
+                                    }
+                                    if let Some(prev) = app.ui.ansi_prev_bn.take() {
+                                        let rafala_lig = match prev {
+                                            'ত' => Some("Î"),  // ত্র
+                                            'ক' => Some("µ"),  // ক্র
+                                            'ভ' => Some("å"),  // ভ্র
+                                            'প' => Some("cÖ"), // প্র
+                                            'গ' => Some("MÖ"), // গ্র
+                                            'ব' => Some("eª"), // ব্র
+                                            'শ' => Some("kÖ"), // শ্র
+                                            'স' => Some("mÖ"), // স্র
+                                            'ধ' => Some("aÖ"), // ধ্র
+                                            'ম' => Some("gÖ"), // ম্র
+                                            'হ' => Some("nÖ"), // হ্র
+                                            _ => None,
+                                        };
+                                        if let Some(lig) = rafala_lig {
+                                            for _ in 0..app.ui.ansi_prev_ansi_len {
+                                                let _ = app.run("text.backspace", json!({}));
+                                            }
+                                            let mut out_lig = lig.to_string();
+                                            if app.ui.ansi_reph {
+                                                out_lig.push('©');
+                                                app.ui.ansi_reph = false;
+                                            }
+                                            let _ = app.run("text.insert", json!({"text": out_lig}));
+                                            app.ui.ansi_prev_bn = None;
+                                            app.ui.ansi_prev_ansi_len = out_lig.chars().count();
+                                            continue;
+                                        }
                                     }
                                 }
 

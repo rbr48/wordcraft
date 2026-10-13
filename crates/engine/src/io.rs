@@ -413,7 +413,10 @@ fn is_leftover_word(word: &str) -> bool {
     let chars: Vec<char> = word.chars().collect();
     chars.iter().enumerate().any(|(i, ch)| {
         let near = |j: Option<usize>| j.and_then(|j| chars.get(j)).is_some_and(|c| is_bn_letter(*c));
-        matches!(ch, 'w' | 'z') && (near(i.checked_sub(1)) || near(i.checked_add(1)))
+        let malformed_cluster = matches!(ch, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ')
+            && chars.get(i + 1) == Some(&'্')
+            && chars.get(i + 2).copied().is_some_and(crate::cmd::bangla::is_bn_consonant);
+        malformed_cluster || (matches!(ch, 'w' | 'z') && (near(i.checked_sub(1)) || near(i.checked_add(1))))
     })
 }
 
@@ -557,7 +560,7 @@ fn normalize_blocks_bijoy(
                 }
                 let para_is_partial = !para_has_bijoy && has_leftover_bijoy(&p.text);
 
-                if para_has_bijoy || para_is_partial {
+                if para_has_bijoy {
                     if p.mark.size.is_none() && p.mark.size_cs.is_none() {
                         p.mark.size = style_size;
                     }
@@ -570,6 +573,9 @@ fn normalize_blocks_bijoy(
                     }
                     // Force single line spacing (1.0×) on converted Bijoy paragraphs (including empty ones).
                     p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+                } else if para_is_partial {
+                    p.mark.font = Some("Kalpurush".into());
+                    p.mark.font_cs = Some("Kalpurush".into());
                 }
 
                 if (para_has_bijoy || para_is_partial || (p.runs.is_empty() && default_is_bijoy)) && !p.text.is_empty() {
@@ -596,7 +602,7 @@ fn normalize_blocks_bijoy(
                         let is_partial = !is_bijoy && has_leftover_bijoy(run_slice);
 
                         let mut props = r.props.clone();
-                        if is_bijoy || is_partial {
+                        if is_bijoy {
                             if props.size.is_none() && props.size_cs.is_none() {
                                 props.size = style_size;
                             }
@@ -607,6 +613,9 @@ fn normalize_blocks_bijoy(
                             {
                                 normalize_bijoy_char_props(&mut fc.old);
                             }
+                        } else if is_partial {
+                            props.font = Some("Kalpurush".into());
+                            props.font_cs = Some("Kalpurush".into());
                         } else if para_has_bijoy {
                             // Inline Latin/English runs inside a Bijoy paragraph also reduce
                             // their font size by 2pt so they stay proportional to the surrounding

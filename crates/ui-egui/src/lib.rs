@@ -3091,6 +3091,57 @@ mod tests {
         });
         type_keys(&mut a, &ctx, "gfmfcv");
         assert_eq!(body_text(&a).trim(), "আমারে");
+
+        // 15. Pre-kar + conjunct + Ra-fala ('z') / Ya-fala ('Z') in Jatiya:
+        // যান্ত্রিক: w (য), f (া), d (ি), b (ন), g (্), k (ত), z (্র), j (ক) -> যান্ত্রিক (not যান্তি্রক)
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "wfdbgkzj");
+        assert_eq!(body_text(&a).trim(), "যান্ত্রিক");
+
+        // যান্ত্রিক with explicit 'g' before 'z': wfdbgk g z j -> যান্ত্রিক
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "wfdbgkgzj");
+        assert_eq!(body_text(&a).trim(), "যান্ত্রিক");
+
+        // প্রিয়: d (ি), r (প), z (্র), W (য়) -> প্রিয়
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "drzW");
+        assert_eq!(body_text(&a).trim(), "প্রিয়");
+
+        // প্রেম: c (ে), r (প), z (্র), m (ম) -> প্রেম
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "crzm");
+        assert_eq!(body_text(&a).trim(), "প্রেম");
+
+        // জ্যোতি: c (ে), u (জ), Z (্য), f (া), d (ি), k (ত) -> জ্যোতি
+        a.session.doc = wordcraft_doc::Document::new();
+        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+            story: wordcraft_doc::StoryRef::Body,
+            path: wordcraft_doc::Path(vec![0]),
+            off: 0,
+        });
+        type_keys(&mut a, &ctx, "cuZfdk");
+        assert_eq!(body_text(&a).trim(), "জ্যোতি");
     }
 
     #[test]

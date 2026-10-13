@@ -793,8 +793,16 @@ pub fn find_bijoy_conjunct(c1: char, c2: char) -> Option<&'static str> {
 pub fn unicode_to_ansi(text: &str) -> String {
     let mut s = text.to_string();
 
-    // 1. Common Conjuncts (যুক্তবর্ণ)
+    // 1. Common Conjuncts (যুক্তবর্ণ) — 3-consonant clusters first so 2-consonant substrings don't match prematurely
     let conjuncts: &[(&str, &str)] = &[
+        ("ঙ্ক্ষ", "•¶"),
+        ("ন্ত্র", "š¿"),
+        ("ন্তু", "š‘"),
+        ("স্ত্র", "¯¿"),
+        ("স্তু", "¯‘"),
+        ("স্ক্র", "¯Œ"),
+        ("ন্দ্র", "›`ª"),
+        ("ষ্ট্র", "óª"),
         ("ক্ষ", "¶"),
         ("জ্ঞ", "Á"),
         ("ত্র", "Î"),
@@ -824,8 +832,6 @@ pub fn unicode_to_ansi(text: &str) -> String {
         ("ন্ধ", "Ü"),
         ("ন্ন", "bœ"),
         ("ন্স", "Ý"),
-        ("ন্তু", "š‘"),
-        ("ন্ত্র", "š¿"),
         ("ন্ত", "šÍ"),
         ("প্ট", "Þ"),
         ("প্ত", "ß"),
@@ -842,8 +848,6 @@ pub fn unicode_to_ansi(text: &str) -> String {
         ("ষ্ঠ", "ô"),
         ("ষ্ণ", "õ"),
         ("ষ্প", "ö"),
-        ("স্তু", "¯‘"),
-        ("স্ত্র", "¯¿"),
         ("স্ত", "¯Í"),
         ("স্থ", "¯’"),
         ("স্ট", "÷"),
@@ -867,7 +871,6 @@ pub fn unicode_to_ansi(text: &str) -> String {
         ("স্খ", "¯L"),
         ("চ্চ", "”P"),
         ("চ্ছ", "”Q"),
-        ("ঙ্ক্ষ", "•¶"),
         ("ষ্ক", "®‹"),
         ("ষ্ফ", "®£"),
         ("ষ্ম", "®§"),
@@ -1216,6 +1219,8 @@ pub fn is_two_char_conjunct(c1: char, c2: char) -> bool {
             | ('¯', '§')
             | ('¯', 'L')
             | ('¯', '£')
+            | ('¯', '‘')
+            | ('¯', '¿')
             | ('”', 'P')
             | ('”', 'Q')
             | ('•', '¶')
@@ -1224,22 +1229,61 @@ pub fn is_two_char_conjunct(c1: char, c2: char) -> bool {
             | ('®', '§')
             | ('m', 'œ')
             | ('j', 'ø')
+            | ('›', '`')
+            | ('›', 'U')
             | ('›', 'V')
             | ('š', '’')
             | ('š', '§')
             | ('š', '^')
             | ('š', 'Í')
+            | ('š', '‘')
+            | ('š', '¿')
+            | ('Z', 'œ')
+            | ('Z', '¥')
+            | ('b', 'œ')
             | ('K', '^')
             | ('K', '¥')
             | ('K', 'ø')
             | ('L', '^')
             | ('M', 'œ')
+            | ('¤', 'ú')
+            | ('¤', '^')
+            | ('¤', '¢')
             | ('¤', '§')
             | ('¤', 'œ')
             | ('™', '¢')
-            | ('¯', '‘')
-            | ('¯', '¿')
     )
+}
+
+/// Normalizes any malformed Unicode Bengali sequence where a dependent vowel sign (kar)
+/// precedes a `্` + Consonant continuation (such as `যান্তি্রক` -> `যান্ত্রিক`).
+pub fn normalize_bn_cluster_order(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if matches!(ch, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ')
+            && chars.get(i + 1) == Some(&'্')
+            && chars.get(i + 2).copied().is_some_and(is_bn_consonant)
+        {
+            let mut end = i + 1;
+            while chars.get(end) == Some(&'্') && chars.get(end + 1).copied().is_some_and(is_bn_consonant) {
+                end += 2;
+            }
+            if let Some(tail) = chars.get(i + 1..end) {
+                for &c in tail {
+                    out.push(c);
+                }
+            }
+            out.push(ch);
+            i = end;
+            continue;
+        }
+        out.push(ch);
+        i += 1;
+    }
+    out
 }
 
 /// Converts ANSI (SutonnyMJ encoding) text to Unicode Bengali with full ligature,
@@ -1304,28 +1348,11 @@ pub fn ansi_to_unicode(text: &str) -> String {
         // Collapse doubled \u{09CC} glyph
         .replace("\u{0160}\u{0160}", "\u{0160}");
 
-    // 2. Replace Conjunct Glyphs and Phalas (longest matches first)
+    // 2. Replace Conjunct Glyphs and Phalas (longest matches first).
+    // Note: Pre-kars ('w', '†', '‰') are intentionally NOT expanded here so that Step 4
+    // (`parse_bn_cluster`) moves them across the ENTIRE consonant cluster (including trailing
+    // phalas like `Ö`/`ª`/`«` for `্র` or `¿` for `্ত্র` in `যান্ত্রিক`).
     let conjuncts: &[(&str, &str)] = &[
-        ("w¯’", "স্থি"),
-        ("†cÖ", "প্রে"),
-        ("†MÖ", "গ্রে"),
-        ("†¯Í", "স্তে"),
-        ("w¤ú", "ম্পি"),
-        ("wcÖ", "প্রি"),
-        ("wMÖ", "গ্রি"),
-        ("w¯Í", "স্তি"),
-        ("wÎ", "ত্রি"),
-        ("w¶", "ক্ষি"),
-        ("wÿ", "ক্ষি"),
-        ("wÁ", "জ্ঞি"),
-        ("wó", "ষ্টি"),
-        ("w›`", "ন্দি"),
-        ("w›U", "ন্টি"),
-        ("w›W", "ন্ডি"),
-        ("w›", "ন্দি"),
-        ("wšÍ", "ন্তি"),
-        ("wš", "ন্তি"),
-        ("wµ", "ক্রি"),
         ("cÖ", "প্র"),
         ("MÖ", "গ্র"),
         ("eª", "ব্র"),
@@ -1508,6 +1535,7 @@ pub fn ansi_to_unicode(text: &str) -> String {
             'p' => "ঢ়",
             'q' => "য়",
             'r' => "ৎ",
+            '&' => "্",
             '¨' => "্য",
             'Ö' | 'ª' | '«' => "্র",
             'Ñ' => "–",
@@ -1650,8 +1678,9 @@ pub fn ansi_to_unicode(text: &str) -> String {
         j += 1;
     }
 
-    // 7. Normalize Chandrabindu (ঁ) after vowel signs (e.g. চঁাদ -> চাঁদ)
-    let mut final_out = reph_out;
+    // 7. Normalize any vowel sign preceding `্` + Consonant (e.g. যান্তি্রক -> যান্ত্রিক)
+    // and Chandrabindu (ঁ) after vowel signs (e.g. চঁাদ -> চাঁদ).
+    let mut final_out = normalize_bn_cluster_order(&reph_out);
     for (bad, good) in [("ঁা", "াঁ"), ("ঁি", "িঁ"), ("ঁী", "ীঁ"), ("ঁু", "ুঁ"), ("ঁূ", "ূঁ"), ("ঁৃ", "ৃঁ"), ("ঁে", "েঁ"), ("ঁৈ", "ৈঁ"), ("ঁো", "োঁ"), ("ঁৌ", "ৌঁ")]
     {
         if final_out.contains(bad) {
@@ -1753,23 +1782,147 @@ fn cmd_bangla_candidates(_s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"prefix": prefix, "candidates": candidates}))
 }
 
+/// Transliterates a Jatiya (Bijoy-layout) keystroke sequence into Unicode Bengali.
+pub fn jatiya_transliterate(input: &str) -> String {
+    let mut out = String::new();
+    let mut linker = false;
+    let mut pre_kar: Option<&'static str> = None;
+    let mut reph = false;
+
+    for c in input.chars() {
+        if c == 'g' {
+            if linker {
+                out.push('্');
+                linker = false;
+            } else {
+                linker = true;
+                if let Some(kar @ ('ি' | 'ে' | 'ৈ')) = out.chars().next_back() {
+                    out.pop();
+                    out.push('্');
+                    pre_kar = Some(match kar {
+                        'ি' => "ি",
+                        'ে' => "ে",
+                        'ৈ' => "ৈ",
+                        _ => "",
+                    });
+                } else {
+                    out.push('্');
+                }
+            }
+            continue;
+        }
+
+        if linker {
+            linker = false;
+            if let Some(vowel) = jatiya_linker_vowel(c) {
+                if out.ends_with('্') {
+                    out.pop();
+                }
+                if let Some(stashed) = pre_kar.take() {
+                    out.push_str(stashed);
+                }
+                out.push_str(vowel);
+                continue;
+            }
+            if c == '|' {
+                if out.ends_with('্') {
+                    out.pop();
+                }
+                if let Some(stashed) = pre_kar.take() {
+                    out.push_str(stashed);
+                }
+                out.push('ঃ');
+                continue;
+            }
+            if c == '.' || c == 'G' {
+                if out.ends_with('্') {
+                    out.pop();
+                }
+                if let Some(stashed) = pre_kar.take() {
+                    out.push_str(stashed);
+                }
+                out.push('।');
+                continue;
+            }
+        }
+
+        if c == 'A' {
+            reph = true;
+            continue;
+        }
+
+        if c == 'd' || c == 'c' || c == 'C' {
+            pre_kar = Some(match c {
+                'd' => "ি",
+                'c' => "ে",
+                'C' => "ৈ",
+                _ => "",
+            });
+            continue;
+        }
+
+        if (c == 'f' || c == 'X') && out.ends_with('ে') {
+            out.pop();
+            out.push(if c == 'f' { 'ো' } else { 'ৌ' });
+            continue;
+        }
+
+        if c == 'z' || c == 'Z' {
+            let fala = if c == 'z' { "্র" } else { "্য" };
+            let moved_kar = match out.chars().next_back() {
+                Some(kar @ ('ি' | 'ে' | 'ৈ' | 'া' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ো' | 'ৌ')) => {
+                    out.pop();
+                    Some(kar)
+                }
+                _ => None,
+            };
+            if out.ends_with('্') {
+                out.pop();
+            }
+            if reph {
+                out.push_str("র্");
+                reph = false;
+            }
+            out.push_str(fala);
+            if let Some(kar) = moved_kar {
+                out.push(kar);
+            }
+            if let Some(stashed) = pre_kar.take() {
+                out.push_str(stashed);
+            }
+            continue;
+        }
+
+        if let Some(s) = jatiya_key(c) {
+            if reph {
+                out.push_str("র্");
+                reph = false;
+            }
+            out.push_str(s);
+            if let Some(kar) = pre_kar.take() {
+                out.push_str(kar);
+            }
+        } else {
+            if let Some(kar) = pre_kar.take() {
+                out.push_str(kar);
+            }
+            if reph {
+                out.push_str("র্");
+                reph = false;
+            }
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// `tools.banglaTransliterate` — converts text using the specified engine.
 fn cmd_bangla_transliterate(_s: &mut Session, v: &Value) -> CmdResult {
     let text = p::req_str(v, "text")?;
     let mode = p::str(v, "mode").unwrap_or("phonetic");
     let result = match mode {
         "phonetic" => phonetic_transliterate(text),
-        "jatiya" => {
-            let mut out = String::new();
-            for c in text.chars() {
-                if let Some(bn) = jatiya_key(c) {
-                    out.push_str(bn);
-                } else {
-                    out.push(c);
-                }
-            }
-            out
-        }
+        "jatiya" => jatiya_transliterate(text),
         "unicodeToAnsi" => unicode_to_ansi(text),
         "ansiToUnicode" => ansi_to_unicode(text),
         _ => text.to_string(),
@@ -2107,6 +2260,18 @@ mod tests {
         // Note: the curly-quote U+201C is the SutonnyMJ "চ্" shorthand prefix glyph
         let sarboccho_bijoy = "m\u{2021}ev\u{00A9}\u{201C}P";
         assert_eq!(ansi_to_unicode(sarboccho_bijoy), "সর্বোচ্চ");
+
+        // 15. যান্ত্রিক (hvwš¿K, hvwšÍÖK, and malformed যান্তি্রক normalization)
+        assert_eq!(ansi_to_unicode("hvwš¿K"), "যান্ত্রিক");
+        assert_eq!(ansi_to_unicode("hvwšÍÖK"), "যান্ত্রিক");
+        assert_eq!(unicode_to_ansi("যান্ত্রিক"), "hvwš¿K");
+        assert_eq!(normalize_bn_cluster_order("যান্তি্রক"), "যান্ত্রিক");
+        assert_eq!(ansi_to_unicode("যান্তি্রক"), "যান্ত্রিক");
+        assert_eq!(jatiya_transliterate("wfdbgkzj"), "যান্ত্রিক");
+        assert_eq!(jatiya_transliterate("wfdbgkgzj"), "যান্ত্রিক");
+        assert_eq!(jatiya_transliterate("wfdbgkgvj"), "যান্ত্রিক");
+        assert_eq!(jatiya_transliterate("drzW"), "প্রিয়");
+        assert_eq!(jatiya_transliterate("crzm"), "প্রেম");
     }
 
     #[test]

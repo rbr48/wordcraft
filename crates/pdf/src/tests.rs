@@ -769,3 +769,32 @@ fn cosmetic_metafile_pens_are_thin_but_visible() {
     let raw = String::from_utf8_lossy(&bytes);
     assert!(raw.contains("0.25 w"), "the hairline is a quarter point wide");
 }
+
+#[test]
+fn zero_height_horizontal_line_shape_exports_to_pdf() {
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("Header", CharProps::default());
+    let n = p.len();
+    p.insert_object(
+        n,
+        InlineObject::Shape {
+            kind: ShapeKind::Line,
+            w: 576.0,
+            h: 0.0,
+            fill: None,
+            stroke: Some(Rgb(0x00, 0x00, 0x00)),
+            stroke_width: 1.5,
+            float: Float { wrap: Wrap::InFrontOfText, x: 18.0, y: 120.0, ..Default::default() },
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("1.5 w"), "horizontal ShapeKind::Line stroke width must be present in PDF stream");
+}

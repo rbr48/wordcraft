@@ -134,5 +134,13 @@ description: Comprehensive project memory, architecture guide, and operational r
     - Recompiled production release binaries (`wordcraft.exe`, `wordcraft-cli.exe`).
     - Rebuilt Inno Setup Windows installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.0 MB).
     - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.0 MB).
-
+  - **Word 97-2003 `.doc` OfficeArt & Bijoy-to-Kalpurush Layout Parity (Commit 9de59f6)**:
+    - **OfficeArt Floating Shapes, Logos & Textboxes (`crates/docbin/src/draw.rs`)**: Full MS-ODRAW parser for `DggInfo` (FIB pair 50), `PlcSpaMom` (pair 40), `PlcSpaHdr` (pair 41), `PlcfTxbxTxt` (pair 56), and `PlcfHdrTxbxTxt` (pair 58). Extracts grouped shapes (`OfficeArtSpgrContainer` with child coordinate mapping), delayed/inline BLIP pictures (`WordDocument` and `Data` streams), floating lines, and borderless/zero-inset textboxes (`dxTextLeft`/`dyTextTop = 0` inset compensation).
+    - **`.doc` Binary Style Chain & SPRM Fixes (`crates/docbin`)**: Fixed `SttbfFfn` `cbFfnM1` (+1 byte) font name offset, `StdfBase` `istd_base` bitfield extraction (`w1 >> 4`), 0-based `based_on` style inheritance in `stsh.rs`, complex-script character sprms (`sprmCHpsBi`, `sprmCFBoldBi`, `sprmCFItalicBi`), and 2-byte first-line indent sprms (`sprmPDxaLeft1`, `sprmPDxaLeft180`).
+    - **Bijoy-to-Unicode (`Kalpurush`) Font Size (`-2pt`) & Single Line Spacing (`1.0`) (`crates/engine/src/io.rs`, `crates/fonts/src/word.rs`)**:
+      - Automatically reduces font size by **2pt** (`(sz - 2.0).max(6.0)`, resolving inherited style sizes first) across all Bijoy runs, inline English runs inside Bijoy paragraphs, and Bijoy style definitions when converting to `Kalpurush`.
+      - Enforces `LineSpacing::Multiple(1.0)` on converted Bijoy paragraphs and styles, and normalizes `Kalpurush` line metrics (`0.95` ascent / `0.28` descent) so single line spacing matches `SutonnyMJ` / `Times New Roman`.
+      - Compacts redundant space padding around `\t` in converted Bijoy runs (`compact_bijoy_tab_spaces`) and sets `keep_next = true` on centered, bold, underlined Bijoy section headings so headings never orphan across page breaks.
+      - Fixed 3-consonant + Ra-fala/Ya-fala cluster vowel ordering (`যান্ত্রিক` instead of `যান্তি্রক`) across `ansi_to_unicode`, `unicode_to_ansi`, Jatiya live typing (`z` / `Z` after pre-kar), and automatic leftover repair (`is_leftover_word`).
+      - Fixed zero-height (`h == 0.0`) horizontal and zero-width (`w == 0.0`) vertical `ShapeKind::Line` paths in `crates/pdf/src/lib.rs` (`shape_path`) so horizontal header rules export to PDF and Print identically to the canvas.
 
