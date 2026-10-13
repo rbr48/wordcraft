@@ -272,7 +272,11 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
         return *v;
     }
     let mut v = (face.ascent.max(1.0), face.descent.abs());
-    if let Some(f) = face.skrifa() {
+    if face.family.eq_ignore_ascii_case("Kalpurush") {
+        // Kalpurush's raw hhea table has an oversized ~1.45x em height; normalize to
+        // 1.23x em (0.95 ascent, 0.28 descent) for 1:1 letterhead and page-break parity.
+        v = (face.upem * 0.95, face.upem * 0.28);
+    } else if let Some(f) = face.skrifa() {
         // hhea ascender + descender + line gap (Word on macOS), the gap above the ascent; OS/2
         // win metrics only when the hhea values are missing, and never more than twice the em.
         let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));

@@ -50,11 +50,26 @@ impl Pictures {
         let pic = locate(data, fc_pic)?;
         let bytes = data.get(pic.range)?;
         let total = self.total.checked_add(bytes.len()).filter(|&t| t <= self.limit)?;
-        let key = format!("image{}.{}", self.by_fc.len() + 1, pic.ext);
+        let key = format!("image{}.{}", self.media.len() + 1, pic.ext);
         self.media.insert(key.clone(), Arc::new(bytes.to_vec()));
         self.total = total;
         self.by_fc.insert(fc_pic, (key.clone(), pic.w, pic.h));
         Some((key, pic.w, pic.h))
+    }
+
+    /// Store an OfficeArt BLIP record (from `BStoreContainer` or delayed in `WordDocument`)
+    /// into `media` and return its media key.
+    pub(crate) fn add_blip(&mut self, blip: &[u8]) -> Option<String> {
+        if self.media.len() >= MAX_PICTURES {
+            return None;
+        }
+        let at = sniff(blip)?;
+        let bytes = blip.get(at..)?;
+        let total = self.total.checked_add(bytes.len()).filter(|&t| t <= self.limit)?;
+        let key = format!("image{}.{}", self.media.len() + 1, ext_of(bytes));
+        self.media.insert(key.clone(), Arc::new(bytes.to_vec()));
+        self.total = total;
+        Some(key)
     }
 
     /// Note a picture anchor that could not be materialised.
@@ -98,9 +113,9 @@ fn locate(data: &[u8], fc_pic: u32) -> Option<Located> {
 }
 
 /// Offset of the first embedded raster image inside the payload, skipping the small
-/// metafile header some writers put in front of PNG/JPEG data. `None` for metafiles.
+/// OfficeArtBlip or metafile header in front of PNG/JPEG/GIF/BMP data. `None` for metafiles.
 fn sniff(body: &[u8]) -> Option<usize> {
-    for at in [0usize, 8, 12, 16, 20, 22, 24, 32] {
+    for at in 0..=body.len().min(64) {
         if let Some(b) = body.get(at..)
             && (b.starts_with(b"\x89PNG") || b.starts_with(b"\xFF\xD8\xFF") || b.starts_with(b"GIF8") || b.starts_with(b"BM"))
         {

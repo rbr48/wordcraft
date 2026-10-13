@@ -370,11 +370,11 @@ fn std_bytes(stk: u8, istd_base: u16, name: &str, papx: &[u8], chpx: &[u8]) -> V
     // sti 0xFFF (user-defined) | flags
     base[0] = 0xFF;
     base[1] = 0x0F;
-    // stk(4) | istdNext(12) = none (0xFFF)
-    base[2] = stk | 0xF0;
-    base[3] = 0xFF;
-    // cupx(4) | istdBase(12)
-    let w2 = (cupx as u16) | (istd_base << 4);
+    // stk(4) | istdBase(12)
+    let w1 = (stk as u16) | (istd_base << 4);
+    base[2..4].copy_from_slice(&w1.to_le_bytes());
+    // cupx(4) | istdNext(12) = none (0xFFF)
+    let w2 = (cupx as u16) | 0xFFF0;
     base[4..6].copy_from_slice(&w2.to_le_bytes());
     // bchUpe filled below; grfstd = 0
     let mut v = base;
@@ -1750,4 +1750,22 @@ fn list_and_lfo_offsets_near_u32_max_are_safe() {
     let f = raw_piece_doc_with(&[0, 2], &[fc], b"a\r", 2, &[(73, far, 2), (74, far, 4)]);
     let doc = read(&f).expect("opens");
     assert!(doc.numbering.nums.is_empty());
+}
+
+#[test]
+fn officeart_blip_png_extraction() {
+    let mut blip = Vec::new();
+    // OfficeArt PNG BLIP record (0xF01E) with 17-byte UID+tag prefix followed by PNG signature.
+    let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR";
+    let rec_len = (17 + png.len()) as u32;
+    blip.extend_from_slice(&0x6E00u16.to_le_bytes());
+    blip.extend_from_slice(&0xF01Eu16.to_le_bytes());
+    blip.extend_from_slice(&rec_len.to_le_bytes());
+    blip.extend_from_slice(&[0u8; 17]);
+    blip.extend_from_slice(png);
+
+    let mut pics = crate::media::Pictures::default();
+    let key = pics.add_blip(&blip).expect("extracts PNG BLIP");
+    assert_eq!(key, "image1.png");
+    assert_eq!(pics.media.get("image1.png").map(|v| &v[..8]), Some(&b"\x89PNG\r\n\x1a\n"[..]));
 }

@@ -624,7 +624,12 @@ impl WordApp {
     fn after_command(&mut self, id: &str) {
         self.canvas.caret_visible_since = now_ms();
         // Drawing leaves the caret where it was: following it would pull the view off the ink (#859).
-        if !id.starts_with("view.") && !id.starts_with("document.") && !id.starts_with("format.state") && !id.starts_with("table.") && !id.starts_with("draw.") {
+        if !id.starts_with("view.")
+            && !id.starts_with("document.")
+            && !id.starts_with("format.state")
+            && !id.starts_with("table.")
+            && !id.starts_with("draw.")
+        {
             self.canvas.scroll_to_caret = true;
         }
         for req in std::mem::take(&mut self.session.ui_requests) {
