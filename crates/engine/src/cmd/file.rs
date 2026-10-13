@@ -64,7 +64,9 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+P")
         .pure(),
-        CommandSpec::new("file.printNative", "Print (Native)", "File", print_native).params(r#"{"path"?: string, "copies"?: n}"#).pure(),
+        CommandSpec::new("file.printNative", "Print (Native)", "File", print_native)
+            .params(r#"{"path"?: string (a PDF to print; default: the document), "printer"?: string (default: the system default printer), "copies"?: n (1–100)}"#)
+            .pure(),
         CommandSpec::new("file.close", "Close", "File", |s, _| {
             s.ui_requests.push(json!({"close": true}));
             sel_result(s)
@@ -455,64 +457,49 @@ fn layout_summary(s: &mut Session, _: &Value) -> CmdResult {
     Ok(json!({"pages": pages, "caret": caret, "ms": l.ms}))
 }
 
+/// The largest PDF `file.printNative` reads from a file or sends to the spooler.
+#[cfg(not(target_arch = "wasm32"))]
+const PRINT_JOB_MAX_BYTES: u64 = 256 << 20;
+
+/// Print the document (or the PDF at `path`) through the system print spooler (`wordcraft_print`):
+/// `copies` copies on `printer`, or on the default printer when none is named.
 fn print_native(s: &mut Session, v: &Value) -> CmdResult {
-    let copies = p::u64(v, "copies").unwrap_or(1).clamp(1, 100);
-    #[cfg(not(target_arch = "wasm32"))]
-    let path = if let Some(p) = p::str(v, "path") {
-        std::path::PathBuf::from(p)
-    } else {
-        let mut tmp = std::env::temp_dir();
-        tmp.push(format!("wordcraft_print_{}.pdf", std::process::id()));
-        crate::io::save_path(&tmp, &s.doc).map_err(CmdError::Failed)?;
-        tmp
-    };
-
-    #[cfg(target_os = "windows")]
-    {
-        let status = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                &format!("Start-Process -FilePath '{}' -Verb Print -PassThru | Out-Null", path.display().to_string().replace('\'', "''")),
-            ])
-            .status();
-        match status {
-            Ok(st) => {
-                s.status = format!("Document queued to system printer ({} copy/copies)", copies);
-                Ok(json!({"success": st.success(), "path": path.display().to_string(), "copies": copies}))
-            }
-            Err(e) => Err(CmdError::Failed(format!("failed to invoke Windows printer: {e}"))),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let status = std::process::Command::new("lpr").arg("-#").arg(copies.to_string()).arg(&path).status();
-        match status {
-            Ok(st) => {
-                s.status = format!("Document sent to system printer via lpr ({} copy/copies)", copies);
-                Ok(json!({"success": st.success(), "path": path.display().to_string(), "copies": copies}))
-            }
-            Err(e) => Err(CmdError::Failed(format!("failed to invoke lpr: {e}"))),
-        }
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let status = std::process::Command::new("lp").arg("-n").arg(copies.to_string()).arg(&path).status();
-        match status {
-            Ok(st) => {
-                s.status = format!("Document sent to system printer via lp ({} copy/copies)", copies);
-                Ok(json!({"success": st.success(), "path": path.display().to_string(), "copies": copies}))
-            }
-            Err(e) => Err(CmdError::Failed(format!("failed to invoke lp: {e}"))),
-        }
-    }
-
+    let copies = u32::try_from(p::u64(v, "copies").unwrap_or(1).clamp(1, 100)).unwrap_or(1);
     #[cfg(target_arch = "wasm32")]
     {
         s.ui_requests.push(json!({"open": "print"}));
         Ok(json!({"wasm": true, "copies": copies}))
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let title = if s.doc.core.title.trim().is_empty() { "WordCraft document".to_string() } else { s.doc.core.title.clone() };
+        let pdf = match p::str(v, "path") {
+            Some(path) => read_print_pdf(path)?,
+            None => crate::io::save_bytes_with("print.pdf", &s.doc, None).map_err(CmdError::Failed)?,
+        };
+        let job = wordcraft_print::Job {
+            printer: p::str(v, "printer").filter(|n| !n.is_empty()).map(str::to_string),
+            copies,
+            title,
+            ..wordcraft_print::Job::default()
+        };
+        let receipt = wordcraft_print::submit(&pdf, &job).map_err(|e| CmdError::Failed(e.to_string()))?;
+        s.status = format!("Document sent to the printer ({copies} copy/copies)");
+        Ok(json!({"success": true, "copies": copies, "printer": job.printer, "receipt": receipt}))
+    }
+}
+
+/// The PDF `file.printNative` prints from `path`. Only PDFs are printed: the spooler gets a
+/// print-ready PDF, and a Word file would print as the bytes it is.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_print_pdf(path: &str) -> Result<Vec<u8>, CmdError> {
+    let path = std::path::Path::new(path);
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+        return Err(CmdError::Failed(format!("{}: only PDF files can be printed; export the document as PDF first", path.display())));
+    }
+    let len = std::fs::metadata(path).map_err(|e| CmdError::Failed(format!("{}: {e}", path.display())))?.len();
+    if len > PRINT_JOB_MAX_BYTES {
+        return Err(CmdError::Failed(format!("{}: the PDF is larger than 256 MB", path.display())));
+    }
+    std::fs::read(path).map_err(|e| CmdError::Failed(format!("{}: {e}", path.display())))
 }

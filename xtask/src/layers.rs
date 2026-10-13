@@ -35,6 +35,8 @@ impl Class {
 pub const TABLE: &[(&str, Class)] = &[
     ("geom", Class::Layer(0)),
     ("control-key", Class::Standalone),
+    // The system print spooler: no workspace dependencies, so it sits at the bottom with control-key.
+    ("print", Class::Standalone),
     ("doc", Class::Layer(1)),
     ("fonts", Class::Layer(1)),
     ("metafile", Class::Layer(1)),

@@ -3075,3 +3075,14 @@ fn imported_pictures_fit_the_text_width() {
     let got = sizes(&s.doc);
     assert!(got.iter().any(|(w, _)| (w - max_w).abs() < 0.01), "pasted picture fits: {got:?}");
 }
+
+#[test]
+fn print_native_only_sends_pdfs_the_spooler_can_read() {
+    // Each refusal happens before the spooler is called, so no test prints anything. (A call with
+    // no `path` prints the document, which is why no test makes one.)
+    let mut s = s();
+    for path in ["report.docx", "/nonexistent-wordcraft-folder/none.pdf"] {
+        let refused = s.run("file.printNative", &json!({"path": path}));
+        assert!(refused.is_err(), "{path} must not reach the spooler: {refused:?}");
+    }
+}
