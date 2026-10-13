@@ -71,7 +71,7 @@ pub fn active(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, bool)> {
     }
 }
 
-fn screen(pages: &[Rect], scale: f32, page: usize, r: wordcraft_geom::Rect) -> Option<Rect> {
+pub(crate) fn screen(pages: &[Rect], scale: f32, page: usize, r: wordcraft_geom::Rect) -> Option<Rect> {
     pages.get(page).map(|p| frame::to_screen(*p, scale, r))
 }
 

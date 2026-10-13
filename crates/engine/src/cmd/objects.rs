@@ -225,12 +225,32 @@ pub fn specs() -> Vec<CommandSpec> {
         .when(has_movable),
         CommandSpec::new("arrange.wrap", "Wrap Text", "Layout › Arrange", |s, v| {
             let wrap: Wrap = serde_json::from_value(v.get("wrap").cloned().unwrap_or(json!("square"))).map_err(|e| CmdError::Params(e.to_string()))?;
-            with_float(s, |f| f.wrap = wrap)
+            let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+            let was_inline = obj.frame().map(|(_, _, f)| f.wrap == Wrap::Inline).unwrap_or(false);
+            let hit = if was_inline && wrap != Wrap::Inline {
+                s.layout().object(&pos, s.page_hint)
+            } else {
+                None
+            };
+            with_float(s, |f| {
+                f.wrap = wrap;
+                if was_inline && wrap != Wrap::Inline && let Some(h) = &hit {
+                    f.h_rel = wordcraft_doc::para::Anchor::Column;
+                    f.v_rel = wordcraft_doc::para::Anchor::Paragraph;
+                    f.h_align = None;
+                    f.v_align = None;
+                    f.x = (h.rect.x - h.origin.x).clamp(-MAX_OFFSET, MAX_OFFSET);
+                    f.y = (h.rect.y - h.origin.y).clamp(-MAX_OFFSET, MAX_OFFSET);
+                }
+            })
         })
         .params(r#"{"wrap": "inline|square|tight|through|topAndBottom|behindText|inFrontOfText"}"#)
         .when(has_movable),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
+            if preset == "inline" {
+                return with_float(s, |f| f.wrap = Wrap::Inline);
+            }
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
             let sect = super::page::sect(s);
             let size = selected(s).map(|(_, o)| obj_size(&o)).unwrap_or((72.0, 72.0));
@@ -248,7 +268,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 f.y = y.unwrap_or(row);
             })
         })
-        .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}"#)
+        .params(r#"{"preset"?: "inline|topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}"#)
         .when(has_movable),
         CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_movable),
         CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_movable),
@@ -1450,5 +1470,43 @@ mod tests {
         let InlineObject::Image { alt, crop, .. } = o else { panic!("expected image") };
         assert_eq!(alt, "A red box");
         assert_eq!(crop, [0.1, 0.2, 0.05, 0.0]);
+    }
+
+    #[test]
+    fn wrap_text_modes_and_inline_transition() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let data = super::super::insert::base64_encode(&png(40, 20));
+        s.run("insert.picture", &json!({"data": data, "width": 100, "height": 50})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        assert_eq!(o.frame().unwrap().2.wrap, Wrap::Inline);
+
+        // Transition from Inline to Square preserves laid out coordinate so it doesn't jump
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        let float = o.frame().unwrap().2;
+        assert_eq!(float.wrap, Wrap::Square);
+        assert_eq!(float.dist, 9.0);
+
+        // Change to BehindText
+        s.run("arrange.wrap", &json!({"wrap": "behindText"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.frame().unwrap().2.wrap, Wrap::BehindText);
+
+        // Change to InFrontOfText
+        s.run("arrange.wrap", &json!({"wrap": "inFrontOfText"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.frame().unwrap().2.wrap, Wrap::InFrontOfText);
+
+        // Change to TopAndBottom
+        s.run("arrange.wrap", &json!({"wrap": "topAndBottom"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.frame().unwrap().2.wrap, Wrap::TopAndBottom);
+
+        // Change back to Inline
+        s.run("arrange.wrap", &json!({"wrap": "inline"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.frame().unwrap().2.wrap, Wrap::Inline);
+
+        // arrange.position preset "inline"
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.frame().unwrap().2.wrap, Wrap::Square);
+        s.run("arrange.position", &json!({"preset": "inline"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.frame().unwrap().2.wrap, Wrap::Inline);
     }
 }
