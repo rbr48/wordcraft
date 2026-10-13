@@ -1999,6 +1999,40 @@ fn line_spacing_does_not_scale_pictures() {
 }
 
 #[test]
+fn multiple_line_spacing_adds_its_leading_below_the_text() {
+    use wordcraft_doc::props::LineSpacing;
+    // (spacing, expected baseline below the line top as a share of the ascent)
+    for (spacing, share) in [(LineSpacing::Multiple(1.15), 1.0), (LineSpacing::Multiple(2.0), 1.0), (LineSpacing::Multiple(0.8), 0.8)] {
+        let mut d = Document::from_text(&"Several words wrap onto more lines. ".repeat(30));
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.line_spacing = Some(spacing);
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let asc = para.styles[0].ascent;
+        assert!(para.lines.len() > 1);
+        for line in &para.lines {
+            // Word's 1.15-spaced Times New Roman 12pt sits one ascent below the line top; the
+            // 0.15 extra goes below the descent (docxide-pdf's hyphenation fixtures).
+            assert!(
+                (line.baseline - line.top - asc * share).abs() < 0.01,
+                "{spacing:?}: baseline {} below the top, ascent {asc}",
+                line.baseline - line.top
+            );
+        }
+    }
+    // Exact spacing still keeps the descent below the baseline.
+    let mut d = Document::from_text("Exact");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Exactly(30.0));
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let line = &para.lines[0];
+    assert!((line.top + line.height - line.baseline - para.styles[0].descent).abs() < 0.01);
+}
+
+#[test]
 fn body_starts_right_below_a_tall_header() {
     let mut d = Document::from_text("Body");
     let mut hp = wordcraft_doc::Paragraph::with_text("", Default::default());
