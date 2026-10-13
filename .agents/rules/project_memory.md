@@ -162,6 +162,18 @@ description: Comprehensive project memory, architecture guide, and operational r
     - Recompiled production release binaries (`wordcraft.exe`, `wordcraft-cli.exe`).
     - Rebuilt Inno Setup Windows installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.1 MB).
     - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.1 MB).
+  - **GitHub Branch Optimizations & High-DPI Print Release (Commits through a3b475e)**:
+    - **PDF Internal Link Cached Lookup (`crates/pdf/src/lib.rs`, `0b350d6`)**: Added `bookmarks: OnceCell<HashMap<String, Pos>>` to `Exporter`, transforming $O(N \times L)$ full-document scan into $O(1)$ lookups and speeding up PDF exports with internal links by >10x.
+    - **Symbol Font Bullet Private-Use Mapping (`crates/fonts/src/word.rs`, `crates/layout/src/para.rs`, `940e828`)**: Maps bare codes ($c < 0x100$) in symbol fonts (Wingdings, Symbol) to private-use code points (`0xF000 + c`) when installed, preserving exact Word line height and glyph metrics.
+    - **Race-Free System Font Fallback & Cache (`crates/fonts/src/fontdb.rs`, `efb3780`)**: Added `searching: Mutex<()>` lock and face-count validation to prevent multithreaded fallback race conditions across concurrent shaping requests.
+    - **Deterministic Benchmark Timing (`1283b31`)**: Upgraded linear-time complexity tests across `wordcraft-layout`, `wordcraft-pdf`, and `wordcraft-proof` to measure CPU time rather than wall-clock under load.
+    - **CI Speedup (`1d6c0f3`)**: Configured FreeBSD and Windows ARM64 CI checks to run nightly and on release rather than per PR.
+    - **High-DPI Print Spooler Validation (`crates/print/src/windows_print.ps1`, `a3b475e`)**: Allowed high-DPI scaling factor in PDF renderer dimension validation, fixing test failures on 288 DPI / 300% scaled displays while preserving exact aspect ratios.
+    - Verified all 6 CI quality gates pass cleanly: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm` across all 17 crates).
+    - Pushed all 7 commits to `origin/main` (`https://github.com/rbr48/wordcraft.git`).
+    - Recompiled production release binaries (`wordcraft.exe`, `wordcraft-cli.exe`).
+    - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.0 MB).
+    - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.0 MB).
 
 
 
