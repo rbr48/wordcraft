@@ -1641,11 +1641,13 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     }
     let user = s.autocorrect_user.iter().find(|(a, _)| *a == word).map(|(_, b)| b.clone());
     // The word's language (run, paragraph style, document default) picks the list (#835).
-    // Text with no language at all is in the editing language, else English.
+    // Text with no language at all or starting with "en" is English.
     let english = s.doc.para_at(&f).is_none_or(|p| {
         let rc = s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(start));
-        let lang = rc.lang.as_deref().or(s.editing_lang.as_deref());
-        wordcraft_proof::ProofLang::from_tag(lang) == wordcraft_proof::ProofLang::En
+        match rc.lang.as_deref() {
+            Some(tag) => tag.starts_with("en") || tag.starts_with("EN"),
+            None => true,
+        }
     });
     let builtin = AUTOCORRECT
         .iter()
