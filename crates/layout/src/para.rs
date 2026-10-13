@@ -937,9 +937,15 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         let r = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic);
         let text: String = text
             .chars()
-            .map(|c| match wordcraft_fonts::word::symbol_font_char(&rc.font, c) {
-                Some(u) if r.substituted || !r.face.covers(c) => u,
-                _ => c,
+            .map(|c| {
+                // A bare code (`§` = 0xA7) in a symbol font that is installed: its glyph sits at the
+                // private-use code (U+F0A7); drawn from that font, the line keeps Word's metrics.
+                let private = (u32::from(c) < 0x100).then(|| char::from_u32(0xF000 + u32::from(c))).flatten();
+                match (private, wordcraft_fonts::word::symbol_font_char(&rc.font, c)) {
+                    (Some(pc), Some(_)) if !r.substituted && !r.face.covers(c) && r.face.covers(pc) => pc,
+                    (_, Some(u)) if r.substituted || !r.face.covers(c) => u,
+                    _ => c,
+                }
             })
             .collect();
         let before_c = b.clusters.len();

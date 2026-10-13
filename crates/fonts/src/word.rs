@@ -229,11 +229,16 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
 }
 
 /// The standard Unicode character for a Symbol or Wingdings character stored the way Word stores
-/// it, as the private-use code U+F000 + the font's own code (U+F0B7 is the Symbol bullet). Used
-/// when that font isn't installed: a substitute draws something else, or nothing, at the
-/// private-use code. `None` for other fonts and for codes not in the table.
+/// it, as the private-use code U+F000 + the font's own code (U+F0B7 is the Symbol bullet), or as
+/// the bare code U+0020–U+00FF (a list level's `§` in Wingdings is its small square bullet, as Word
+/// draws it). Used when that font isn't installed: a substitute draws something else, or nothing,
+/// there. `None` for other fonts and for codes not in the table.
 pub fn symbol_font_char(family: &str, c: char) -> Option<char> {
-    let code = u32::from(c).checked_sub(0xF000)?;
+    let code = match u32::from(c) {
+        u @ 0xF020..=0xF0FF => u - 0xF000,
+        u @ 0x20..=0xFF => u,
+        _ => return None,
+    };
     let u = match (family.to_ascii_lowercase().as_str(), code) {
         // Adobe Symbol encoding.
         ("symbol", 0xA7) => '\u{2663}',
@@ -323,6 +328,12 @@ mod tests {
         assert_eq!(symbol_font_char("Symbol", '\u{F0B7}'), Some('\u{2022}'));
         assert_eq!(symbol_font_char("symbol", '\u{F0B7}'), Some('\u{2022}'));
         assert_eq!(symbol_font_char("Wingdings", '\u{F0A7}'), Some('\u{25AA}'));
+        // The same code stored bare, as Microsoft's own specification documents do.
+        assert_eq!(symbol_font_char("Wingdings", '\u{A7}'), Some('\u{25AA}'));
+        assert_eq!(symbol_font_char("Symbol", '\u{B7}'), Some('\u{2022}'));
+        assert_eq!(symbol_font_char("Calibri", '\u{A7}'), None, "only symbol fonts");
+        assert_eq!(symbol_font_char("Wingdings", 'A'), None, "codes outside the table stay");
+        assert_eq!(symbol_font_char("Wingdings", '\u{100}'), None);
         assert_eq!(symbol_font_char("Wingdings", '\u{F0D8}'), Some('\u{27A2}'));
         // Same code, other font; unknown codes; ordinary characters.
         assert_eq!(symbol_font_char("Arial", '\u{F0B7}'), None);
