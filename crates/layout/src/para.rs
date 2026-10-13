@@ -1354,7 +1354,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
             LineSpacing::AtLeast(v) => natural.max(pictures).max(v),
             LineSpacing::Exactly(v) => v,
         };
-        let baseline = top + height - desc;
+        let baseline = top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc));
 
         // Alignment / justification (trailing spaces hang).
         let mut content_end = xs.last().copied().unwrap_or(line_start_x);
@@ -1480,7 +1480,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
                 lines.push(Line {
                     top,
                     height: h,
-                    baseline: top + h - desc,
+                    baseline: top + baseline_offset(rp.line_spacing, asc, h, desc),
                     c0: n,
                     c1: n,
                     xs: vec![x0],
@@ -1597,6 +1597,18 @@ fn reorder_line(pl: &ParaLayout, line: &mut Line, width: f32) {
 /// Narrowest span text flows into beside a floating object, points. Word puts an empty
 /// paragraph beside a floating table in a 21.3pt gap but not in an 18.6pt one.
 const MIN_SPAN: f32 = 20.0;
+
+/// How far below a line's top its baseline sits. Multiple spacing at or above single keeps the
+/// text at the top of the line and puts the extra leading below the baseline; below single it
+/// shrinks the whole box, ascent included (Word's output for docxide-pdf's fixtures: 1.15-spaced
+/// Times New Roman 12pt sits one ascent below the line top, not 1.8pt lower). Exact and at-least
+/// spacing keep the descent below the baseline and the rest above it.
+fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f32 {
+    match spacing {
+        LineSpacing::Multiple(m) => asc * m.min(1.0),
+        LineSpacing::AtLeast(_) | LineSpacing::Exactly(_) => height - desc,
+    }
+}
 
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
