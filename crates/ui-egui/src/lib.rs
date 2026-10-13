@@ -2797,6 +2797,102 @@ mod tests {
         println!("ANSI keystroke check: {ansi_done}/{} corpus lines use only single-key Bijoy glyphs", lines.len());
     }
 
+    /// Conjunct typing for every consonant pair in the evaluation corpus. Each pair is typed as
+    /// the first consonant's key, the hasanta key `g`, then the second consonant's key, in Jatiya
+    /// and then Bijoy mode. Ignored: needs `WORDCRAFT_BANGLA_CORPUS`.
+    #[test]
+    #[ignore = "needs WORDCRAFT_BANGLA_CORPUS; run with --ignored"]
+    fn bangla_conjuncts_typed_end_to_end() {
+        use std::collections::{BTreeSet, HashMap};
+        let path = std::env::var("WORDCRAFT_BANGLA_CORPUS").expect("set WORDCRAFT_BANGLA_CORPUS");
+        let text = std::fs::read_to_string(path).expect("corpus readable");
+        let consonant = |c: char| ('\u{0995}'..='\u{09B9}').contains(&c);
+        let chars: Vec<char> = text.chars().collect();
+        let pairs: BTreeSet<(char, char)> =
+            chars.windows(3).filter(|w| w[1] == '\u{09CD}' && consonant(w[0]) && consonant(w[2])).map(|w| (w[0], w[2])).collect();
+
+        // Reverse maps: the single key that produces each single-character glyph.
+        let single = |s: &str| {
+            let mut it = s.chars();
+            match (it.next(), it.next()) {
+                (Some(c), None) => Some(c),
+                _ => None,
+            }
+        };
+        let mut jatiya_key_of: HashMap<char, char> = HashMap::new();
+        let mut bijoy_key_of: HashMap<char, char> = HashMap::new();
+        for b in 0x21u8..0x7f {
+            if let Some(c) = wordcraft_engine::cmd::bangla::jatiya_key(b as char).and_then(single) {
+                jatiya_key_of.entry(c).or_insert(b as char);
+            }
+            if let Some(g) = wordcraft_engine::cmd::bangla::bijoy_ansi_key(b as char).and_then(single) {
+                bijoy_key_of.entry(g).or_insert(b as char);
+            }
+        }
+        let reset = |a: &mut WordApp| {
+            a.session.doc = wordcraft_doc::Document::new();
+            a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos {
+                story: wordcraft_doc::StoryRef::Body,
+                path: wordcraft_doc::Path(vec![0]),
+                off: 0,
+            });
+        };
+        let ctx = egui::Context::default();
+
+        let mut jatiya_ok = 0usize;
+        let mut jatiya_skipped = 0usize;
+        let mut bijoy_ok = 0usize;
+        let mut bijoy_skipped = 0usize;
+        let mut mismatches = Vec::new();
+        for &(c1, c2) in &pairs {
+            if let (Some(&k1), Some(&k2)) = (jatiya_key_of.get(&c1), jatiya_key_of.get(&c2)) {
+                let keys = format!("{k1}g{k2}");
+                let want = format!("{c1}\u{09CD}{c2}");
+                let mut a = app();
+                a.session.bangla_mode = wordcraft_engine::cmd::bangla::BanglaMode::Jatiya;
+                reset(&mut a);
+                type_keys(&mut a, &ctx, &keys);
+                let got = body_text(&a).trim().to_string();
+                if got == want {
+                    jatiya_ok += 1;
+                } else {
+                    mismatches.push(format!("Jatiya {keys:?}: want {want} got {got}"));
+                }
+            } else {
+                jatiya_skipped += 1;
+            }
+
+            let glyph = |c: char| single(&wordcraft_engine::cmd::bangla::unicode_to_ansi(&c.to_string()));
+            let (Some(g1), Some(g2)) = (glyph(c1), glyph(c2)) else {
+                bijoy_skipped += 1;
+                continue;
+            };
+            let (Some(&k1), Some(&k2)) = (bijoy_key_of.get(&g1), bijoy_key_of.get(&g2)) else {
+                bijoy_skipped += 1;
+                continue;
+            };
+            let Some(want) = wordcraft_engine::cmd::bangla::find_bijoy_conjunct(c1, c2) else {
+                bijoy_skipped += 1;
+                continue;
+            };
+            let keys = format!("{k1}g{k2}");
+            let mut a = app();
+            a.session.bangla_mode = wordcraft_engine::cmd::bangla::BanglaMode::Ansi;
+            reset(&mut a);
+            type_keys(&mut a, &ctx, &keys);
+            let got = body_text(&a).trim().to_string();
+            if got == want {
+                bijoy_ok += 1;
+            } else {
+                mismatches.push(format!("Bijoy {keys:?}: want {want} got {got}"));
+            }
+        }
+        println!("pairs in corpus: {}", pairs.len());
+        println!("Jatiya conjuncts typed correctly: {jatiya_ok} (skipped {jatiya_skipped})");
+        println!("Bijoy conjuncts typed correctly: {bijoy_ok} (skipped {bijoy_skipped})");
+        assert!(mismatches.is_empty(), "{} conjunct mismatches, first: {:?}", mismatches.len(), mismatches.iter().take(8).collect::<Vec<_>>());
+    }
+
     fn type_keys(a: &mut WordApp, ctx: &egui::Context, keys: &str) {
         for ch in keys.chars() {
             ctx.input_mut(|i| {

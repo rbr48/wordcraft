@@ -223,3 +223,78 @@ fn bangla_eval_timing_on_long_documents() {
         );
     }
 }
+
+/// Romanised input and the Bangla spelling expected for it. Written by hand for review, not
+/// copied from Avro Keyboard, so a mismatch means either the engine or this expectation is wrong.
+const PHONETIC_CHECK: &[(&str, &str)] = &[
+    ("ami", "আমি"),
+    ("tumi", "তুমি"),
+    ("amra", "আমরা"),
+    ("tomra", "তোমরা"),
+    ("ekhon", "এখন"),
+    ("kal", "কাল"),
+    ("aj", "আজ"),
+    ("bhalo", "ভালো"),
+    ("kemon", "কেমন"),
+    ("achho", "আছো"),
+    ("jacchi", "যাচ্ছি"),
+    ("shonar", "সোনার"),
+    ("bangla", "বাংলা"),
+    ("desh", "দেশ"),
+    ("boi", "বই"),
+    ("jol", "জল"),
+    ("pani", "পানি"),
+    ("bhasha", "ভাষা"),
+    ("shikkha", "শিক্ষা"),
+    ("shomoy", "সময়"),
+    ("kotha", "কথা"),
+    ("bhalobasha", "ভালোবাসা"),
+    ("ghum", "ঘুম"),
+    ("shundor", "সুন্দর"),
+    ("prothom", "প্রথম"),
+    ("shohor", "শহর"),
+    ("rastra", "রাষ্ট্র"),
+    ("bissho", "বিশ্ব"),
+    ("kaj", "কাজ"),
+    ("chhele", "ছেলে"),
+    ("meye", "মেয়ে"),
+    ("bari", "বাড়ি"),
+    ("gach", "গাছ"),
+    ("nodi", "নদী"),
+    ("akash", "আকাশ"),
+    ("rat", "রাত"),
+    ("din", "দিন"),
+    ("sukh", "সুখ"),
+    ("dukkho", "দুঃখ"),
+    ("sotyi", "সত্যি"),
+    ("bhai", "ভাই"),
+    ("bon", "বোন"),
+    ("ma", "মা"),
+    ("baba", "বাবা"),
+    ("ghor", "ঘর"),
+    ("sokal", "সকাল"),
+    ("bikel", "বিকেল"),
+    ("ratri", "রাত্রি"),
+    ("surjo", "সূর্য"),
+];
+
+/// Typed word by word, as a user would: the top suggestion must be the expected spelling.
+#[test]
+#[ignore = "phonetic check list for review; run manually (see module docs)"]
+fn bangla_eval_phonetic_check_list() {
+    let mut ok = 0usize;
+    let mut misses = Vec::new();
+    for &(roman, want) in PHONETIC_CHECK {
+        let top = phonetic_candidates(roman).into_iter().next().unwrap_or_default();
+        let rules = phonetic_transliterate(roman);
+        if top == want {
+            ok += 1;
+        } else {
+            misses.push((roman, want, top, rules));
+        }
+    }
+    println!("top suggestion matches expected spelling: {ok}/{}", PHONETIC_CHECK.len());
+    for (roman, want, top, rules) in misses {
+        println!("  {roman:<12} expected {want:<14} top {top:<14} rules {rules}");
+    }
+}
