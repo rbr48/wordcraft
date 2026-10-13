@@ -143,4 +143,8 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Compacts redundant space padding around `\t` in converted Bijoy runs (`compact_bijoy_tab_spaces`) and sets `keep_next = true` on centered, bold, underlined Bijoy section headings so headings never orphan across page breaks.
       - Fixed 3-consonant + Ra-fala/Ya-fala cluster vowel ordering (`যান্ত্রিক` instead of `যান্তি্রক`) across `ansi_to_unicode`, `unicode_to_ansi`, Jatiya live typing (`z` / `Z` after pre-kar), and automatic leftover repair (`is_leftover_word`).
       - Fixed zero-height (`h == 0.0`) horizontal and zero-width (`w == 0.0`) vertical `ShapeKind::Line` paths in `crates/pdf/src/lib.rs` (`shape_path`) so horizontal header rules export to PDF and Print identically to the canvas.
+    - **Bengali UI Font Fallback & Bangla Converter Dialog Polish (`crates/fonts/src/ui_fallback.rs`, `crates/ui-egui/src/theme.rs`, `crates/ui-egui/src/dialogs.rs`)**:
+      - Added `system_bengali_ui_font()` in `crates/fonts/src/ui_fallback.rs` searching Windows (`Nirmala.ttf`/`.ttc`, `Kalpurush.ttf`, `vrinda.ttf`, `SolaimanLipi.ttf`), macOS, and Linux font directories.
+      - Integrated `system_bengali_font()` into egui's `font_definitions` across `Proportional`, `Monospace`, `"medium"`, and `"semibold"` font families in `crates/ui-egui/src/theme.rs`, eliminating tofu boxes (`□□□□`) in `Bangla Converter`, Find & Replace, Navigation pane, IME candidate popups, and Copilot pane.
+      - Auto-populates `result_text` upon opening `Bangla Converter` when document text is selected, and widened the modal (`min_width 580.0`) so action buttons (`Convert Selection to Unicode`, `Close`) no longer truncate.
 
