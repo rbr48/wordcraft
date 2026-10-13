@@ -3225,3 +3225,59 @@ fn space_before_at_the_top_of_a_page_like_word() {
     let l = lay(&d);
     assert!(l.caret(&Pos::body(0, "first".len() + brk.len_utf8())).is_some(), "caret after the break");
 }
+
+#[test]
+fn group_text_boxes_are_placed_and_hit_testable() {
+    let mut d = Document::new();
+    let p = wordcraft_doc::Paragraph::with_text("Inside Group Box", Default::default());
+    let id = d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(p)]);
+    let child_box = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 200.0,
+        h: 60.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(id),
+        effects: Default::default(),
+        freeform: None,
+    };
+    let group = InlineObject::Group {
+        w: 300.0,
+        h: 100.0,
+        float: wordcraft_doc::para::Float {
+            wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+            h_rel: wordcraft_doc::para::Anchor::Margin,
+            v_rel: wordcraft_doc::para::Anchor::Margin,
+            x: 50.0,
+            y: 50.0,
+            ..Default::default()
+        },
+        ch_w: 300.0,
+        ch_h: 100.0,
+        children: vec![wordcraft_doc::para::GroupChild { x: 10.0, y: 10.0, obj: child_box }],
+    };
+    let mut host = wordcraft_doc::Paragraph::new();
+    host.insert_object(0, group, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(host)];
+
+    let l = lay(&d);
+    // 1. Layout finds the text box by part ID
+    let hit_box = l.text_box(id, 0);
+    assert!(hit_box.is_some(), "child text box must be registered in layout");
+    let r = hit_box.unwrap().rect;
+
+    // 2. Clicking inside the text box returns its Part story
+    let click_x = r.x + 20.0;
+    let click_y = r.y + 20.0;
+    assert_eq!(l.story_at(0, click_x, click_y), Some(StoryRef::Part(id)), "story_at must identify the child text box");
+
+    // 3. Hit testing in the text box returns a valid character position in the text box
+    let pos = l.hit(0, click_x, click_y, StoryRef::Part(id));
+    assert!(pos.is_some(), "hit testing inside child text box must succeed");
+    assert_eq!(pos.unwrap().story, StoryRef::Part(id));
+
+    // 4. object_at does NOT grab the enclosing group when clicking in the interior of the text
+    assert!(l.object_at(0, click_x, click_y, 5.0).is_none(), "object_at must not grab the group inside text");
+}

@@ -1736,6 +1736,20 @@ fn place_objects(
                 let inner = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None).items;
                 ctx.boxes.leave();
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+                // Also place an Object hit target for each child text box in a group so hit testing,
+                // caret positioning, and in_text_box framing work for group text boxes.
+                if matches!(obj, InlineObject::Group { .. }) {
+                    layer.push(Placed::Object {
+                        rect,
+                        spin: float.spin(),
+                        story,
+                        path: Path(path.to_vec()),
+                        off: c.start,
+                        text_box: Some(id),
+                        wrap: float.wrap,
+                        origin: Point::new(at.col.0, at.para_y),
+                    });
+                }
                 // Text that doesn't fit inside the margins is hidden, as in Word.
                 for mut it in fit_box(inner, rect.h - 2.0 * BOX_INSET_Y) {
                     it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);

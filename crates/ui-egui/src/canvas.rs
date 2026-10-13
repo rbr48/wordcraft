@@ -1358,6 +1358,21 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             }
             return;
         }
+        if let Some((_, o)) = crate::objects::selected(app)
+            && !o.text_boxes().is_empty()
+        {
+            let target_story = layout
+                .story_at(page, x, y)
+                .filter(|s| matches!(s, StoryRef::Part(id) if o.text_boxes().contains(id)))
+                .or_else(|| o.text_boxes().first().map(|id| StoryRef::Part(*id)));
+            if let Some(s) = target_story
+                && let Some(pos) = layout.hit(page, x, y, s)
+            {
+                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                let _ = app.run("select.word", json!({}));
+                return;
+            }
+        }
         let _ = app.run("select.word", json!({}));
         return;
     }

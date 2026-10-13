@@ -216,10 +216,21 @@ impl DocLayout {
     /// behind the text only where there's no text.
     pub fn object_at(&self, page: usize, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
         let p = self.pages.get(page)?;
+        let in_box = self.story_at(page, x, y).is_some_and(|s| matches!(s, StoryRef::Part(_)));
         // A rotated object is grabbed on its rotated shape: the point is taken into its frame.
         let grabs = |o: &ObjectHit| {
             let pt = o.unspin(x, y);
-            o.rect.expand(edge).contains(pt) && (o.text_box.is_none() || !o.rect.expand(-edge).contains(pt) || o.rect.w.min(o.rect.h) <= edge * 3.0)
+            if !o.rect.expand(edge).contains(pt) {
+                return false;
+            }
+            if o.text_box.is_some() {
+                return !o.rect.expand(-edge).contains(pt) || o.rect.w.min(o.rect.h) <= edge * 3.0;
+            }
+            // If the point is inside a child text box, the enclosing group only grabs on its outer edge
+            if in_box && o.rect.expand(-edge).contains(pt) && o.rect.w.min(o.rect.h) > edge * 3.0 {
+                return false;
+            }
+            true
         };
         objects(p, page)
             .find(|o| !o.behind() && grabs(o))
