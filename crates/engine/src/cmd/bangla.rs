@@ -64,6 +64,12 @@ impl BanglaMode {
 
 /// Transliterates English phonetic text to Bengali Unicode.
 pub fn phonetic_transliterate(input: &str) -> String {
+    transliterate_with(input, false)
+}
+
+/// Transliterates with an explicit reading of a medial lowercase `o` after a consonant: `true`
+/// makes it the inherent vowel (`somoy` -> সময়), `false` makes it the vowel sign (`somoy` -> সোমোয়).
+fn transliterate_with(input: &str, inherent_medial_o: bool) -> String {
     let preprocessed = input
         .replace("du:kho", "দুঃখ")
         .replace("du:kh", "দুঃখ")
@@ -97,7 +103,7 @@ pub fn phonetic_transliterate(input: &str) -> String {
 
     for (is_word, token) in words {
         if is_word {
-            out.push_str(&phonetic_word(&token));
+            out.push_str(&phonetic_word(&token, inherent_medial_o));
         } else {
             // Convert numbers and punctuation
             for ch in token.chars() {
@@ -131,7 +137,7 @@ pub fn phonetic_transliterate(input: &str) -> String {
 }
 
 /// Transliterates a single alphabetic word phonetically.
-fn phonetic_word(word: &str) -> String {
+fn phonetic_word(word: &str, inherent_medial_o: bool) -> String {
     // If word contains internal separators or explicit uppercase 'A' (independent আ), let the character engine handle it
     let has_explicit_independent = word.contains('A') || word.contains('\'') || word.contains('`');
 
@@ -204,7 +210,7 @@ fn phonetic_word(word: &str) -> String {
                 last_was_consonant = true;
                 i += 3;
                 continue;
-            } else if lower_trio == "cch" {
+            } else if lower_trio == "cch" || lower_trio == "chh" {
                 res.push('ছ');
                 last_was_consonant = true;
                 i += 3;
@@ -294,6 +300,16 @@ fn phonetic_word(word: &str) -> String {
         // 3. Single-character checks
         let c = chars[i];
         let c_lower = c.to_ascii_lowercase();
+
+        if inherent_medial_o && c == 'o' && last_was_consonant && i + 1 < len {
+            if has_chandrabindu {
+                res.push('ঁ');
+                has_chandrabindu = false;
+            }
+            last_was_consonant = false;
+            i += 1;
+            continue;
+        }
 
         if is_vowel(c) {
             let is_upper = c.is_ascii_uppercase();
@@ -1690,6 +1706,11 @@ pub fn phonetic_candidates(prefix: &str) -> Vec<String> {
     if !primary.is_empty() && !candidates.iter().any(|c| c == &primary) {
         candidates.push(primary);
     }
+    // 2b. The other reading of a medial lowercase o (inherent vowel), so the user can pick it.
+    let inherent = transliterate_with(p, true);
+    if !inherent.is_empty() && !candidates.iter().any(|c| c == &inherent) {
+        candidates.push(inherent);
+    }
 
     // 3. Prefix match in vocabulary (prioritizing shorter/closer matches)
     let mut prefix_matches: Vec<(&str, &str)> =
@@ -1892,6 +1913,21 @@ mod tests {
         assert_eq!(phonetic_transliterate("dhaka"), "ঢাকা");
         assert_eq!(phonetic_transliterate("ki"), "কি");
         assert_eq!(phonetic_transliterate("koi"), "কই");
+    }
+
+    #[test]
+    fn phonetic_chh_and_medial_o() {
+        // `chh` is one letter (ছ), not চ + হ.
+        assert_eq!(phonetic_transliterate("achho"), "আছো");
+        // A medial `o` stays the vowel sign by default, so existing spellings do not move.
+        assert_eq!(phonetic_transliterate("tomra"), "তোমরা");
+        // `mosor` is not in the dictionary, so the rules decide. A medial `o` is the vowel sign by
+        // default and the inherent vowel under the other reading, which is offered as a candidate.
+        assert_eq!(transliterate_with("mosor", false), "ম\u{09CB}স\u{09CB}\u{09B0}");
+        assert_eq!(transliterate_with("mosor", true), "ম\u{09B8}\u{09B0}");
+        assert!(phonetic_candidates("mosor").contains(&"ম\u{09B8}\u{09B0}".to_string()));
+        // A final `o` is still the vowel sign under either reading.
+        assert_eq!(transliterate_with("bhalo", true), "ভালো");
     }
 
     #[test]
