@@ -194,7 +194,9 @@ impl PropCtx {
                 "w14:textFill" => {
                     // A gradient is Word's Text Fill, gradient. A solid fill is the text's colour.
                     use wordcraft_doc::text_effects::{GradientStop, MAX_GRADIENT_STOPS, TextGradient};
-                    if let Some(grad) = k.child("w14:gradFill") {
+                    // A path gradient (`w14:path`: radial and the like) is not modelled, so the run keeps its colour.
+                    let linear = k.child("w14:gradFill").filter(|g| g.child("w14:lin").is_some() || g.child("w14:path").is_none());
+                    if let Some(grad) = linear {
                         let mut stops = [GradientStop { pos: 0.0, color: Rgb::BLACK }; MAX_GRADIENT_STOPS];
                         let mut count = 0usize;
                         for gs in k.child("w14:gradFill").and_then(|g| g.child("w14:gsLst")).into_iter().flat_map(|l| l.children("w14:gs")) {
