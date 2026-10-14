@@ -245,8 +245,10 @@ impl Reader<'_> {
             if let Some(rpr) = ppr.child("w:rPr") {
                 for k in rpr.els() {
                     match k.name.as_str() {
-                        "w:ins" | "w:moveTo" => para.mark.ins = Some(self.revision(RevisionKind::Insert, k)),
-                        "w:del" | "w:moveFrom" => para.mark.del = Some(self.revision(RevisionKind::Delete, k)),
+                        "w:ins" => para.mark.ins = Some(self.revision(RevisionKind::Insert, k)),
+                        "w:moveTo" => para.mark.ins = Some(self.revision_with(RevisionKind::Insert, k, true)),
+                        "w:del" => para.mark.del = Some(self.revision(RevisionKind::Delete, k)),
+                        "w:moveFrom" => para.mark.del = Some(self.revision_with(RevisionKind::Delete, k, true)),
                         _ => {}
                     }
                 }
@@ -336,12 +338,12 @@ impl Reader<'_> {
             }
             "w:ins" | "w:moveTo" => {
                 let mut c = ctx.clone();
-                c.ins = Some(self.revision(RevisionKind::Insert, k));
+                c.ins = Some(self.revision_with(RevisionKind::Insert, k, k.name == "w:moveTo"));
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
             "w:del" | "w:moveFrom" => {
                 let mut c = ctx.clone();
-                c.del = Some(self.revision(RevisionKind::Delete, k));
+                c.del = Some(self.revision_with(RevisionKind::Delete, k, k.name == "w:moveFrom"));
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
             "w:fldSimple" => {

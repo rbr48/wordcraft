@@ -730,8 +730,8 @@ fn toc_field_skips_nested_stories() {
 #[test]
 fn tracked_changes_round_trip() {
     let mut d = Document::new();
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
-    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into() });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into(), moved: false });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), moved: false });
     d.settings.track_changes = true;
     let ins = CharProps { ins: Some(0), ..Default::default() };
     let del = CharProps { del: Some(1), bold: Some(true), ..Default::default() };
@@ -755,8 +755,8 @@ fn tracked_paragraph_marks_round_trip() {
     // Issue #229: an inserted / deleted paragraph mark is `w:ins` / `w:del` in the mark's
     // `w:rPr` (ECMA-376 §17.13.5.16, §17.13.5.15), alone or with mark formatting.
     let mut d = Document::new();
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
-    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into() });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into(), moved: false });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), moved: false });
     let mut split = Paragraph::with_text("Owned ALPHA ", CharProps::default());
     split.mark.ins = Some(0);
     let mut joined = Paragraph::with_text("Owned BETA", CharProps::default());
@@ -780,6 +780,42 @@ fn tracked_paragraph_marks_round_trip() {
     assert_eq!(got[1].mark.ins, None);
     assert_eq!((got[2].mark.ins, got[2].mark.del), (None, None));
     assert_eq!(got.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Owned ALPHA ", "Owned BETA", "plain"]);
+}
+
+#[test]
+fn tracked_moves_round_trip() {
+    // A move is `w:moveFrom` (the source, shown as deleted) and `w:moveTo` (the destination,
+    // shown as inserted), ECMA-376 §17.13.5.22 and §17.13.5.24. It must come back as a move, not
+    // a plain delete and insert, and a plain insert by the same author and time stays separate.
+    let when = "2026-05-03T09:00:00Z";
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: when.into(), moved: true });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: when.into(), moved: true });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: when.into(), moved: false });
+    let to = CharProps { ins: Some(0), ..Default::default() };
+    let from = CharProps { del: Some(1), ..Default::default() };
+    let plain = CharProps { ins: Some(2), ..Default::default() };
+    let p = para_runs(&[("moved here ", to.clone()), ("moved away", from.clone()), (" typed", plain.clone())]);
+    let mut moved_mark = Paragraph::with_text("Mark moved in", CharProps::default());
+    moved_mark.mark.ins = Some(0);
+    let mut gone_mark = Paragraph::with_text("Mark moved out", CharProps::default());
+    gone_mark.mark.del = Some(1);
+    d.body = vec![para_block(p.clone()), para_block(moved_mark), para_block(gone_mark)];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("<w:moveTo w:id="), "{xml}");
+    assert!(xml.contains("<w:moveFrom w:id="), "{xml}");
+    assert!(xml.contains(r#"<w:rPr><w:moveTo w:id="#), "{xml}");
+    assert!(xml.contains(r#"<w:rPr><w:moveFrom w:id="#), "{xml}");
+    assert_eq!(xml.matches("<w:ins w:id=").count(), 1, "the plain insert stays w:ins: {xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let moved: Vec<_> = r.revisions.iter().filter(|v| v.moved).map(|v| v.kind).collect();
+    assert_eq!(moved, [RevisionKind::Insert, RevisionKind::Delete], "{:?}", r.revisions);
+    assert!(r.revisions.iter().any(|v| !v.moved && v.kind == RevisionKind::Insert), "{:?}", r.revisions);
+    let got = paras(&r);
+    assert_eq!(got.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), [p.text.as_str(), "Mark moved in", "Mark moved out"]);
 }
 
 #[test]
@@ -1016,7 +1052,7 @@ fn kitchen_sink() -> Document {
     let f = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]);
     let c = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Comment", CharProps::default()))]);
     d.comments.insert(3, Comment { author: "X".into(), part: c, ..Default::default() });
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new() });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), moved: false });
     d.last_section.headers.default = Some(h);
     let mut blocks: Blocks = Vec::new();
     let mut p = para_runs(&[

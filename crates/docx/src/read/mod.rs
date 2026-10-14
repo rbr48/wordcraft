@@ -38,7 +38,7 @@ pub(crate) struct Reader<'p> {
     pkg: &'p Package,
     pub doc: Document,
     pub pc: PropCtx,
-    revs: HashMap<(u8, String, String), u32>,
+    revs: HashMap<(u8, bool, String, String), u32>,
     media_by_path: HashMap<String, String>,
     hf_by_path: HashMap<String, u32>,
     pub footnotes: HashMap<i64, u32>,
@@ -310,6 +310,11 @@ impl Reader<'_> {
     }
 
     pub fn revision(&mut self, kind: RevisionKind, e: &El) -> u32 {
+        self.revision_with(kind, e, false)
+    }
+
+    /// A tracked change, `moved` for `w:moveTo` / `w:moveFrom` (a move, not a plain insert or delete).
+    pub fn revision_with(&mut self, kind: RevisionKind, e: &El, moved: bool) -> u32 {
         let author = e.attr("w:author").unwrap_or("").chars().take(256).collect::<String>();
         let date = e.attr("w:date").unwrap_or("").chars().take(64).collect::<String>();
         let k = match kind {
@@ -317,12 +322,12 @@ impl Reader<'_> {
             RevisionKind::Delete => 1,
             RevisionKind::Format => 2,
         };
-        let key = (k, author.clone(), date.clone());
+        let key = (k, moved, author.clone(), date.clone());
         if let Some(i) = self.revs.get(&key) {
             return *i;
         }
         let i = self.doc.revisions.len() as u32;
-        self.doc.revisions.push(Revision { kind, author, date });
+        self.doc.revisions.push(Revision { kind, author, date, moved });
         self.revs.insert(key, i);
         i
     }

@@ -96,9 +96,11 @@ impl Writer<'_> {
         }
         let section = if top { p.section.as_deref() } else { None };
         // A tracked paragraph mark: `w:ins` / `w:del` first in the mark's `w:rPr` (CT_ParaRPr).
-        let mark_revs: Vec<(u32, &str)> = [(p.mark.ins, "w:ins"), (p.mark.del, "w:del")]
+        let mark_revs: Vec<(u32, &str)> = [(p.mark.ins, true), (p.mark.del, false)]
             .into_iter()
-            .filter_map(|(idx, tag)| idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| (i, tag)))
+            .filter_map(|(idx, insert)| {
+                idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| (i, self.rev_tag(i, insert)))
+            })
             .collect();
         let has_mark = super::props::has_rpr(&p.mark) || !mark_revs.is_empty() || p.mark.fmt_change.is_some();
         if !pp.is_empty() || has_mark || section.is_some() {
@@ -270,6 +272,18 @@ impl Writer<'_> {
         idx.and_then(|i| self.doc.revisions.get(i as usize)).map(|r| r.kind)
     }
 
+    /// The element for a tracked insert or delete: `w:ins` / `w:del`, or `w:moveTo` / `w:moveFrom`
+    /// when the revision is a move.
+    fn rev_tag(&self, idx: u32, insert: bool) -> &'static str {
+        let moved = self.doc.revisions.get(idx as usize).is_some_and(|r| r.moved);
+        match (insert, moved) {
+            (true, false) => "w:ins",
+            (true, true) => "w:moveTo",
+            (false, false) => "w:del",
+            (false, true) => "w:moveFrom",
+        }
+    }
+
     fn is_del(&self, props: &CharProps) -> bool {
         props.del.is_some() && self.rev_kind(props.del) != Some(RevisionKind::Format)
     }
@@ -311,11 +325,12 @@ impl Writer<'_> {
     }
 
     fn rev_open(&mut self, w: &mut W, props: &CharProps) {
-        for (idx, tag) in [(props.ins, "w:ins"), (props.del, "w:del")] {
+        for (idx, insert) in [(props.ins, true), (props.del, false)] {
             let Some(idx) = idx else { continue };
             if self.rev_kind(Some(idx)) == Some(RevisionKind::Format) {
                 continue;
             }
+            let tag = self.rev_tag(idx, insert);
             let (id, author, date) = self.rev_attrs(idx);
             if date.is_empty() {
                 w.open(tag, &[("w:id", &id), ("w:author", &author)]);
@@ -326,9 +341,9 @@ impl Writer<'_> {
     }
 
     fn rev_close(&mut self, w: &mut W, props: &CharProps) {
-        for (idx, tag) in [(props.del, "w:del"), (props.ins, "w:ins")] {
-            if idx.is_some() && self.rev_kind(idx) != Some(RevisionKind::Format) {
-                w.close(tag);
+        for (idx, insert) in [(props.del, false), (props.ins, true)] {
+            if let Some(idx) = idx.filter(|_| self.rev_kind(idx) != Some(RevisionKind::Format)) {
+                w.close(self.rev_tag(idx, insert));
             }
         }
     }
