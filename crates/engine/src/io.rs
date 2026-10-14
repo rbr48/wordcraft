@@ -22,6 +22,7 @@ pub const OPEN_EXTS: &[&str] = &[
     "ltx",
     "wcraft.json",
     "json",
+    "pdf",
 ];
 /// Formats WordCraft saves (Save As).
 pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "tex", "png", "json", "epub"];

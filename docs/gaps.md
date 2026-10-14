@@ -33,7 +33,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 20 | **Performance on large real-world documents** unmeasured (500+ pages, many pictures) | | Only the 188-page sample benchmark | Thesis and book authors | 10–20 | [layout-parity.md](layout-parity.md) |
 | 21 | **Mail merge data sources**: no Excel, Outlook/Contacts, email merge; CSV and typed lists only (#247) | | | Office administrators | 6–10 | [target-app-parity.md](target-app-parity.md) |
 | 22 | **Ecosystem**: no VBA execution (macros preserved only), no Office add-ins, no cloud storage, no real-time co-authoring | | `.docm` keeps macros (#172) | Enterprise users with macro templates; teams | 40–80 + owner decisions | [target-app-parity.md](target-app-parity.md) |
-| 23 | **PDF Reflow** (open a PDF as an editable document, Word for Windows) | | | Users who edit PDFs they receive | 30–50 | [file-format-parity.md](file-format-parity.md) |
+| 23 | **PDF Reflow** (open a PDF as an editable document, Word for Windows) | | Landed (2026-10-14): ISO 32000-1 clean-room parsing, Flate stream decompression, Adobe ToUnicode CMap decoding, positioned operator extraction, line/paragraph reflow, heading/list detection, and page breaks | Users who edit PDFs they receive | 0 | [file-format-parity.md](file-format-parity.md) |
 | 24 | **Customize Ribbon / Keyboard**, Quick Access Toolbar customization; ~100 of Word's ~250 shortcuts | | [ui-parity.md](ui-parity.md) | Power users | 10–16 | [ui-parity.md](ui-parity.md) |
 | 25 | **In-app AI assistant** (Copilot-style draft, rewrite, summarize) | | Chat pane with slash commands, settings and non-blocking provider calls, and an agent that edits the document through commands in rounds with one Undo, landed (2026-10-12); still missing: a preview/diff before the agent applies, provider calls in the web build | Users expecting Copilot | 15–30 + owner (provider) | [target-app-parity.md](target-app-parity.md) |
 | 26 | **Minor formats**: Flat OPC XML, Word 2003 XML, MHT, Works/WordPerfect | | | Rare | 20–35 | [file-format-parity.md](file-format-parity.md) |
@@ -64,6 +64,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | #23: PDF Reflow and editable import landed in `crates/formats/src/pdf_import.rs` with ISO 32000-1 parsing, Flate stream decompression, Adobe ToUnicode CMap decoding, positioned operator extraction, line/paragraph reflow, heading/list detection, and page breaks |
 | 2026-10-14 | minor | #7 & #8: Set Proofing Language dialog (`Dialog::Language`), status bar interactive language indicator, and language-scoped proofing in `crates/proof` & layout |
 | 2026-10-14 | minor | #10: Shape Connectors (Elbow and Curved) landed with DrawingML bentConnector3/curvedConnector3 round-trip, vello_cpu & krilla PDF vector rendering, and ribbon Insert Shapes integration |
 | 2026-10-14 | minor | #5: Move tracking (`w:moveFrom`/`w:moveTo`) and content controls (`w:sdt`) round-trip in DOCX; interactive canvas picture crop tool; Font dialog Advanced typography tab landed |

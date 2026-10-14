@@ -14,13 +14,14 @@ pub mod latex;
 pub mod markdown;
 pub mod model;
 pub mod odt;
+pub mod pdf_import;
 pub mod rtf;
 pub mod txt;
 
 use wordcraft_doc::Document;
 
 /// Extensions this crate handles.
-pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt", "tex", "latex", "ltx", "epub"];
+pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt", "tex", "latex", "ltx", "epub", "pdf"];
 
 /// Import `bytes` in the format named by `ext` (no dot, any case). `None` = not our format.
 pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
@@ -32,6 +33,7 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
         "rtf" => rtf::import(bytes),
         "odt" => odt::import(bytes),
         "tex" | "latex" | "ltx" => Ok(latex::import(bytes)),
+        "pdf" => pdf_import::import(bytes),
         _ => return None,
     };
     Some(r.map(|mut d| {

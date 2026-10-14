@@ -217,12 +217,38 @@ description: Comprehensive project memory, architecture guide, and operational r
   - **M13.2: Set Proofing Language Dialog & Multilingual Run Scoping (Gap #7 & Gap #8 Advancement)**:
     - **Language Dialog (`Dialog::Language`)**: Built Word's official Set Proofing Language modal dialog in `crates/ui-egui/src/dialogs.rs` with 34 standard world languages (`PROOFING_LANGUAGES`), "Do not check spelling or grammar" (`no_proof`), "Detect language automatically", and "Set As Default" buttons.
     - **Status Bar Integration**: Converted the hardcoded English label in `crates/ui-egui/src/chrome.rs` into a live caret run language indicator (`language_name(cur_lang)`) with click-to-open `ui.dialog language`.
-    - **Ribbon Review Tab**: Wired the "Language" button on the Review tab to open `ui.dialog` with `name: "language"`.
-    - **Multilingual Proofing Engine (`crates/proof` & `crates/layout`)**:
-      - Added `is_correct_for_lang` and `check_spelling_for_lang` in `crates/proof`.
-      - Excluded non-English runs (`c.lang.starts_with("en") == false`) from English spellchecker in `crates/layout/src/para.rs` and `crates/engine/src/cmd/review.rs`, eliminating false-positive red squiggly underlines across foreign text.
-      - Supported `default: bool` in `review.language` to update document default language in the `Normal` style.
-      - Tested via `language_dialog_opens_and_sets_proofing_language` in `crates/ui-egui/src/lib.rs` and `language_scoped_proofing_suppresses_non_english` in `crates/proof/src/lib.rs`.
+  - **M13.1: PDF Reflow & Editable Import (Gap #23 Landed)**:
+    - **ISO 32000-1 PDF Parser (`crates/formats/src/pdf_import.rs`)**:
+      - Pure-Rust, panic-free lexer parsing indirect objects (`N M obj ... endobj`), dictionaries, arrays, strings (literal `(...)` and hex `<...>`), names, numbers, booleans, and stream data.
+      - Automated Flate stream decompression via `miniz_oxide::inflate::decompress_to_vec` for `/Filter /FlateDecode`.
+      - Traversal of `/Pages` catalog hierarchy resolving `/Page` leaves, inheriting `/Resources` and `/MediaBox`.
+      - PDF 1.5+ compressed Object Streams (`/Type /ObjStm`) decompression and extraction.
+    - **Adobe CMap `/ToUnicode` & Typography Extraction**:
+      - Parsed `beginbfchar` and `beginbfrange` (both Form A range and Form B array) CMap mappings from `/ToUnicode` streams, accurately decoding subsetted TrueType/OpenType glyph IDs to Unicode strings.
+      - Fallback decoding via UTF-16BE BOM sniffing and Windows-1252 / ASCII character mapping.
+      - Extracted font family, bold, italic, and monospace styling from font dictionaries (`/BaseFont`, `/Subtype`).
+    - **Positioned Operator & Content Stream Interpreter**:
+      - Extracted text between `BT` and `ET` handling text matrix (`Tm`), line translation (`Td`, `TD`, `T*`), font/size (`Tf`), and string showing (`Tj`, `TJ`, `'`, `"`).
+      - Intercepted negative kerning displacements in `TJ` ($< -180.0$) to reconstruct natural inter-word spacing.
+    - **Reflow & Document AST Reconstruction**:
+      - Clustered text chunks by baseline $y$ (within adaptive $\pm 0.35 \times \text{font\_size}$ thresholds) and sorted $x$ left-to-right.
+      - Clustered lines into paragraphs using vertical spacing gaps ($> 1.55 \times \text{line\_height}$), font size shifts ($\ge 2.5\,\text{pt}$), and bullet/numeric list markers (`•`, `-`, `*`, `1.`, `(1)`).
+      - Reconstructed soft-hyphenated words across line continuations and separated words cleanly.
+      - Classified paragraph heading hierarchy: $\ge 18\,\text{pt} \to \text{Heading } 1$, $\ge 14\,\text{pt} \to \text{Heading } 2$, $\ge 12.5\,\text{pt} \text{ (bold)} \to \text{Heading } 3$.
+      - Preserved page breaks across multi-page PDF documents.
+      - Extracted document metadata (`/Title`, `/Author`, `/Subject`, `/Keywords`, `/CreationDate`) into `Flow::meta`.
+    - **Engine & App Dispatch Registration**:
+      - Added `"pdf"` to `wordcraft_formats::EXTENSIONS` and `import()`.
+      - Added `"pdf"` to `wordcraft_engine::io::OPEN_EXTS`.
+      - Added `"pdf"` and `"PDF document"` to native file open dialog filters in `apps/wordcraft/src/file_dialogs.rs`.
+    - **Test Coverage**:
+      - Unit tests in `crates/formats/src/tests.rs`: `pdf_import_reflows_headings_body_and_lists`, `pdf_import_tounicode_cmap_decoding`, `pdf_import_hostile_corrupted_inputs_never_panic`.
+      - Engine test in `crates/engine/src/tests.rs`: `pdf_reflow_opens_pdf_via_open_bytes`.
+    - **Quality Gates & Release Packaging**:
+      - All 6 CI quality gates verified passing: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+      - Compiled optimized release binaries `wordcraft.exe` (13.6 MB) and `wordcraft-cli.exe` (9.3 MB).
+      - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.5 MB).
+      - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.3 MB).
 
 
 
