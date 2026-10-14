@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <defs>
+    <linearGradient id="sheet-grad" x1="6" y1="4" x2="42" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+    <linearGradient id="sheet-table" x1="12" y1="12" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+  </defs>
+  <!-- Card Base -->
+  <rect x="6" y="6" width="36" height="36" rx="8" fill="url(#sheet-grad)"/>
+  <!-- Inner Grid & Calculation Cells -->
+  <rect x="11" y="11" width="26" height="26" rx="4" fill="#064E3B" fill-opacity="0.4" stroke="#6EE7B7" stroke-width="1.5"/>
+  <!-- Grid Dividers -->
+  <line x1="11" y1="19" x2="37" y2="19" stroke="#6EE7B7" stroke-width="1.5"/>
+  <line x1="11" y1="28" x2="37" y2="28" stroke="#6EE7B7" stroke-width="1.5"/>
+  <line x1="22" y1="11" x2="22" y2="37" stroke="#6EE7B7" stroke-width="1.5"/>
+  <!-- Cell Data Bars -->
+  <rect x="14" y="14" width="5" height="3" rx="1" fill="#FFFFFF"/>
+  <rect x="25" y="14" width="8" height="3" rx="1" fill="#A7F3D0"/>
+  <rect x="14" y="22" width="6" height="3" rx="1" fill="#A7F3D0"/>
+  <rect x="25" y="22" width="9" height="3" rx="1" fill="#FFFFFF"/>
+  <rect x="14" y="31" width="4" height="3" rx="1" fill="#FFFFFF"/>
+  <rect x="25" y="31" width="7" height="3" rx="1" fill="#FBBF24"/>
+</svg>

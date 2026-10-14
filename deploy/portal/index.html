@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Izhaan Intellect Office Suite · Word, Spreadsheets & Presentations</title>
+  <meta name="description" content="Clean-room, high-performance open office suite engineered in pure Rust. Native Microsoft Word compatibility, built-in Bangla IME, and offline AI Document Copilot.">
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Navigation Bar -->
+  <nav class="navbar">
+    <div class="container nav-container">
+      <a href="/" class="brand">
+        <img src="assets/logo.svg" alt="Izhaan Intellect Office Logo" class="brand-logo">
+        <span class="brand-text">
+          Izhaan Intellect <span class="suite-badge">Office Suite</span>
+        </span>
+      </a>
+
+      <ul class="nav-links">
+        <li><a href="#apps" class="nav-link">Apps</a></li>
+        <li><a href="#workspace" class="nav-link">Workspace</a></li>
+        <li><a href="#features" class="nav-link">Features</a></li>
+        <li><a href="#downloads" class="nav-link" data-open-modal="downloads">Desktop Downloads</a></li>
+        <li><a href="https://github.com/rbr48/wordcraft" target="_blank" rel="noopener" class="nav-link">GitHub</a></li>
+      </ul>
+
+      <div class="nav-actions">
+        <button class="btn btn-secondary btn-sm" data-open-modal="downloads">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+          </svg>
+          Get Desktop
+        </button>
+        <a href="/word/" class="btn btn-primary btn-sm">
+          Launch WordCraft
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <header class="hero">
+    <div class="container">
+      <div class="hero-pill">
+        <span class="pulse-dot"></span>
+        <span>WordCraft v0.6.3 Live · 100% Client-Side WebAssembly</span>
+      </div>
+
+      <h1 class="hero-title">
+        The Modern, Clean-Room<br>
+        <span>Productivity Suite for the Web</span>
+      </h1>
+
+      <p class="hero-desc">
+        Welcome to the Izhaan Intellect Office Portal. Engineered in pure Rust for sub-millisecond execution,
+        pixel-perfect Microsoft Word formatting parity, native Bangla keyboard engines (Avro &amp; Bijoy),
+        and private, offline-first document intelligence.
+      </p>
+
+      <div class="hero-cta">
+        <a href="/word/" class="btn btn-primary btn-lg">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Launch WordCraft in Browser
+        </a>
+        <button class="btn btn-secondary btn-lg" data-open-modal="downloads">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+          </svg>
+          Download Desktop App
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Apps Suite Grid -->
+  <section class="section" id="apps">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">The Izhaan Intellect Creative Suite</h2>
+        <p class="section-subtitle">A unified family of high-performance tools designed to work seamlessly together.</p>
+      </div>
+
+      <div class="apps-grid">
+        <!-- WordCraft (Active) -->
+        <div class="app-card card-word">
+          <div class="card-header">
+            <img src="assets/icon-word.svg" alt="WordCraft Icon" class="app-icon">
+            <span class="status-badge live">
+              <span class="pulse-dot"></span>
+              Live Now
+            </span>
+          </div>
+
+          <h3 class="app-title">WordCraft</h3>
+          <p class="app-role">Document Processing &amp; Typographic Publishing</p>
+          <p class="app-desc">
+            Full Microsoft Word parity engine featuring advanced layout, HarfBuzz OpenType typography,
+            embedded vector Draw ink, SmartArt diagrams, 2D Math formulas, and real-time Track Changes.
+          </p>
+
+          <ul class="app-features">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              100% Word catalog ribbon and keyboard shortcut parity
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Native Avro Phonetic, Bijoy ANSI (SutonnyMJ) &amp; Jatiya typing
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Local AI Copilot &amp; Document Intelligence (Multi-round drafting)
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              DOCX, DOC (Word 97-2003), ODT, RTF, and PDF/A export
+            </li>
+          </ul>
+
+          <div class="card-footer">
+            <a href="/word/" class="btn btn-primary" style="flex: 1;">
+              Launch App
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+              </svg>
+            </a>
+            <button class="btn btn-secondary btn-sm" data-open-modal="downloads" title="Download Desktop">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- SheetCraft (Upcoming) -->
+        <div class="app-card card-sheet">
+          <div class="card-header">
+            <img src="assets/icon-sheet.svg" alt="SheetCraft Icon" class="app-icon">
+            <span class="status-badge dev">In Development</span>
+          </div>
+
+          <h3 class="app-title">SheetCraft</h3>
+          <p class="app-role">High-Speed Vector Spreadsheets &amp; Data Models</p>
+          <p class="app-desc">
+            Blazing fast calculation engine handling hundreds of thousands of cells without UI lag.
+            Complete Excel formula library, interactive vector charts, and strict XLSX roundtrips.
+          </p>
+
+          <ul class="app-features">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Sub-millisecond multi-threaded DAG dependency calculation
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Comprehensive formula engine (VLOOKUP, XLOOKUP, INDEX/MATCH)
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Vector charting engine with GPU accelerated zoom and pan
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Will deploy natively to office.izhaanintellect.fun/sheet/
+            </li>
+          </ul>
+
+          <div class="card-footer">
+            <button class="btn btn-secondary" style="width: 100%; opacity: 0.7; cursor: default;">
+              Coming Soon to Suite
+            </button>
+          </div>
+        </div>
+
+        <!-- SlideCraft (Upcoming) -->
+        <div class="app-card card-slide">
+          <div class="card-header">
+            <img src="assets/icon-slide.svg" alt="SlideCraft Icon" class="app-icon">
+            <span class="status-badge plan">Planned</span>
+          </div>
+
+          <h3 class="app-title">SlideCraft</h3>
+          <p class="app-role">Presentation Designer &amp; Motion Storytelling</p>
+          <p class="app-desc">
+            Precision slide canvas designed for high-impact presentations. Clean vector master slides,
+            fluid GPU shader transitions, presenter notes, and seamless PPTX compatibility.
+          </p>
+
+          <ul class="app-features">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Magnetic layout snapping and typography hierarchy
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              High-fidelity PowerPoint (PPTX) import and export
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Presenter console with timer, speaker notes &amp; remote control
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Will deploy natively to office.izhaanintellect.fun/slide/
+            </li>
+          </ul>
+
+          <div class="card-footer">
+            <button class="btn btn-secondary" style="width: 100%; opacity: 0.7; cursor: default;">
+              In Roadmap
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Workspace & Dropzone -->
+  <section class="section" id="workspace" style="background: rgba(17, 24, 39, 0.4);">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">Instant Document Workspace</h2>
+        <p class="section-subtitle">Drop existing documents or start with professionally tuned templates.</p>
+      </div>
+
+      <!-- Drag & Drop Zone -->
+      <div class="dropzone-box" id="file-dropzone">
+        <input type="file" id="file-input" style="display: none;" accept=".docx,.doc,.odt,.rtf,.txt,.md">
+        <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+        </svg>
+        <h3 class="dropzone-title">Drop your document here to edit in WordCraft</h3>
+        <p class="dropzone-sub">Supports DOCX, Word 97-2003 (.doc), ODT, RTF, TXT, and Markdown · Click to browse</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Technical Features & Privacy Highlights -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">Engineered for Freedom &amp; Performance</h2>
+        <p class="section-subtitle">Why creators and professionals choose the Izhaan Intellect suite.</p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-box">
+          <img src="assets/icon-ai.svg" alt="Privacy Icon" class="feature-box-icon">
+          <h3 class="feature-box-title">100% Client-Side Privacy</h3>
+          <p class="feature-box-desc">
+            Your documents never leave your device. The entire suite compiles to WebAssembly and runs in your browser's
+            isolated sandbox. Zero telemetry, zero cloud surveillance.
+          </p>
+        </div>
+
+        <div class="feature-box">
+          <img src="assets/icon-bangla.svg" alt="Bangla Engine" class="feature-box-icon">
+          <h3 class="feature-box-title">Native Bangla Typing Engine</h3>
+          <p class="feature-box-desc">
+            Full-featured Avro Phonetic transliteration with 77,000+ words, Bijoy ANSI (SutonnyMJ), and Jatiya
+            keyboard layouts with automatic font substitution and Bijoy-to-Unicode conversion.
+          </p>
+        </div>
+
+        <div class="feature-box">
+          <img src="assets/icon-word.svg" alt="Native Speed" class="feature-box-icon">
+          <h3 class="feature-box-title">Pure Rust Native Speed</h3>
+          <p class="feature-box-desc">
+            Written from scratch in Rust with zero Electron or heavy frameworks. Instant startup, sub-millisecond
+            keystroke latency, and multi-core layout parallelization.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Desktop Downloads Modal -->
+  <div class="modal-overlay" id="downloads-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">Download WordCraft Desktop (v0.6.3)</h3>
+        <button class="modal-close" id="close-modal">&times;</button>
+      </div>
+
+      <p style="color: var(--text-secondary); margin-bottom: 20px; font-size: 0.95rem;">
+        Choose the native package for your operating system. Desktop builds include native OS spooler printing,
+        command-line interface (CLI), and full local filesystem access.
+      </p>
+
+      <div class="downloads-list">
+        <!-- Windows Setup EXE -->
+        <div class="download-item">
+          <div>
+            <div class="download-info-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/>
+              </svg>
+              Windows 64-bit Installer (.setup.exe)
+            </div>
+            <div class="download-info-sub">Recommended for Windows 10 &amp; 11 · Inno Setup Native Package</div>
+          </div>
+          <a href="https://github.com/rbr48/wordcraft/releases/download/v0.6.3/wordcraft-0.6.3-windows-x64-setup.exe" class="btn btn-primary btn-sm">
+            Download
+          </a>
+        </div>
+
+        <!-- Windows Portable ZIP -->
+        <div class="download-item">
+          <div>
+            <div class="download-info-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/>
+              </svg>
+              Windows Portable Archive (.zip)
+            </div>
+            <div class="download-info-sub">No installation required · Run directly from USB or folder</div>
+          </div>
+          <a href="https://github.com/rbr48/wordcraft/releases/download/v0.6.3/wordcraft-0.6.3-windows-x64-portable.zip" class="btn btn-secondary btn-sm">
+            Download
+          </a>
+        </div>
+
+        <!-- macOS Universal DMG -->
+        <div class="download-item">
+          <div>
+            <div class="download-info-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="2">
+                <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 14.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/>
+              </svg>
+              macOS Universal Binary (.dmg)
+            </div>
+            <div class="download-info-sub">Apple Silicon (M1/M2/M3/M4) &amp; Intel x86_64</div>
+          </div>
+          <a href="https://github.com/rbr48/wordcraft/releases/download/v0.6.3/wordcraft-0.6.3-macos-universal.dmg" class="btn btn-secondary btn-sm">
+            Download
+          </a>
+        </div>
+
+        <!-- Linux AppImage -->
+        <div class="download-item">
+          <div>
+            <div class="download-info-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><path d="m10 15 5-3-5-3v6Z"/>
+              </svg>
+              Linux AppImage (.AppImage)
+            </div>
+            <div class="download-info-sub">Universal portable binary for Ubuntu, Fedora, Debian, Arch</div>
+          </div>
+          <a href="https://github.com/rbr48/wordcraft/releases/download/v0.6.3/wordcraft-0.6.3-linux-x86_64.AppImage" class="btn btn-secondary btn-sm">
+            Download
+          </a>
+        </div>
+
+        <!-- Debian / Ubuntu DEB -->
+        <div class="download-item">
+          <div>
+            <div class="download-info-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2">
+                <rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              Debian / Ubuntu Package (.deb)
+            </div>
+            <div class="download-info-sub">Native dpkg installer with system menu integration</div>
+          </div>
+          <a href="https://github.com/rbr48/wordcraft/releases/download/v0.6.3/wordcraft-0.6.3-linux-x86_64.deb" class="btn btn-secondary btn-sm">
+            Download
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-top">
+        <div class="footer-brand">
+          <img src="assets/logo.svg" alt="Izhaan Intellect Office Logo" width="30" height="30">
+          <strong>Izhaan Intellect Office Suite</strong>
+        </div>
+        <div class="footer-meta">
+          Host: <code>office.izhaanintellect.fun</code> • VPS: <code>148.135.137.245</code> • <span>All Systems Operational</span>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <div>
+          Engineered &amp; Maintained by <strong>M S Rana</strong> (<code>@rbr48</code> / Izhaan Intellect).
+          Clean-room implementation licensed under MIT / Apache-2.0.
+        </div>
+        <div>
+          WordCraft Web runs 100% in your browser · No user files uploaded to servers
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

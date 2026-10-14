@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <linearGradient id="bn-grad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EF4444"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+  <!-- Stylized Bengali Vowel / Letter Mark (অ/ক) -->
+  <circle cx="12" cy="12" r="10" stroke="url(#bn-grad)" stroke-width="2"/>
+  <path d="M7 8H17" stroke="url(#bn-grad)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M12 8V17M12 17C12 17 9 16 9 13C9 10 13 10 13 13C13 16 16 16 16 13" stroke="url(#bn-grad)" stroke-width="1.8" stroke-linecap="round"/>
+</svg>

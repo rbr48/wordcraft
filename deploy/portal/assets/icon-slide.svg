@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <defs>
+    <linearGradient id="slide-grad" x1="6" y1="4" x2="42" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EA580C"/>
+      <stop offset="100%" stop-color="#C2410C"/>
+    </linearGradient>
+    <linearGradient id="screen-grad" x1="12" y1="10" x2="36" y2="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDBA74"/>
+      <stop offset="100%" stop-color="#FB923C"/>
+    </linearGradient>
+  </defs>
+  <!-- Card Base -->
+  <rect x="6" y="6" width="36" height="36" rx="8" fill="url(#slide-grad)"/>
+  <!-- Slide Canvas Frame -->
+  <rect x="11" y="11" width="26" height="18" rx="3" fill="#7C2D12" fill-opacity="0.4" stroke="#FED7AA" stroke-width="1.5"/>
+  <!-- Mini Slide Layout Content -->
+  <rect x="14" y="14" width="8" height="5" rx="1.5" fill="#FFFFFF"/>
+  <rect x="24" y="14" width="10" height="2" rx="1" fill="#FED7AA"/>
+  <rect x="24" y="18" width="7" height="2" rx="1" fill="#FED7AA"/>
+  <!-- Pie / Trend Chart in Slide -->
+  <circle cx="18" cy="24" r="3" fill="#FBBF24"/>
+  <line x1="24" y1="24" x2="34" y2="24" stroke="#FED7AA" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Projector Stand -->
+  <line x1="24" y1="29" x2="24" y2="35" stroke="#FED7AA" stroke-width="2" stroke-linecap="round"/>
+  <line x1="16" y1="35" x2="32" y2="35" stroke="#FED7AA" stroke-width="2" stroke-linecap="round"/>
+</svg>
