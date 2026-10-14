@@ -362,4 +362,17 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Added `text_wraps_around_polygon_tight_float` in `crates/layout/src/tests.rs`.
       - Verified all 156 layout tests and 149 docx tests passing without regressions.
       - All 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **M17.3: Envelopes and Labels Interactive Modal Dialog (`Dialog::EnvelopesLabels`, 36th Modal Dialog) (Gap #7 Dialog Depth)**:
+    - **Engine Expansion (`crates/engine/src/cmd/mailings.rs`)**:
+      - Exported `pub fn address_block(s: &Session, row: usize) -> String` for direct UI reuse across mail merge sources.
+      - Expanded `mailings.envelopes` command with standard international envelope dimensions: `Envelope #10` (684.0 × 297.0 pt), `Envelope DL` (623.6 × 311.8 pt), `Envelope Monarch` (540.0 × 279.0 pt), `Envelope C5` (649.0 × 459.0 pt), and `Envelope B5` (709.0 × 499.0 pt).
+    - **Interactive Two-Tab Dialog (`crates/ui-egui/src/dialogs.rs`)**:
+      - Added `Dialog::EnvelopesLabels` variant supporting both `"envelopes"` (tab 0) and `"labels"` (tab 1) entry points.
+      - Auto-populates delivery address from active document selection or current mail merge record.
+      - **Envelopes Tab**: Multiline delivery address, return address with "Omit" toggle, envelope size dropdown, visual mini envelope preview (with return address, delivery text, and postage stamp boundary), and "Add to Document" button dispatching `mailings.envelopes`.
+      - **Labels Tab**: Multiline label address, Avery presets dropdown (`Avery 5160`, `5161`, `5162`, `5163`, `5164`, `Custom`), custom rows/cols drag controls, mail merge recipient list toggle, visual mini label grid preview, and "New Document" button dispatching `mailings.labels`.
+    - **Ribbon & Quality Gates**:
+      - Updated Mailings tab Create group buttons in `crates/ui-egui/src/ribbon.rs` to open `"envelopes"` and `"labels"`.
+      - Added integration test `envelopes_and_labels_dialog_opens_and_executes` in `crates/ui-egui/src/dialogs.rs`.
+      - Verified all 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
 

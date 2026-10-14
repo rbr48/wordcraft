@@ -133,7 +133,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"path"?: string (save the merged document), "from"?: n, "to"?: n}"#)
             .when(has_recipients),
         CommandSpec::new("mailings.envelopes", "Envelopes", "Mailings › Create", envelopes)
-            .params(r#"{"delivery": string, "return"?: string, "size"?: "Envelope #10|Envelope DL"}"#),
+            .params(r#"{"delivery": string, "return"?: string, "size"?: "Envelope #10|Envelope DL|Envelope Monarch|Envelope C5|Envelope B5"}"#),
         CommandSpec::new("mailings.labels", "Labels", "Mailings › Create", labels)
             .params(r#"{"text"?: string, "rows"?: n, "cols"?: n, "fromRecipients"?: bool}"#),
     ]
@@ -332,7 +332,7 @@ fn value(s: &Session, row: usize, field: &str) -> String {
     s.merge.rows.get(row).and_then(|r| r.get(i)).cloned().unwrap_or_default()
 }
 
-fn address_block(s: &Session, row: usize) -> String {
+pub fn address_block(s: &Session, row: usize) -> String {
     let m = address_map(&s.merge.headers);
     let g = |k: &str| m.get(k).and_then(Value::as_str).map(|f| value(s, row, f)).unwrap_or_default();
     let name = [g("title"), g("firstName"), g("lastName")].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" ");
@@ -676,6 +676,9 @@ fn envelopes(s: &mut Session, v: &Value) -> CmdResult {
     let ret = p::str(v, "return").unwrap_or("").to_string();
     let (w, h) = match p::str(v, "size").unwrap_or("Envelope #10") {
         "Envelope DL" => (623.6, 311.8),
+        "Envelope Monarch" => (540.0, 279.0),
+        "Envelope C5" => (649.0, 459.0),
+        "Envelope B5" => (709.0, 499.0),
         _ => (684.0, 297.0),
     };
     let mut d = Document::new();

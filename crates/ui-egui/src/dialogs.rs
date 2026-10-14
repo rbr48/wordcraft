@@ -471,6 +471,19 @@ pub enum Dialog {
         text: String,
         selected: usize,
     },
+    /// Mailings › Create › Envelopes and Labels
+    EnvelopesLabels {
+        tab: u8,
+        delivery: String,
+        return_addr: String,
+        omit_return: bool,
+        size: String,
+        label_text: String,
+        rows: u32,
+        cols: u32,
+        from_recipients: bool,
+        label_preset: usize,
+    },
 }
 
 /// Standard world languages matching Microsoft Word proofing language list (name, BCP-47 tag).
@@ -963,6 +976,7 @@ impl Dialog {
             Dialog::Phonetic { .. } => "phonetic",
             Dialog::Enclose { .. } => "enclose",
             Dialog::WordArt { .. } => "wordArt",
+            Dialog::EnvelopesLabels { .. } => "envelopesLabels",
         }
     }
 
@@ -1300,6 +1314,32 @@ impl Dialog {
                 let text = if sel.is_empty() { "Your text here".to_string() } else { sel };
                 Dialog::WordArt { text, selected: 0 }
             }
+            "envelopes" | "labels" | "envelopesLabels" => {
+                let tab = if name == "labels" { 1 } else { 0 };
+                let sel = app.session.selected_text();
+                let m = &app.session.merge;
+                let delivery = if !sel.is_empty() {
+                    sel
+                } else if !m.rows.is_empty() {
+                    wordcraft_engine::cmd::mailings::address_block(&app.session, m.record)
+                } else {
+                    "Recipient Name\nStreet Address\nCity, ST 00000".to_string()
+                };
+                let label_text = delivery.clone();
+                let from_recipients = !m.rows.is_empty();
+                Dialog::EnvelopesLabels {
+                    tab,
+                    delivery,
+                    return_addr: String::new(),
+                    omit_return: false,
+                    size: "Envelope #10".to_string(),
+                    label_text,
+                    rows: 10,
+                    cols: 3,
+                    from_recipients,
+                    label_preset: 0,
+                }
+            }
             _ => return None,
         })
     }
@@ -1443,6 +1483,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Phonetic { .. } => "Phonetic Guide",
         Dialog::Enclose { .. } => "Enclose Characters",
         Dialog::WordArt { .. } => "WordArt Gallery",
+        Dialog::EnvelopesLabels { .. } => "Envelopes and Labels",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -1451,7 +1492,11 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0))
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.set_min_width(340.0);
+            if matches!(d, Dialog::EnvelopesLabels { .. }) {
+                ui.set_min_width(480.0);
+            } else {
+                ui.set_min_width(340.0);
+            }
             close = body(app, ui, &mut d);
         });
     if open && !close {
@@ -3636,6 +3681,193 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
+        Dialog::EnvelopesLabels { tab, delivery, return_addr, omit_return, size, label_text, rows, cols, from_recipients, label_preset } => {
+            ui.horizontal(|ui| {
+                if ui.selectable_label(*tab == 0, tl!("Envelopes")).clicked() {
+                    *tab = 0;
+                }
+                if ui.selectable_label(*tab == 1, tl!("Labels")).clicked() {
+                    *tab = 1;
+                }
+            });
+            ui.separator();
+            ui.add_space(4.0);
+
+            if *tab == 0 {
+                ui.label(egui::RichText::new(tl!("Delivery address:")).strong());
+                ui.add(egui::TextEdit::multiline(delivery).desired_rows(4).desired_width(450.0));
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("Return address:")).strong());
+                    ui.checkbox(omit_return, tl!("Omit"));
+                });
+                if !*omit_return {
+                    ui.add(egui::TextEdit::multiline(return_addr).desired_rows(3).desired_width(450.0));
+                }
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Envelope size:"));
+                    egui::ComboBox::from_id_salt("envelope_size_combo").selected_text(tl!(size.as_str())).show_ui(ui, |ui| {
+                        for (name, id) in [
+                            ("Envelope #10 (4 1/8 x 9 1/2 in)", "Envelope #10"),
+                            ("Envelope DL (110 x 220 mm)", "Envelope DL"),
+                            ("Envelope Monarch (3 7/8 x 7 1/2 in)", "Envelope Monarch"),
+                            ("Envelope C5 (162 x 229 mm)", "Envelope C5"),
+                            ("Envelope B5 (176 x 250 mm)", "Envelope B5"),
+                        ] {
+                            ui.selectable_value(size, id.to_string(), tl!(name));
+                        }
+                    });
+                });
+
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new(tl!("Preview")).font(semibold(11.0)));
+                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 70.0), Sense::hover());
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        let bg = ui.visuals().faint_bg_color;
+                        let border_stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+                        painter.rect_filled(rect, 4.0, bg);
+                        painter.rect_stroke(rect, 4.0, border_stroke, egui::StrokeKind::Inside);
+
+                        let stamp_rect = egui::Rect::from_min_size(egui::pos2(rect.right() - 24.0, rect.top() + 8.0), vec2(16.0, 20.0));
+                        painter.rect_stroke(
+                            stamp_rect,
+                            1.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 180, 180)),
+                            egui::StrokeKind::Inside,
+                        );
+
+                        if !*omit_return && !return_addr.is_empty() {
+                            let text = return_addr.lines().take(3).collect::<Vec<_>>().join("\n");
+                            painter.text(
+                                egui::pos2(rect.left() + 10.0, rect.top() + 8.0),
+                                egui::Align2::LEFT_TOP,
+                                text,
+                                egui::FontId::proportional(8.5),
+                                ui.visuals().text_color(),
+                            );
+                        }
+
+                        let deliv_lines = delivery.lines().take(4).collect::<Vec<_>>().join("\n");
+                        painter.text(
+                            egui::pos2(rect.center().x - 20.0, rect.center().y - 10.0),
+                            egui::Align2::LEFT_TOP,
+                            deliv_lines,
+                            egui::FontId::proportional(9.5),
+                            ui.visuals().text_color(),
+                        );
+                    }
+                });
+
+                let (ok, cancel) = buttons(ui, tl!("Add to Document"));
+                if ok {
+                    let ret = if *omit_return { "" } else { return_addr.as_str() };
+                    let _ = app.run(
+                        "mailings.envelopes",
+                        json!({
+                            "delivery": delivery,
+                            "return": ret,
+                            "size": size,
+                        }),
+                    );
+                }
+                ok || cancel
+            } else {
+                ui.label(egui::RichText::new(tl!("Address:")).strong());
+                ui.add(egui::TextEdit::multiline(label_text).desired_rows(4).desired_width(450.0));
+                ui.add_space(8.0);
+
+                if !app.session.merge.rows.is_empty() {
+                    ui.checkbox(from_recipients, tl!("Use mail merge recipients (generate full sheet for recipient list)"));
+                    ui.add_space(4.0);
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Label product:"));
+                    let presets: &[(&str, u32, u32)] = &[
+                        ("Avery 5160 - Address (30 per page: 3 cols × 10 rows)", 10, 3),
+                        ("Avery 5161 - Address (20 per page: 2 cols × 10 rows)", 10, 2),
+                        ("Avery 5162 - Address (14 per page: 2 cols × 7 rows)", 7, 2),
+                        ("Avery 5163 - Shipping (10 per page: 2 cols × 5 rows)", 5, 2),
+                        ("Avery 5164 - Shipping (6 per page: 2 cols × 3 rows)", 3, 2),
+                        ("Custom Label Grid", *rows, *cols),
+                    ];
+                    let cur_name = presets.get(*label_preset).map(|p| p.0).unwrap_or("Custom");
+                    egui::ComboBox::from_id_salt("label_preset_combo").selected_text(tl!(cur_name)).show_ui(ui, |ui| {
+                        for (idx, (p_name, r, c)) in presets.iter().enumerate() {
+                            if ui.selectable_label(*label_preset == idx, tl!(*p_name)).clicked() {
+                                *label_preset = idx;
+                                if idx < 5 {
+                                    *rows = *r;
+                                    *cols = *c;
+                                }
+                            }
+                        }
+                    });
+                });
+
+                if *label_preset == 5 {
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Rows:"));
+                        ui.add(egui::DragValue::new(rows).range(1..=40));
+                        ui.label(tl!("Columns:"));
+                        ui.add(egui::DragValue::new(cols).range(1..=10));
+                    });
+                }
+
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new(tl!("Preview")).font(semibold(11.0)));
+                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 70.0), Sense::hover());
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        let bg = ui.visuals().faint_bg_color;
+                        let border_stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+                        painter.rect_filled(rect, 4.0, bg);
+                        painter.rect_stroke(rect, 4.0, border_stroke, egui::StrokeKind::Inside);
+
+                        let display_rows = (*rows).clamp(1, 10);
+                        let display_cols = (*cols).clamp(1, 5);
+                        let cell_w = (rect.width() - 16.0) / display_cols as f32;
+                        let cell_h = (rect.height() - 16.0) / display_rows as f32;
+                        for r_idx in 0..display_rows {
+                            for c_idx in 0..display_cols {
+                                let c_rect = egui::Rect::from_min_size(
+                                    egui::pos2(rect.left() + 8.0 + c_idx as f32 * cell_w + 1.0, rect.top() + 8.0 + r_idx as f32 * cell_h + 1.0),
+                                    vec2(cell_w - 2.0, cell_h - 2.0),
+                                );
+                                painter.rect_stroke(
+                                    c_rect,
+                                    1.0,
+                                    egui::Stroke::new(0.5, egui::Color32::from_rgb(190, 190, 190)),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                        }
+                    }
+                });
+
+                let (ok, cancel) = buttons(ui, tl!("New Document"));
+                if ok {
+                    let _ = app.run(
+                        "mailings.labels",
+                        json!({
+                            "text": label_text,
+                            "rows": *rows,
+                            "cols": *cols,
+                            "fromRecipients": *from_recipients,
+                        }),
+                    );
+                }
+                ok || cancel
+            }
+        }
     }
 }
 
@@ -4424,5 +4656,52 @@ mod tests {
         let res = app.run("insert.wordArt", json!({"text": text, "preset": 1})).unwrap();
         assert_eq!(res["text"], "Hero Heading");
         assert_eq!(res["preset"], "style2");
+    }
+
+    #[test]
+    fn envelopes_and_labels_dialog_opens_and_executes() {
+        let mut app = app_with("Jane Doe\n456 Oak Ave\nBoston, MA 02101");
+        app.run("select.all", json!({})).unwrap();
+
+        let d = Dialog::open("envelopes", &mut app).expect("envelopes dialog");
+        let Dialog::EnvelopesLabels { tab, delivery, size, .. } = d else {
+            panic!("not envelopesLabels dialog");
+        };
+        assert_eq!(tab, 0);
+        assert!(delivery.contains("Jane Doe"));
+        assert_eq!(size, "Envelope #10");
+
+        app.session.dirty = false;
+        let res = app
+            .run(
+                "mailings.envelopes",
+                json!({
+                    "delivery": delivery,
+                    "return": "Acme Corp\n123 Market St",
+                    "size": "Envelope DL",
+                }),
+            )
+            .unwrap();
+        assert!((res["width"].as_f64().unwrap() - 623.6).abs() < 0.1);
+
+        let d2 = Dialog::open("labels", &mut app).expect("labels dialog");
+        let Dialog::EnvelopesLabels { tab: t2, rows, cols, .. } = d2 else {
+            panic!("not envelopesLabels dialog");
+        };
+        assert_eq!(t2, 1);
+        assert_eq!((rows, cols), (10, 3));
+
+        app.session.dirty = false;
+        let res2 = app
+            .run(
+                "mailings.labels",
+                json!({
+                    "text": "Label Text",
+                    "rows": 5,
+                    "cols": 2,
+                }),
+            )
+            .unwrap();
+        assert_eq!(res2["labels"], 10);
     }
 }

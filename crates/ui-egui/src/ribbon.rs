@@ -1252,8 +1252,8 @@ fn references(app: &mut WordApp, ui: &mut Ui) {
 
 fn mailings(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Create", None, app, |ui, app| {
-        big(ui, app, "envelope", "Envelopes", "mailings.envelopes", json!({}), false);
-        big(ui, app, "labels", "Labels", "mailings.labels", json!({}), false);
+        big(ui, app, "envelope", "Envelopes", "ui.dialog", json!({"name": "envelopes"}), false);
+        big(ui, app, "labels", "Labels", "ui.dialog", json!({"name": "labels"}), false);
     });
     group(ui, "Start Mail Merge", None, app, |ui, app| {
         // The kinds of merge document the engine makes, the current one checked.
