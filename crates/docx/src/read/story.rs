@@ -126,8 +126,15 @@ fn clean_text(s: &str) -> String {
 
 fn children_of_choice(ac: &El) -> Option<&El> {
     // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
-    const KNOWN: &[&str] = &["wps", "wpg", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v"];
-    let ok = |c: &El| c.attr("Requires").unwrap_or("").split_whitespace().all(|r| KNOWN.contains(&r));
+    const KNOWN: &[&str] = &["wps", "wpg", "wpc", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v"];
+    let ok = |c: &El| {
+        let req = c.attr("Requires").unwrap_or("");
+        // If it requires w14 and contains contentPart without an inline blip, and Fallback exists, use Fallback
+        if req.split_whitespace().any(|r| r == "w14") && c.find("w14:contentPart").is_some() && ac.child("mc:Fallback").is_some() {
+            return false;
+        }
+        req.split_whitespace().all(|r| KNOWN.contains(&r))
+    };
     ac.children("mc:Choice").find(|c| ok(c)).or_else(|| ac.child("mc:Fallback")).or_else(|| ac.child("mc:Choice"))
 }
 
@@ -421,8 +428,12 @@ impl Reader<'_> {
                     self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
                 }
             }
-            // Some generators write a break directly under the paragraph instead of inside a run.
-            "w:br" | "w:cr" => {
+            // Some generators write a break or ruby directly under the paragraph instead of inside a run.
+            "w:br" | "w:cr" | "w:ruby" => {
+                let props = self.run_props_none(ctx);
+                self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
+            }
+            "w14:contentPart" => {
                 let props = self.run_props_none(ctx);
                 self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
             }
@@ -568,7 +579,47 @@ impl Reader<'_> {
             }
             "w:pgNum" => self.emit_obj(sc, pb, InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false }, props),
             "w:ruby" => {
+                let pr = k.child("w:rubyPr");
+                let align = pr.and_then(|p| p.child("w:rubyAlign")).and_then(|a| a.attr("w:val")).unwrap_or("distributeLetter");
+                let hps = pr.and_then(|p| p.child("w:hps")).and_then(|h| h.attr("w:val")).and_then(|v| v.parse().ok()).unwrap_or(0);
+                let hps_raise = pr.and_then(|p| p.child("w:hpsRaise")).and_then(|h| h.attr("w:val")).and_then(|v| v.parse().ok()).unwrap_or(0);
+                let hps_base_text = pr.and_then(|p| p.child("w:hpsBaseText")).and_then(|h| h.attr("w:val")).and_then(|v| v.parse().ok()).unwrap_or(0);
+                let lid = pr.and_then(|p| p.child("w:lid")).and_then(|l| l.attr("w:val")).unwrap_or("");
+
+                let mut ruby_text = String::new();
+                if let Some(rt) = k.child("w:rt") {
+                    for r in rt.children("w:r") {
+                        for t in r.children("w:t") {
+                            ruby_text.push_str(&t.text());
+                        }
+                    }
+                }
+
+                let mut base_text = String::new();
                 if let Some(base) = k.child("w:rubyBase") {
+                    for r in base.children("w:r") {
+                        for t in r.children("w:t") {
+                            base_text.push_str(&t.text());
+                        }
+                    }
+                }
+
+                if !base_text.is_empty() {
+                    self.emit_obj(
+                        sc,
+                        pb,
+                        InlineObject::Ruby {
+                            base: base_text,
+                            ruby: ruby_text,
+                            align: align.to_string(),
+                            hps,
+                            hps_raise,
+                            hps_base_text,
+                            lid: lid.to_string(),
+                        },
+                        props,
+                    );
+                } else if let Some(base) = k.child("w:rubyBase") {
                     for r in base.children("w:r") {
                         for c in r.els() {
                             self.read_run_child(sc, pb, c, props, rels, note, depth + 1);
@@ -581,6 +632,18 @@ impl Reader<'_> {
                     for x in c.els() {
                         self.read_run_child(sc, pb, x, props, rels, note, depth + 1);
                     }
+                }
+            }
+            "w14:contentPart" => {
+                if let Some(id) = k.attr("r:id")
+                    && let Some(media) = self.media_for(rels, id)
+                {
+                    self.emit_obj(
+                        sc,
+                        pb,
+                        InlineObject::Image { media, w: 100.0, h: 50.0, alt: "Ink".into(), float: Float::default(), crop: [0.0; 4], ole: None },
+                        props,
+                    );
                 }
             }
             _ => {}
@@ -743,6 +806,8 @@ impl Reader<'_> {
         }
         let mut obj = if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
+        } else if let Some(canvas) = gd.child("wpc:wordprocessingCanvas") {
+            self.read_canvas(sc, canvas, rels, w, h, float)?
         } else if gd.find("a:blip").is_some() {
             self.read_pic(gd, rels, w, h, alt, float)?
         } else {
@@ -837,7 +902,48 @@ impl Reader<'_> {
         if children.is_empty() {
             return None;
         }
-        Some(InlineObject::Group { w, h, float, ch_w, ch_h, children })
+        Some(InlineObject::Group { w, h, float, ch_w, ch_h, children, is_canvas: false })
+    }
+
+    /// A `wpc:wordprocessingCanvas` drawing canvas (`w` × `h`): its shapes, pictures, connectors
+    /// and text boxes.
+    fn read_canvas(&mut self, sc: &mut StoryCtx, canvas: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> Option<InlineObject> {
+        float.set_spin(xfrm_spin(canvas.child("wpc:whole")));
+        let mut children = Vec::new();
+        if let Some(bg) = canvas.child("wpc:bg")
+            && let Some(sppr) = bg.child("wps:spPr").or_else(|| bg.child("wpc:spPr"))
+        {
+            let solid = |e: Option<&El>| {
+                e.and_then(|f| f.child("a:solidFill")).and_then(|f| f.child("a:srgbClr")).and_then(|c| c.attr("val")).and_then(Rgb::parse)
+            };
+            let fill = solid(Some(sppr));
+            let ln = sppr.child("a:ln");
+            let stroke = solid(ln);
+            let stroke_width = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0);
+            if fill.is_some() || stroke.is_some() {
+                children.push(wordcraft_doc::para::GroupChild {
+                    x: 0.0,
+                    y: 0.0,
+                    obj: InlineObject::Shape {
+                        kind: ShapeKind::Rectangle,
+                        w,
+                        h,
+                        fill,
+                        stroke,
+                        stroke_width,
+                        float: Float::default(),
+                        story: None,
+                        freeform: None,
+                        effects: Default::default(),
+                    },
+                });
+            }
+        }
+        self.group_members(sc, canvas, rels, (0.0, 0.0, 1.0, 1.0), 0, &mut children);
+        if children.is_empty() {
+            return None;
+        }
+        Some(InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, is_canvas: true })
     }
 
     /// The members of group `g` into `out`, mapped into the outermost group's space by `t`
@@ -1102,8 +1208,33 @@ fn anchor_float(c: &El) -> Float {
     for k in c.els() {
         match k.name.as_str() {
             "wp:wrapSquare" => f.wrap = Wrap::Square,
-            "wp:wrapTight" => f.wrap = Wrap::Tight,
-            "wp:wrapThrough" => f.wrap = Wrap::Through,
+            "wp:wrapTight" | "wp:wrapThrough" => {
+                f.wrap = if k.name == "wp:wrapTight" { Wrap::Tight } else { Wrap::Through };
+                if let Some(poly) = k.child("wp:wrapPolygon") {
+                    let mut pts = Vec::new();
+                    if let Some(start) = poly.child("wp:start")
+                        && let (Some(x), Some(y)) = (start.attr("x"), start.attr("y"))
+                        && let (Ok(x_val), Ok(y_val)) = (x.parse::<f32>(), y.parse::<f32>())
+                    {
+                        pts.push((x_val / 21600.0, y_val / 21600.0));
+                    }
+                    for line_to in poly.children("wp:lineTo") {
+                        if let (Some(x), Some(y)) = (line_to.attr("x"), line_to.attr("y"))
+                            && let (Ok(x_val), Ok(y_val)) = (x.parse::<f32>(), y.parse::<f32>())
+                        {
+                            pts.push((x_val / 21600.0, y_val / 21600.0));
+                        }
+                    }
+                    if pts.len() >= 3 && pts.len() <= 256 {
+                        let clamped: Vec<(f32, f32)> = pts.into_iter().map(|(px, py)| (px.clamp(-0.5, 1.5), py.clamp(-0.5, 1.5))).collect();
+                        let is_default_box = (clamped.len() == 4 || clamped.len() == 5)
+                            && clamped.iter().all(|&(x, y)| (x.abs() < 1e-3 || (x - 1.0).abs() < 1e-3) && (y.abs() < 1e-3 || (y - 1.0).abs() < 1e-3));
+                        if !is_default_box {
+                            f.wrap_polygon = Some(clamped.into());
+                        }
+                    }
+                }
+            }
             "wp:wrapTopAndBottom" => f.wrap = Wrap::TopAndBottom,
             "wp:wrapNone" => f.wrap = if behind { Wrap::BehindText } else { Wrap::InFrontOfText },
             "wp:positionH" | "wp:positionV" => {

@@ -1188,6 +1188,17 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fcircle(7.5, 10.5, 1.5, Color32::WHITE);
             pen.fcircle(12.5, 10.5, 1.5, Color32::WHITE);
         }
+        "phonetic" => {
+            pen.line_c(&[(4.0, 4.0), (16.0, 4.0)], a);
+            pen.fcircle(7.0, 6.0, 1.0, a);
+            pen.fcircle(10.0, 6.0, 1.0, a);
+            pen.fcircle(13.0, 6.0, 1.0, a);
+            pen.text(10.0, 13.5, 11.0, "A", c, true);
+        }
+        "enclose" => {
+            pen.circle(10.0, 10.0, 7.5, a);
+            pen.text(10.0, 10.0, 10.0, "A", c, true);
+        }
         "help" => {
             pen.circle(10.0, 10.0, 7.0, c);
             pen.text(10.0, 10.0, 10.0, "?", a, true);

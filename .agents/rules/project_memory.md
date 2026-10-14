@@ -291,3 +291,88 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **Test Coverage & Verification**:
       - 4 dedicated unit tests in `crates/ui-egui/src/dialogs.rs`: `drop_cap_dialog_opens_and_sets_options`, `page_numbers_dialog_opens_and_sets_format`, `autocorrect_dialog_opens_and_manages_entries`, `cross_reference_dialog_opens_and_inserts_ref`.
       - All 6 CI quality gates pass cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **Drawing Canvas (`wpc:wordprocessingCanvas`) Roundtrip & Ink Preservation (M15.1 / Gap #2)**:
+    - **Document AST Distinction (`crates/doc/src/para.rs`)**:
+      - Added `is_canvas: bool` to `InlineObject::Group` with `#[serde(default, skip_serializing_if = "is_false")]` and helper `is_canvas(&self) -> bool`.
+      - Differentiates Word drawing canvases (`wpc:wordprocessingCanvas`) from standard DrawingML group shapes (`wpg:wgp`) without duplicating layout or hit-test logic.
+    - **OOXML Namespace & Fallback Support (`crates/docx/src/xml.rs`, `crates/docx/src/read/story.rs`)**:
+      - Registered `wpc` (`http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas`) in `NAMESPACES` and `body_ns()`.
+      - Enhanced `children_of_choice` fallback routing: when an `mc:Choice` element requires `w14` containing `w14:contentPart` (Word ink) and an `mc:Fallback` exists, routes to the Fallback element to extract the rendered ink picture, preventing ink notes and handwriting from being silently discarded.
+      - Implemented `read_canvas`: parses canvas background (`wpc:bg`) solid fill and stroke, reading member shapes, pictures, textboxes, connectors, and child groups into `GroupChild` structures with `is_canvas = true`.
+    - **OOXML Writer (`crates/docx/src/write/story.rs`)**:
+      - When writing `InlineObject::Group`: writes `<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"><wpc:wordprocessingCanvas>` with background (`wpc:bg`) and child shapes/pictures when `is_canvas == true`; writes standard `wpg:wgp` when `is_canvas == false`.
+    - **Drawing Canvas Command (`crates/engine/src/cmd/insert.rs`)**:
+      - Updated `drawing.canvas` (`insert.drawingCanvas`) command to generate native `InlineObject::Group` with `is_canvas: true` and an initial background rectangle child.
+    - **Test Coverage & Verification**:
+      - Added `word_drawing_canvas_fixture` and `word_ink_alternate_content_fallback` in `crates/docx/tests/fixtures.rs` (36/36 tests passing).
+      - Added `drawing_canvas_round_trip` in `crates/docx/tests/roundtrip.rs` (39/39 tests passing).
+      - Added `insert_drawing_canvas_creates_group_with_is_canvas` in `crates/engine/src/tests.rs`.
+      - All 6 CI quality gates pass cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **M16.1: East Asian Typography — Phonetic Guide (`<w:ruby>`) & Enclose Characters (`format.enclose`) (Gap #17 Advancement)**:
+    - **Document AST & Data Model (`crates/doc/src/para.rs`)**:
+      - Added `InlineObject::Ruby { base: String, ruby: String, align: String, hps: u32, hps_raise: u32, hps_base_text: u32, lid: String }` with helper `is_ruby(&self) -> bool` and plain text extraction returning `base`.
+    - **OOXML Roundtrip Serialization (`crates/docx`)**:
+      - `crates/docx/src/read/story.rs`: Parses `<w:ruby>` containing `<w:rubyPr>` (`rubyAlign`, `hps`, `hpsRaise`, `hpsBaseText`, `lid`), `<w:rt>` ruby pronunciation text, and `<w:rubyBase>` base text into `InlineObject::Ruby`. Handles direct `<w:ruby>` occurrences under `<w:p>` and inside `<w:r>`.
+      - `crates/docx/src/write/story.rs`: Emits ECMA-376 compliant `<w:ruby>` wrapped inside `<w:r>` with complete `<w:rubyPr>`, `<w:rt>`, and `<w:rubyBase>` elements, setting ruby font size from `hps`.
+    - **Layout Elevation & Line Height Compensation (`crates/layout`)**:
+      - `crates/layout/src/para.rs`: Defined `RubyLayout` struct and tracked ruby clusters in `ParaLayout.rubies`. In `layout_para()`, shaped base text atomically, elevated line headroom via `c.obj_h = (raise + rsize).max(c.obj_h)` to prevent line collisions.
+      - `crates/layout/src/display.rs`: Implemented vector rendering for ruby text raised above the base text baseline with alignment options (`center`, `left`, `right`, `distributeLetter`, `distributeSpace`).
+    - **Engine Commands & Enclose Characters (`crates/engine/src/cmd/format.rs`)**:
+      - `format.phonetic`: Inserts, queries, or clears phonetic guides on selected text.
+      - `format.enclose`: Encloses 1-2 characters in circle (`○`), square (`□`), triangle (`△`), or diamond (`◇`), mapping standard numbers and letters to Unicode enclosed alphanumerics (`①`..`⑳`, `Ⓐ`..`Ⓩ`, `ⓐ`..`ⓩ`) and persisting native OOXML `EQ \o\ac` fields.
+    - **UI Ribbon, Vector Icons & Interactive Dialogs (`crates/ui-egui`)**:
+      - Added procedural vector icons for `"phonetic"` and `"enclose"` in `crates/ui-egui/src/icons.rs`.
+      - Added "Phonetic Guide" and "Enclose Characters" buttons to Home ribbon tab Font group row 2.
+      - Built interactive modal dialogs `Dialog::Phonetic` (base text, ruby text, alignment, font size, offset raise) and `Dialog::Enclose` (character text, enclosure shape selector), bringing total modal dialog count to 34.
+    - **Test Coverage & Verification**:
+      - Added `ruby_phonetic_guide_round_trip` in `crates/docx/tests/roundtrip.rs`.
+      - Added `phonetic_guide_dialog_opens_and_applies_ruby` and `enclose_characters_dialog_opens_and_encloses` in `crates/ui-egui/src/dialogs.rs`.
+      - Survived hostile/garbage parameters without panics in `crates/engine/src/tests.rs::hostile_params_never_panic`.
+      - All 6 CI quality gates verified passing: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **M17.1: WordArt Presets Gallery & Styled Typography Objects (Gap #10 Advancement)**:
+    - **Engine Architecture & Presets (`crates/engine/src/cmd/wordart.rs`, `crates/engine/src/cmd/insert.rs`)**:
+      - Implemented `WORDART_STYLES` containing 15 standard Microsoft Word Quick Style presets covering charcoal shadow, blue accent shadow, orange outline, white outline with blue shadow, gold bevel, teal glow, ruby red shadow, white with orange glow, purple glow, slate blue glow, black neon blue, navy reflection, amber sunrise, emerald shadow, and rose gold glow.
+      - Defined `WordArtStyle` with font, size, weight, slant, color, outline, shadow, and shape effects (`Shadow`, `Glow`).
+      - Created `insert_wordart` inserting a transparent borderless floating DrawingML text box (`ShapeKind::TextBox`) containing a styled paragraph and shape effects, supporting all 7 wrap modes (`square`, `tight`, `through`, `topAndBottom`, `inFront`, `behind`, `inline`).
+      - Defensively sanitized against hostile input (clamped 10,000 char cap, width/height bounds clamped to 20..2000pt).
+      - Replaced plain text insertion in `insert.wordArt` with full `insert_wordart` delegation.
+    - **UI Gallery Modal Dialog & Interactive Ribbon Dropdown (`crates/ui-egui`)**:
+      - Added `Dialog::WordArt { text: String, selected: usize }` as the 35th modal dialog in `crates/ui-egui/src/dialogs.rs`.
+      - Built interactive 5x3 visual grid gallery rendering styled "A" cards with active selection outlines, glow/shadow effects, color themes, live preset titles, and user text preview.
+      - Upgraded the WordArt button on the Insert ribbon tab (`crates/ui-egui/src/ribbon.rs`) to an interactive dropdown menu with quick presets and a `"More WordArt Styles…"` dialog launcher.
+    - **Test Coverage & Verification**:
+      - Added `wordart_styles_coverage`, `wordart_find_style`, and `wordart_insert_creates_shape_textbox` in `crates/engine/src/cmd/wordart.rs`.
+      - Added `wordart_dialog_opens_and_inserts` in `crates/ui-egui/src/dialogs.rs`.
+      - Verified passing hostile fuzzing in `crates/engine/src/tests.rs::hostile_params_never_panic`.
+      - All 6 CI quality gates verified passing: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **M17.2: Contour Text Wrap Polygon (`wrapPolygon` for Tight and Through wrap around arbitrary shapes, freeforms & pictures) (Gap #10 Advancement)**:
+    - **Data Model (`crates/doc/src/para.rs`)**:
+      - Converted `Float` from `Copy` to `Clone` to support complex geometric contours.
+      - Added `pub wrap_polygon: Option<std::sync::Arc<[(f32, f32)]>>` to `Float` storing normalized (0.0..1.0) polygon vertices relative to the object's bounding box.
+      - Added `pub fn float(&self) -> Option<&Float>` convenience accessor on `InlineObject`.
+    - **OOXML DrawingML Roundtrip (`crates/docx`)**:
+      - `crates/docx/src/write/story.rs`: Emits ECMA-376 compliant `<wp:wrapPolygon edited="1">` (or `edited="0"`) with `<wp:start>` and `<wp:lineTo>` elements scaled to the 21600x21600 relative coordinate frame for `Wrap::Tight` and `Wrap::Through`.
+      - `crates/docx/src/read/story.rs`: Parses `<wp:wrapPolygon>` `<wp:start>` and `<wp:lineTo>` points normalized by 21600.0, filtering out the trivial 4-corner bounding box to restore `None` cleanly on unedited shapes.
+    - **Layout Engine Polygon Scanline Rasterization (`crates/layout`)**:
+      - Added `ContourKind::Polygon(std::sync::Arc<[(f32, f32)]>)` to layout contours.
+      - Implemented mathematically exact scanline polygon edge intersection in `Exclusion::bounds_at` for arbitrary convex and concave 2D polygons: finds all segment intersections with the line slice `y` and takes the min/max X span.
+      - Added automated polygon contour generation in `contour_for` for non-rectangular geometric shapes (`Star`, `Heart`, `Hexagon`, `Octagon`), Freeform paths, and any object carrying `float.wrap_polygon`.
+    - **Test Coverage & Verification**:
+      - Added `wrap_polygon_tight_round_trip` in `crates/docx/tests/roundtrip.rs`.
+      - Added `text_wraps_around_polygon_tight_float` in `crates/layout/src/tests.rs`.
+      - Verified all 156 layout tests and 149 docx tests passing without regressions.
+      - All 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **M17.3: Envelopes and Labels Interactive Modal Dialog (`Dialog::EnvelopesLabels`, 36th Modal Dialog) (Gap #7 Dialog Depth)**:
+    - **Engine Expansion (`crates/engine/src/cmd/mailings.rs`)**:
+      - Exported `pub fn address_block(s: &Session, row: usize) -> String` for direct UI reuse across mail merge sources.
+      - Expanded `mailings.envelopes` command with standard international envelope dimensions: `Envelope #10` (684.0 × 297.0 pt), `Envelope DL` (623.6 × 311.8 pt), `Envelope Monarch` (540.0 × 279.0 pt), `Envelope C5` (649.0 × 459.0 pt), and `Envelope B5` (709.0 × 499.0 pt).
+    - **Interactive Two-Tab Dialog (`crates/ui-egui/src/dialogs.rs`)**:
+      - Added `Dialog::EnvelopesLabels` variant supporting both `"envelopes"` (tab 0) and `"labels"` (tab 1) entry points.
+      - Auto-populates delivery address from active document selection or current mail merge record.
+      - **Envelopes Tab**: Multiline delivery address, return address with "Omit" toggle, envelope size dropdown, visual mini envelope preview (with return address, delivery text, and postage stamp boundary), and "Add to Document" button dispatching `mailings.envelopes`.
+      - **Labels Tab**: Multiline label address, Avery presets dropdown (`Avery 5160`, `5161`, `5162`, `5163`, `5164`, `Custom`), custom rows/cols drag controls, mail merge recipient list toggle, visual mini label grid preview, and "New Document" button dispatching `mailings.labels`.
+    - **Ribbon & Quality Gates**:
+      - Updated Mailings tab Create group buttons in `crates/ui-egui/src/ribbon.rs` to open `"envelopes"` and `"labels"`.
+      - Added integration test `envelopes_and_labels_dialog_opens_and_executes` in `crates/ui-egui/src/dialogs.rs`.
+      - Verified all 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+

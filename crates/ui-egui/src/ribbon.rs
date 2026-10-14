@@ -511,6 +511,8 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "subscript", None, "Subscript", "format.subscript", json!({}), flag("subscript"));
                 small(ui, app, "superscript", None, "Superscript", "format.superscript", json!({}), flag("superscript"));
                 small(ui, app, "charborder", None, "Character Border", "format.border", json!({}), flag("border"));
+                small(ui, app, "phonetic", None, "Phonetic Guide", "ui.dialog", json!({"dialog": "phonetic"}), false);
+                small(ui, app, "enclose", None, "Enclose Characters", "ui.dialog", json!({"dialog": "enclose"}), false);
                 ui.add_space(4.0);
                 menu_button(ui, app, "effects", None, "Text Effects and Typography", false, |ui, app| {
                     mi(ui, app, "Outline", "format.outline", json!({}));
@@ -807,7 +809,15 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
                 }
                 mi(ui, app, "Field…", "ui.dialog", json!({"name": "field"}));
             });
-            small(ui, app, "wordArt", Some("WordArt"), "WordArt", "insert.wordArt", json!({}), false);
+            menu_button(ui, app, "wordArt", Some("WordArt"), "WordArt", false, |ui, app| {
+                mi(ui, app, "Fill: Black; Shadow", "insert.wordArt", json!({"preset": 0}));
+                mi(ui, app, "Fill: Blue, Accent 1; Shadow", "insert.wordArt", json!({"preset": 1}));
+                mi(ui, app, "Fill: Orange, Accent 2; Outline", "insert.wordArt", json!({"preset": 2}));
+                mi(ui, app, "Fill: White; Outline: Blue", "insert.wordArt", json!({"preset": 3}));
+                mi(ui, app, "Fill: Gold, Accent 4; Shadow", "insert.wordArt", json!({"preset": 4}));
+                ui.separator();
+                mi(ui, app, "More WordArt Styles…", "ui.dialog", json!({"name": "wordArt"}));
+            });
             menu_button(ui, app, "dropCap", Some("Drop Cap"), "Drop Cap", false, |ui, app| {
                 mi(ui, app, "None", "insert.dropCap", json!({"lines": 0}));
                 mi(ui, app, "Dropped (3 lines)", "insert.dropCap", json!({"lines": 3}));
@@ -1242,8 +1252,8 @@ fn references(app: &mut WordApp, ui: &mut Ui) {
 
 fn mailings(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Create", None, app, |ui, app| {
-        big(ui, app, "envelope", "Envelopes", "mailings.envelopes", json!({}), false);
-        big(ui, app, "labels", "Labels", "mailings.labels", json!({}), false);
+        big(ui, app, "envelope", "Envelopes", "ui.dialog", json!({"name": "envelopes"}), false);
+        big(ui, app, "labels", "Labels", "ui.dialog", json!({"name": "labels"}), false);
     });
     group(ui, "Start Mail Merge", None, app, |ui, app| {
         // The kinds of merge document the engine makes, the current one checked.

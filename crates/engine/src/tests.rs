@@ -3386,3 +3386,18 @@ fn text_warp_command_sets_a_preset_and_rejects_bad_parameters() {
         assert!(s.run("format.textWarp", &b).is_err(), "{b}");
     }
 }
+
+#[test]
+fn insert_drawing_canvas_creates_group_with_is_canvas() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.canvas", json!({"width": 350.0, "height": 200.0, "fill": "F5F5F5", "stroke": "BBBBBB"}));
+    let p = s.doc.body[0].as_para().expect("paragraph");
+    assert_eq!(p.objects.len(), 1);
+    let wordcraft_doc::InlineObject::Group { w, h, children, is_canvas, .. } = &p.objects[0] else {
+        panic!("expected group: {:?}", p.objects);
+    };
+    assert!(*is_canvas, "must have is_canvas: true");
+    assert_eq!((*w, *h), (350.0, 200.0));
+    assert_eq!(children.len(), 1, "has background shape");
+    assert!(p.objects[0].is_canvas());
+}

@@ -106,14 +106,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 p.borders = Some(wordcraft_doc::props::Borders { bottom: Some(wordcraft_doc::props::Border::single(1.5)), ..Default::default() })
             })
         }),
-        CommandSpec::new("insert.wordArt", "WordArt", "Insert › Text", |s, v| {
-            let text = p::str(v, "text").unwrap_or("Your text here").to_string();
-            let props = CharProps { size: Some(36.0), bold: Some(true), color: Some(TextColor::Rgb(Rgb(0x15, 0x60, 0x82))), outline: Some(false), ..Default::default() };
-            let at = delete_selection(s)?;
-            let end = s.doc.insert_text(&at, &text, &props)?;
-            s.sel = Selection { anchor: at, focus: end };
-            sel_result(s)
-        }),
+        CommandSpec::new("insert.wordArt", "WordArt", "Insert › Text", super::wordart::insert_wordart)
+            .params(r#"{"text"?: string, "preset"?: string|number, "width"?: pt, "height"?: pt, "wrap"?: string}"#),
         CommandSpec::new("insert.textFromFile", "Text from File", "Insert › Text › Object", |s, v| {
             let path = p::req_str(v, "path")?;
             let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
@@ -798,9 +792,36 @@ fn smart_art(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 fn drawing_canvas(s: &mut Session, v: &Value) -> CmdResult {
-    let w = p::f32(v, "width").unwrap_or(400.0);
-    let h = p::f32(v, "height").unwrap_or(250.0);
-    shape(s, &json!({"kind": "rectangle", "width": w, "height": h, "fill": "FAFAFA", "stroke": "CCCCCC"}))
+    let w = p::f32(v, "width").unwrap_or(400.0).clamp(10.0, 2000.0);
+    let h = p::f32(v, "height").unwrap_or(250.0).clamp(10.0, 2000.0);
+    let fill = p::str(v, "fill").and_then(Rgb::parse).or(Some(Rgb(0xFA, 0xFA, 0xFA)));
+    let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0xCC, 0xCC, 0xCC)));
+    let props = s.typing_props();
+    let at = delete_selection(s)?;
+    let bg_shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w,
+        h,
+        fill,
+        stroke,
+        stroke_width: 1.0,
+        float: Float::default(),
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    };
+    let obj = InlineObject::Group {
+        w,
+        h,
+        float: Float { wrap: Wrap::TopAndBottom, ..Default::default() },
+        ch_w: w,
+        ch_h: h,
+        children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: bg_shape }],
+        is_canvas: true,
+    };
+    let end = s.doc.insert_object(&at, obj, &props)?;
+    s.sel = Selection { anchor: at, focus: end };
+    sel_result(s)
 }
 
 fn online_video(s: &mut Session, v: &Value) -> CmdResult {

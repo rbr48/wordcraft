@@ -259,6 +259,19 @@ pub struct ParaLayout {
     /// equations) rather than for the paragraph's own text, by cluster index, sorted, with each of
     /// the cluster's glyphs' byte range in that text (a ligature's glyph spans its letters).
     pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// East Asian ruby annotations (Phonetic Guide) by base text cluster index.
+    pub rubies: Vec<(usize, RubyLayout)>,
+}
+
+/// Position and formatting for an East Asian ruby text annotation (Phonetic Guide).
+#[derive(Clone, Debug)]
+pub struct RubyLayout {
+    pub base: String,
+    pub ruby: String,
+    pub align: String,
+    pub ruby_size: f32,
+    pub raise: f32,
+    pub style: u16,
 }
 
 /// What a table style gives the text of a cell: its paragraph and run formatting, with the
@@ -294,7 +307,7 @@ pub struct ParaEnv<'a> {
 }
 
 /// An area text wraps around.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Exclusion {
     pub top: f32,
     pub bottom: f32,
@@ -306,19 +319,20 @@ pub struct Exclusion {
 }
 
 /// Geometric contour type for tight / through text wrapping.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub enum ContourKind {
     #[default]
     Box,
     Ellipse,
     Diamond,
     Triangle,
+    Polygon(std::sync::Arc<[(f32, f32)]>),
 }
 
 impl Exclusion {
     /// Effective horizontal exclusion range `(left, right)` at the given vertical slice `y_top..y_bottom`.
     pub fn bounds_at(&self, y_top: f32, y_bottom: f32) -> (f32, f32) {
-        match self.contour {
+        match &self.contour {
             ContourKind::Box => (self.left, self.right),
             ContourKind::Ellipse => {
                 let h = (self.bottom - self.top).max(1.0);
@@ -358,6 +372,33 @@ impl Exclusion {
                 let half_w = (w / 2.0) * ratio;
                 let cx = (self.left + self.right) / 2.0;
                 (cx - half_w, cx + half_w)
+            }
+            ContourKind::Polygon(pts) => {
+                let h = (self.bottom - self.top).max(1.0);
+                let w = (self.right - self.left).max(1.0);
+                let line_y = ((y_top + y_bottom) / 2.0).clamp(self.top, self.bottom);
+                let norm_y = ((line_y - self.top) / h).clamp(0.0, 1.0);
+
+                let mut min_norm_x = f32::INFINITY;
+                let mut max_norm_x = f32::NEG_INFINITY;
+                let n = pts.len();
+                if n >= 3 {
+                    for i in 0..n {
+                        let (x1, y1) = pts[i];
+                        let (x2, y2) = pts[(i + 1) % n];
+                        if (y1 <= norm_y && norm_y <= y2) || (y2 <= norm_y && norm_y <= y1) {
+                            let dy = y2 - y1;
+                            let x_intersect = if dy.abs() < 1e-5 { x1.min(x2) } else { x1 + (norm_y - y1) * (x2 - x1) / dy };
+                            min_norm_x = min_norm_x.min(x_intersect);
+                            max_norm_x = max_norm_x.max(x_intersect);
+                        }
+                    }
+                }
+                if min_norm_x.is_finite() && max_norm_x.is_finite() && min_norm_x <= max_norm_x {
+                    (self.left + min_norm_x * w, self.left + max_norm_x * w)
+                } else {
+                    (self.left, self.right)
+                }
             }
         }
     }
@@ -719,6 +760,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut drop_cap_w = 0.0;
     let mut maths = Vec::new();
     let mut displays = Vec::new();
+    let mut rubies = Vec::new();
     let mut eq_counter = env.eq_number;
     let math_props = doc.settings.math.clone().unwrap_or_default();
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
@@ -877,6 +919,18 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             maths.push((k, Arc::new(ml)));
                         }
                         Some(InlineObject::Opaque { text, .. }) => b.shape_atomic(text, start, end, &rc),
+                        Some(InlineObject::Ruby { base, ruby, align, hps, hps_raise, .. }) => {
+                            let rsize = if *hps > 0 { *hps as f32 / 2.0 } else { (rc.size * 0.5).max(4.0) };
+                            let raise = if *hps_raise > 0 { *hps_raise as f32 / 2.0 } else { rc.size * 0.85 };
+                            b.shape_atomic(base, start, end, &rc);
+                            if let Some(c) = b.clusters.last_mut() {
+                                c.obj_h = (raise + rsize).max(c.obj_h);
+                            }
+                            rubies.push((
+                                b.clusters.len().saturating_sub(1),
+                                RubyLayout { base: base.clone(), ruby: ruby.clone(), align: align.clone(), ruby_size: rsize, raise, style: si },
+                            ));
+                        }
                         _ => push(&mut b, ClKind::Marker, 0.0, 0.0),
                     }
                 }
@@ -992,6 +1046,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         drop_cap_w,
         maths,
         displays,
+        rubies,
         left_out: Vec::new(),
     };
     pl.hyph_after =
@@ -1042,7 +1097,18 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
     let bidi = rtl_para || !pl.bidi_levels.is_empty();
     let mirrored: Vec<Exclusion>;
     let exclusions: &[Exclusion] = if rtl_para {
-        mirrored = env.exclusions.iter().map(|e| Exclusion { left: width - e.right, right: width - e.left, ..*e }).collect();
+        mirrored = env
+            .exclusions
+            .iter()
+            .map(|e| Exclusion {
+                left: width - e.right,
+                right: width - e.left,
+                top: e.top,
+                bottom: e.bottom,
+                top_bottom: e.top_bottom,
+                contour: e.contour.clone(),
+            })
+            .collect();
         &mirrored
     } else {
         env.exclusions

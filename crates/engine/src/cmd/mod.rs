@@ -31,6 +31,7 @@ pub mod table_style;
 pub mod text;
 pub mod tools;
 pub mod view;
+pub mod wordart;
 
 use serde_json::{Value, json};
 use wordcraft_doc::props::CharProps;

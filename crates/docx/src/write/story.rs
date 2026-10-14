@@ -501,7 +501,7 @@ impl Writer<'_> {
                 // Ink is told apart by its name (and its pen), which reading looks for.
                 let name = shape_name(*kind, freeform.as_deref(), &docpr);
                 // The effect extent leaves room for the shadow and glow.
-                let mut float = *float;
+                let mut float = float.clone();
                 for (e, fx) in float.effect.iter_mut().zip(effects.extent()) {
                     *e = wordcraft_geom::finite(*e).max(fx);
                 }
@@ -518,46 +518,74 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children } => {
+            InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children, is_canvas } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
-                let name = format!("Group {docpr}");
+                let name = if *is_canvas { format!("Canvas {docpr}") } else { format!("Group {docpr}") };
                 self.drawing_open(w, float, *gw, *gh, &docpr, &name, "");
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
-                w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup")]);
-                // ECMA-376 §20.1.7.6 (`a:xfrm` of a group): the members' space `a:chOff`/`a:chExt`
-                // maps onto the group's `a:off`/`a:ext`.
-                w.open("wpg:wgp", &[]);
-                w.empty("wpg:cNvGrpSpPr", &[]);
-                w.open("wpg:grpSpPr", &[]);
-                w.open("a:xfrm", &spin_attrs(float.spin()).iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
-                w.empty("a:off", &[("x", "0"), ("y", "0")]);
-                w.empty("a:ext", &[("cx", &emu(gw.max(0.0))), ("cy", &emu(gh.max(0.0)))]);
-                w.empty("a:chOff", &[("x", "0"), ("y", "0")]);
-                w.empty("a:chExt", &[("cx", &emu(ch_w.max(0.0))), ("cy", &emu(ch_h.max(0.0)))]);
-                w.close("a:xfrm");
-                w.close("wpg:grpSpPr");
-                for c in children.iter().take(wordcraft_doc::para::MAX_GROUP_CHILDREN) {
-                    let at = (c.x, c.y);
-                    match &c.obj {
-                        InlineObject::Image { media, .. } => {
-                            if let Some(file) = self.media_files.get(media).cloned() {
-                                self.pic(w, &c.obj, &file, at, rels);
+                if *is_canvas {
+                    w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas")]);
+                    w.open("wpc:wordprocessingCanvas", &[]);
+                    w.open("wpc:bg", &[]);
+                    w.open("wpc:spPr", &[]);
+                    w.empty("a:noFill", &[]);
+                    w.close("wpc:spPr");
+                    w.close("wpc:bg");
+                    w.empty("wpc:whole", &[]);
+                    for c in children.iter().take(wordcraft_doc::para::MAX_GROUP_CHILDREN) {
+                        let at = (c.x, c.y);
+                        match &c.obj {
+                            InlineObject::Image { media, .. } => {
+                                if let Some(file) = self.media_files.get(media).cloned() {
+                                    self.pic(w, &c.obj, &file, at, rels);
+                                }
                             }
+                            InlineObject::Shape { .. } => {
+                                let id = self.next_docpr();
+                                self.wsp(w, &c.obj, Some(&id), at, rels, depth);
+                            }
+                            _ => {}
                         }
-                        InlineObject::Shape { .. } => {
-                            let id = self.next_docpr();
-                            self.wsp(w, &c.obj, Some(&id), at, rels, depth);
-                        }
-                        _ => {}
                     }
+                    w.close("wpc:wordprocessingCanvas");
+                    w.close("a:graphicData");
+                } else {
+                    w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup")]);
+                    // ECMA-376 §20.1.7.6 (`a:xfrm` of a group): the members' space `a:chOff`/`a:chExt`
+                    // maps onto the group's `a:off`/`a:ext`.
+                    w.open("wpg:wgp", &[]);
+                    w.empty("wpg:cNvGrpSpPr", &[]);
+                    w.open("wpg:grpSpPr", &[]);
+                    w.open("a:xfrm", &spin_attrs(float.spin()).iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+                    w.empty("a:off", &[("x", "0"), ("y", "0")]);
+                    w.empty("a:ext", &[("cx", &emu(gw.max(0.0))), ("cy", &emu(gh.max(0.0)))]);
+                    w.empty("a:chOff", &[("x", "0"), ("y", "0")]);
+                    w.empty("a:chExt", &[("cx", &emu(ch_w.max(0.0))), ("cy", &emu(ch_h.max(0.0)))]);
+                    w.close("a:xfrm");
+                    w.close("wpg:grpSpPr");
+                    for c in children.iter().take(wordcraft_doc::para::MAX_GROUP_CHILDREN) {
+                        let at = (c.x, c.y);
+                        match &c.obj {
+                            InlineObject::Image { media, .. } => {
+                                if let Some(file) = self.media_files.get(media).cloned() {
+                                    self.pic(w, &c.obj, &file, at, rels);
+                                }
+                            }
+                            InlineObject::Shape { .. } => {
+                                let id = self.next_docpr();
+                                self.wsp(w, &c.obj, Some(&id), at, rels, depth);
+                            }
+                            _ => {}
+                        }
+                    }
+                    w.close("wpg:wgp");
+                    w.close("a:graphicData");
                 }
-                w.close("wpg:wgp");
-                w.close("a:graphicData");
                 w.close("a:graphic");
                 w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
                 w.close("w:drawing");
@@ -597,6 +625,47 @@ impl Writer<'_> {
             }
             InlineObject::SdtEnd { .. } => {
                 w.raw("</w:sdtContent></w:sdt>");
+            }
+            InlineObject::Ruby { base, ruby, align, hps, hps_raise, hps_base_text, lid } => {
+                self.rev_open(w, props);
+                w.open("w:r", &[]);
+                self.rpr(w, props);
+                w.open("w:ruby", &[]);
+                w.open("w:rubyPr", &[]);
+                let al = if align.is_empty() { "distributeLetter" } else { align.as_str() };
+                w.empty("w:rubyAlign", &[("w:val", al)]);
+                if *hps > 0 {
+                    w.empty("w:hps", &[("w:val", &hps.to_string())]);
+                }
+                if *hps_raise > 0 {
+                    w.empty("w:hpsRaise", &[("w:val", &hps_raise.to_string())]);
+                }
+                if *hps_base_text > 0 {
+                    w.empty("w:hpsBaseText", &[("w:val", &hps_base_text.to_string())]);
+                }
+                if !lid.is_empty() {
+                    w.empty("w:lid", &[("w:val", lid)]);
+                }
+                w.close("w:rubyPr");
+                w.open("w:rt", &[]);
+                w.open("w:r", &[]);
+                let mut rt_props = props.clone();
+                if *hps > 0 {
+                    rt_props.size = Some(*hps as f32 / 2.0);
+                }
+                self.rpr(w, &rt_props);
+                w.leaf("w:t", &[("xml:space", "preserve")], ruby);
+                w.close("w:r");
+                w.close("w:rt");
+                w.open("w:rubyBase", &[]);
+                w.open("w:r", &[]);
+                self.rpr(w, props);
+                w.leaf("w:t", &[("xml:space", "preserve")], base);
+                w.close("w:r");
+                w.close("w:rubyBase");
+                w.close("w:ruby");
+                w.close("w:r");
+                self.rev_close(w, props);
             }
         }
     }
@@ -860,10 +929,25 @@ impl Writer<'_> {
             Wrap::Tight | Wrap::Through => {
                 let tag = if float.wrap == Wrap::Tight { "wp:wrapTight" } else { "wp:wrapThrough" };
                 w.open(tag, &[("wrapText", "bothSides")]);
-                w.open("wp:wrapPolygon", &[("edited", "0")]);
-                w.empty("wp:start", &[("x", "0"), ("y", "0")]);
-                for (x, y) in [("0", "21600"), ("21600", "21600"), ("21600", "0"), ("0", "0")] {
-                    w.empty("wp:lineTo", &[("x", x), ("y", y)]);
+                let edited = if float.wrap_polygon.is_some() { "1" } else { "0" };
+                w.open("wp:wrapPolygon", &[("edited", edited)]);
+                if let Some(poly) = &float.wrap_polygon
+                    && poly.len() >= 3
+                {
+                    let (sx, sy) = poly[0];
+                    let sx_str = format!("{}", (sx * 21600.0).round() as i32);
+                    let sy_str = format!("{}", (sy * 21600.0).round() as i32);
+                    w.empty("wp:start", &[("x", &sx_str), ("y", &sy_str)]);
+                    for &(px, py) in &poly[1..] {
+                        let px_str = format!("{}", (px * 21600.0).round() as i32);
+                        let py_str = format!("{}", (py * 21600.0).round() as i32);
+                        w.empty("wp:lineTo", &[("x", &px_str), ("y", &py_str)]);
+                    }
+                } else {
+                    w.empty("wp:start", &[("x", "0"), ("y", "0")]);
+                    for (x, y) in [("0", "21600"), ("21600", "21600"), ("21600", "0"), ("0", "0")] {
+                        w.empty("wp:lineTo", &[("x", x), ("y", y)]);
+                    }
                 }
                 w.close("wp:wrapPolygon");
                 w.close(tag);

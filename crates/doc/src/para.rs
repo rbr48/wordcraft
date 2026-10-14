@@ -126,7 +126,7 @@ impl FloatAlign {
 }
 
 /// Floating placement (ignored when `wrap` is `Inline`).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Float {
     pub wrap: Wrap,
@@ -158,6 +158,10 @@ pub struct Float {
     pub flip_h: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub flip_v: bool,
+    /// Custom contour wrap polygon for Tight and Through text wrapping (`wp:wrapPolygon`),
+    /// normalised coordinates 0.0..1.0 relative to object bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap_polygon: Option<std::sync::Arc<[(f32, f32)]>>,
 }
 
 fn is_zero(v: &f32) -> bool {
@@ -294,6 +298,9 @@ pub enum InlineObject {
         ch_w: f32,
         ch_h: f32,
         children: Vec<GroupChild>,
+        /// Whether this group was created as or loaded from a Drawing Canvas (`wpc:wordprocessingCanvas`).
+        #[serde(default, skip_serializing_if = "is_false")]
+        is_canvas: bool,
     },
     /// A field: `instr` is the field code (`PAGE`, `NUMPAGES`, `DATE \@ "M/d/yyyy"`, `TOC \o "1-3"`…);
     /// `result` the cached display text.
@@ -370,6 +377,32 @@ pub enum InlineObject {
         #[serde(default)]
         text: String,
     },
+    /// East Asian ruby annotation (Phonetic Guide).
+    Ruby {
+        /// Base text (e.g. "漢" or "漢字").
+        base: String,
+        /// Phonetic guide / ruby text (e.g. "かん" or "かんじ").
+        ruby: String,
+        /// Alignment: "distributeLetter", "distributeSpace", "center", "left", "right".
+        #[serde(default = "default_ruby_align")]
+        align: String,
+        /// Font size of ruby text in half-points (0 = automatic).
+        #[serde(default)]
+        hps: u32,
+        /// Raise distance above baseline in half-points (0 = automatic).
+        #[serde(default)]
+        hps_raise: u32,
+        /// Base text font size in half-points (0 = automatic).
+        #[serde(default)]
+        hps_base_text: u32,
+        /// Language ID (e.g. "ja-JP", "zh-CN").
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        lid: String,
+    },
+}
+
+fn default_ruby_align() -> String {
+    "distributeLetter".to_string()
 }
 
 /// One member of an [`InlineObject::Group`]: a picture or shape (its own `w`, `h` and story), at
@@ -390,6 +423,10 @@ impl InlineObject {
     pub fn is_drawing(&self) -> bool {
         matches!(self, InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })
     }
+    /// Whether this object is a Drawing Canvas (`wpc:wordprocessingCanvas`).
+    pub fn is_canvas(&self) -> bool {
+        matches!(self, InlineObject::Group { is_canvas: true, .. })
+    }
     /// A drawing's size and placement.
     pub fn frame(&self) -> Option<(f32, f32, &Float)> {
         match self {
@@ -399,6 +436,10 @@ impl InlineObject {
             | InlineObject::Group { w, h, float, .. } => Some((*w, *h, float)),
             _ => None,
         }
+    }
+    /// A drawing's placement.
+    pub fn float(&self) -> Option<&Float> {
+        self.frame().map(|(_, _, f)| f)
     }
     /// A drawing's placement, to change.
     pub fn float_mut(&mut self) -> Option<&mut Float> {
@@ -497,12 +538,17 @@ impl InlineObject {
             _ => None,
         }
     }
+    /// Whether this object is an East Asian ruby annotation (Phonetic Guide).
+    pub fn is_ruby(&self) -> bool {
+        matches!(self, InlineObject::Ruby { .. })
+    }
     /// The text this object contributes to plain-text extraction.
     pub fn plain_text(&self) -> &str {
         match self {
             InlineObject::Field { result, .. } => result,
             InlineObject::Equation { linear, .. } => linear,
             InlineObject::Opaque { text, .. } => text,
+            InlineObject::Ruby { base, .. } => base,
             _ => "",
         }
     }

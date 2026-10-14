@@ -9,7 +9,7 @@ use wordcraft_doc::text_effects::{
 };
 
 use super::sel_result;
-use crate::{CmdError, CmdResult, CommandSpec, Session, p};
+use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 /// Word's font size list.
 pub const SIZES: [f32; 17] = [8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
@@ -148,22 +148,197 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+D")
         .pure(),
-        CommandSpec::new("format.phonetic", "Phonetic Guide", "Home › Font", phonetic).params(r#"{"ruby"?: string}"#),
-        CommandSpec::new("format.enclose", "Enclose Characters", "Home › Font", enclose).params(r#"{"shape"?: "circle|square|triangle"}"#),
+        CommandSpec::new("format.phonetic", "Phonetic Guide", "Home › Font", phonetic)
+            .params(r#"{"ruby"?: string, "align"?: string, "hps"?: number, "hpsRaise"?: number, "hpsBaseText"?: number, "lid"?: string}"#),
+        CommandSpec::new("format.enclose", "Enclose Characters", "Home › Font", enclose)
+            .params(r#"{"shape"?: "circle|square|triangle|diamond|none"}"#),
         CommandSpec::new("format.state", "Formatting at Selection", "Home › Font", |s, _| Ok(state(s))).pure(),
     ]
 }
 
 fn phonetic(s: &mut Session, v: &Value) -> CmdResult {
-    let ruby = v.get("ruby").and_then(Value::as_str).unwrap_or("");
-    let sel = s.selected_text();
-    Ok(json!({"baseText": sel, "ruby": ruby}))
+    let sel_text = s.selected_text();
+    let pos = s.sel.focus.clone();
+    let existing_ruby = s.doc.para_at(&pos).and_then(|p| {
+        p.objects.iter().find_map(|o| match o {
+            wordcraft_doc::para::InlineObject::Ruby { base, ruby, align, hps, hps_raise, hps_base_text, lid } => {
+                Some((base.clone(), ruby.clone(), align.clone(), *hps, *hps_raise, *hps_base_text, lid.clone()))
+            }
+            _ => None,
+        })
+    });
+
+    if let Some(ruby_str) = v.get("ruby").and_then(Value::as_str) {
+        if ruby_str.is_empty() || ruby_str == "none" {
+            if let Some((base, ..)) = existing_ruby {
+                let _ = s.doc.delete_range(&s.sel.anchor, &s.sel.focus);
+                let _ = s.doc.insert_text(&s.sel.focus, &base, &Default::default());
+                return Ok(json!({"baseText": base, "ruby": ""}));
+            }
+            return Ok(json!({"baseText": sel_text, "ruby": ""}));
+        }
+
+        let base = if !sel_text.is_empty() {
+            sel_text
+        } else if let Some((b, ..)) = existing_ruby {
+            b
+        } else {
+            return Err(CmdError::Failed("No text selected for Phonetic Guide".to_string()));
+        };
+
+        let align = v.get("align").and_then(Value::as_str).unwrap_or("distributeLetter");
+        let hps = v.get("hps").and_then(Value::as_u64).unwrap_or(0) as u32;
+        let hps_raise = v.get("hpsRaise").and_then(Value::as_u64).unwrap_or(0) as u32;
+        let hps_base_text = v.get("hpsBaseText").and_then(Value::as_u64).unwrap_or(0) as u32;
+        let lid = v.get("lid").and_then(Value::as_str).unwrap_or("");
+
+        let (a, b) = s.sel.ordered();
+        if a != b {
+            let _ = s.doc.delete_range(&a, &b);
+            s.sel = Selection::caret(a);
+        }
+
+        let obj = wordcraft_doc::para::InlineObject::Ruby {
+            base: base.clone(),
+            ruby: ruby_str.to_string(),
+            align: align.to_string(),
+            hps,
+            hps_raise,
+            hps_base_text,
+            lid: lid.to_string(),
+        };
+        let _ = s.doc.insert_object(&s.sel.focus, obj, &Default::default());
+        Ok(json!({"baseText": base, "ruby": ruby_str, "align": align, "hps": hps, "hpsRaise": hps_raise}))
+    } else {
+        if let Some((base, ruby, align, hps, hps_raise, hps_base_text, lid)) = existing_ruby {
+            Ok(json!({
+                "baseText": base,
+                "ruby": ruby,
+                "align": align,
+                "hps": hps,
+                "hpsRaise": hps_raise,
+                "hpsBaseText": hps_base_text,
+                "lid": lid,
+            }))
+        } else {
+            Ok(json!({
+                "baseText": sel_text,
+                "ruby": "",
+                "align": "distributeLetter",
+                "hps": 0,
+                "hpsRaise": 0,
+            }))
+        }
+    }
+}
+
+fn unicode_enclosed(text: &str, shape: &str) -> Option<String> {
+    if shape == "circle" {
+        match text {
+            "0" => Some("⓪".into()),
+            "1" => Some("①".into()),
+            "2" => Some("②".into()),
+            "3" => Some("③".into()),
+            "4" => Some("④".into()),
+            "5" => Some("⑤".into()),
+            "6" => Some("⑥".into()),
+            "7" => Some("⑦".into()),
+            "8" => Some("⑧".into()),
+            "9" => Some("⑨".into()),
+            "10" => Some("⑩".into()),
+            "11" => Some("⑪".into()),
+            "12" => Some("⑫".into()),
+            "13" => Some("⑬".into()),
+            "14" => Some("⑭".into()),
+            "15" => Some("⑮".into()),
+            "16" => Some("⑯".into()),
+            "17" => Some("⑰".into()),
+            "18" => Some("⑱".into()),
+            "19" => Some("⑲".into()),
+            "20" => Some("⑳".into()),
+            "A" => Some("Ⓐ".into()),
+            "B" => Some("Ⓑ".into()),
+            "C" => Some("Ⓒ".into()),
+            "D" => Some("Ⓓ".into()),
+            "E" => Some("Ⓔ".into()),
+            "F" => Some("Ⓕ".into()),
+            "G" => Some("Ⓖ".into()),
+            "H" => Some("Ⓗ".into()),
+            "I" => Some("Ⓘ".into()),
+            "J" => Some("Ⓙ".into()),
+            "K" => Some("Ⓚ".into()),
+            "L" => Some("Ⓛ".into()),
+            "M" => Some("Ⓜ".into()),
+            "N" => Some("Ⓝ".into()),
+            "O" => Some("Ⓞ".into()),
+            "P" => Some("Ⓟ".into()),
+            "Q" => Some("Ⓠ".into()),
+            "R" => Some("Ⓡ".into()),
+            "S" => Some("Ⓢ".into()),
+            "T" => Some("Ⓣ".into()),
+            "U" => Some("Ⓤ".into()),
+            "V" => Some("Ⓥ".into()),
+            "W" => Some("Ⓦ".into()),
+            "X" => Some("Ⓧ".into()),
+            "Y" => Some("Ⓨ".into()),
+            "Z" => Some("Ⓩ".into()),
+            "a" => Some("ⓐ".into()),
+            "b" => Some("ⓑ".into()),
+            "c" => Some("ⓒ".into()),
+            "d" => Some("ⓓ".into()),
+            "e" => Some("ⓔ".into()),
+            "f" => Some("ⓕ".into()),
+            "g" => Some("ⓖ".into()),
+            "h" => Some("ⓗ".into()),
+            "i" => Some("ⓘ".into()),
+            "j" => Some("ⓙ".into()),
+            "k" => Some("ⓚ".into()),
+            "l" => Some("ⓛ".into()),
+            "m" => Some("ⓜ".into()),
+            "n" => Some("ⓝ".into()),
+            "o" => Some("ⓞ".into()),
+            "p" => Some("ⓟ".into()),
+            "q" => Some("ⓠ".into()),
+            "r" => Some("ⓡ".into()),
+            "s" => Some("ⓢ".into()),
+            "t" => Some("ⓣ".into()),
+            "u" => Some("ⓤ".into()),
+            "v" => Some("ⓥ".into()),
+            "w" => Some("ⓦ".into()),
+            "x" => Some("ⓧ".into()),
+            "y" => Some("ⓨ".into()),
+            "z" => Some("ⓩ".into()),
+            _ => None,
+        }
+    } else {
+        None
+    }
 }
 
 fn enclose(s: &mut Session, v: &Value) -> CmdResult {
     let shape = v.get("shape").and_then(Value::as_str).unwrap_or("circle");
     let sel = s.selected_text();
-    Ok(json!({"text": sel, "shape": shape}))
+    if sel.is_empty() {
+        return Err(CmdError::Failed("No text selected to enclose".to_string()));
+    }
+    let sym = match shape {
+        "square" => "□",
+        "triangle" => "△",
+        "diamond" => "◇",
+        "none" => "",
+        _ => "○",
+    };
+    if shape == "none" {
+        return Ok(json!({"text": sel, "shape": "none"}));
+    }
+    let result = unicode_enclosed(&sel, shape).unwrap_or_else(|| format!("{sym}{sel}"));
+    let instr = format!("EQ \\o\\ac({sym},{sel})");
+    let (a, b) = s.sel.ordered();
+    let _ = s.doc.delete_range(&a, &b);
+    s.sel = Selection::caret(a);
+    let obj = wordcraft_doc::para::InlineObject::Field { instr, result: result.clone(), locked: false };
+    let _ = s.doc.insert_object(&s.sel.focus, obj, &Default::default());
+    Ok(json!({"text": sel, "shape": shape, "result": result}))
 }
 
 /// The selection to format: the selection, or the word around a collapsed caret (Word

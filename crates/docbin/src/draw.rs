@@ -594,7 +594,7 @@ fn build_inline_object(
             if group_children.is_empty() {
                 return None;
             }
-            Some(InlineObject::Group { w, h, float, ch_w, ch_h, children: group_children })
+            Some(InlineObject::Group { w, h, float, ch_w, ch_h, children: group_children, is_canvas: false })
         }
         DrawNode::Shape { inst, flip_h, flip_v, rot, pib, txid, fill_color, no_fill, line_color, line_width, no_line, hidden, .. } => {
             if *hidden {

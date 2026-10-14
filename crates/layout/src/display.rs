@@ -815,6 +815,76 @@ fn lines(
                 _ => {}
             }
         }
+        // Ruby annotations (Phonetic Guide furigana/pinyin above base text).
+        for (rk, ruby) in &pl.rubies {
+            if *rk >= line.c0 && *rk < line.c1 {
+                let Some(cx) = line.cl_left(*rk) else { continue };
+                let Some(nx) = line.cl_right(*rk) else { continue };
+                let cw = (nx - cx).max(0.0);
+                let Some(st) = pl.styles.get(ruby.style as usize) else { continue };
+                let face = st.face;
+                let size = ruby.ruby_size;
+                let mut rglyphs = Vec::new();
+                let mut rx = 0.0;
+                let upem = face.upem.max(1.0) as f32;
+                for ch in ruby.ruby.chars() {
+                    let gid = face.glyph_for(ch);
+                    let adv = face.advance(gid) as f32 * size / upem;
+                    rglyphs.push((gid, rx, adv));
+                    rx += adv;
+                }
+                let total_rw = rx;
+                let base_x = x + cx;
+                if (ruby.align == "distributeLetter" || ruby.align == "distributeSpace") && rglyphs.len() > 1 && cw > total_rw {
+                    let extra = (cw - total_rw) / (rglyphs.len() as f32);
+                    let mut cur_x = base_x + extra / 2.0;
+                    let positioned: Vec<(u32, f32, f32)> = rglyphs
+                        .iter()
+                        .map(|&(gid, _, adv)| {
+                            let gx = cur_x;
+                            cur_x += adv + extra;
+                            (gid, gx, base - st.shift - ruby.raise)
+                        })
+                        .collect();
+                    out.push(Draw::Glyphs {
+                        face,
+                        size,
+                        glyphs: positioned,
+                        color: text_color(&st.rc.color, None),
+                        alpha,
+                        synth_bold: st.synth_bold,
+                        synth_italic: st.synth_italic,
+                        text: ruby.ruby.clone(),
+                        link: None,
+                        ranges: Vec::new(),
+                        // A phonetic guide is drawn plain: the base text's WordArt effects do not reach it.
+                        effects: Default::default(),
+                    });
+                } else {
+                    let ruby_start_x = match ruby.align.as_str() {
+                        "right" => base_x + (cw - total_rw).max(0.0),
+                        "left" => base_x,
+                        _ => base_x + ((cw - total_rw) / 2.0).max(0.0),
+                    };
+                    let positioned: Vec<(u32, f32, f32)> =
+                        rglyphs.iter().map(|&(gid, gx, _)| (gid, ruby_start_x + gx, base - st.shift - ruby.raise)).collect();
+                    out.push(Draw::Glyphs {
+                        face,
+                        size,
+                        glyphs: positioned,
+                        color: text_color(&st.rc.color, None),
+                        alpha,
+                        synth_bold: st.synth_bold,
+                        synth_italic: st.synth_italic,
+                        text: ruby.ruby.clone(),
+                        link: None,
+                        ranges: Vec::new(),
+                        // A phonetic guide is drawn plain: the base text's WordArt effects do not reach it.
+                        effects: Default::default(),
+                    });
+                }
+            }
+        }
         // Formatting marks.
         if opts.marks {
             let msize = pl.styles.first().map(|s| s.size).unwrap_or(11.0);

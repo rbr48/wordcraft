@@ -6,7 +6,7 @@ use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph};
 
-const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
+const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
 
 const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
@@ -600,7 +600,8 @@ fn anchor_alignment_reference_areas_and_distances() {
     );
     let d = read_body(&body);
     let p = paras(&d);
-    let floats: Vec<_> = p[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(*float) } else { None }).collect();
+    let floats: Vec<_> =
+        p[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(float.clone()) } else { None }).collect();
     let [a, b] = floats.as_slice() else { panic!("{floats:?}") };
     assert_eq!((a.h_rel, a.h_align, a.v_rel, a.v_align, a.y), (Anchor::Margin, Some(FloatAlign::Center), Anchor::TopMargin, None, -1.0));
     assert_eq!((a.dist, a.dist_top, a.dist_bottom), (9.0, 2.0, 4.0));
@@ -662,7 +663,9 @@ fn absolute_vml_text_box_in_header_floats() {
             .iter()
             .filter_map(|b| b.as_para())
             .flat_map(|p| &p.objects)
-            .filter_map(|o| if let InlineObject::Shape { kind, w, h, float, story, .. } = o { Some((*kind, *w, *h, *float, *story)) } else { None })
+            .filter_map(|o| {
+                if let InlineObject::Shape { kind, w, h, float, story, .. } = o { Some((*kind, *w, *h, float.clone(), *story)) } else { None }
+            })
             .collect();
         let [(k0, w0, h0, f0, s0), (_, w1, h1, f1, _), (_, _, _, f2, _), (_, _, _, f3, _)] = shapes.as_slice() else { panic!("{shapes:?}") };
         assert_eq!(*k0, ShapeKind::TextBox);
@@ -951,7 +954,7 @@ fn word_group_with_nested_group() {
 </wpg:grpSp></wpg:wgp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict/></mc:Fallback></mc:AlternateContent></w:r></w:p>"#;
     let d = read_body(body);
     let p = paras(&d);
-    let InlineObject::Group { w, h, float, ch_w, ch_h, children } = &p[0].objects[0] else { panic!("{:?}", p[0].objects) };
+    let InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } = &p[0].objects[0] else { panic!("{:?}", p[0].objects) };
     assert_eq!((*w, *h, *ch_w, *ch_h), (200.0, 100.0, 200.0, 100.0));
     assert_eq!(float.wrap, Wrap::Square);
     let got: Vec<(f32, f32, ShapeKind, f32, f32)> = children
@@ -1171,4 +1174,40 @@ fn path_gradient_text_fill_keeps_the_run_colour() {
     let props = &p.runs[0].props;
     assert_eq!(props.color, Some(TextColor::Rgb(Rgb(0x11, 0x22, 0x33))), "the run's own colour");
     assert!(props.text_effects.and_then(|e| e.fill).is_none(), "no linear gradient from a path gradient");
+}
+
+/// Gap #2: Word saves ink in `mc:AlternateContent` with `mc:Choice Requires="w14"` containing
+/// `<w14:contentPart>` and `mc:Fallback` containing a drawing of the rendered ink shape.
+/// WordCraft selects the fallback drawing so ink is never lost or dropped.
+#[test]
+fn word_ink_alternate_content_fallback() {
+    let body = r#"<w:p><w:r><mc:AlternateContent><mc:Choice Requires="w14"><w14:contentPart r:id="rId1"/></mc:Choice><mc:Fallback><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="1270000" cy="635000"/><wp:docPr id="5" name="Ink 5"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Fallback></mc:AlternateContent></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p[0].objects.len(), 1, "ink fallback drawing must be loaded");
+    match &p[0].objects[0] {
+        InlineObject::Shape { kind, w, h, .. } => {
+            assert_eq!(*kind, ShapeKind::Rectangle);
+            assert_eq!((*w, *h), (100.0, 50.0));
+        }
+        o => panic!("unexpected object: {o:?}"),
+    }
+}
+
+/// Gap #2: A Word Drawing Canvas (`wpc:wordprocessingCanvas`) in body XML is loaded as an
+/// `InlineObject::Group` with `is_canvas: true`.
+#[test]
+fn word_drawing_canvas_fixture() {
+    let body = r#"<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="2540000" cy="1270000"/><wp:docPr id="10" name="Canvas 10"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"><wpc:wordprocessingCanvas><wpc:bg><wpc:spPr><a:solidFill><a:srgbClr val="F0F0F0"/></a:solidFill></wpc:spPr></wpc:bg><wpc:whole/><wps:wsp><wps:cNvPr id="11" name="Star 11"/><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="127000" y="127000"/><a:ext cx="635000" cy="635000"/></a:xfrm><a:prstGeom prst="star5"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp></wpc:wordprocessingCanvas></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p[0].objects.len(), 1, "canvas must be loaded");
+    let InlineObject::Group { w, h, children, is_canvas, .. } = &p[0].objects[0] else {
+        panic!("expected group: {:?}", p[0].objects);
+    };
+    assert!(*is_canvas);
+    assert_eq!((*w, *h), (200.0, 100.0));
+    assert_eq!(children.len(), 2);
+    assert_eq!(children[0].obj.frame().map(|(w, h, _)| (w, h)), Some((200.0, 100.0)));
+    assert_eq!(children[1].obj.frame().map(|(w, h, _)| (w, h)), Some((50.0, 50.0)));
 }

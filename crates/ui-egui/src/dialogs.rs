@@ -453,6 +453,37 @@ pub enum Dialog {
         selected_index: Option<usize>,
         targets: Vec<String>,
     },
+    /// Home › Font › Phonetic Guide
+    Phonetic {
+        base_text: String,
+        ruby_text: String,
+        alignment: String,
+        font_size: f32,
+        raise: f32,
+    },
+    /// Home › Font › Enclose Characters
+    Enclose {
+        text: String,
+        shape: String,
+    },
+    /// Insert › Text › WordArt
+    WordArt {
+        text: String,
+        selected: usize,
+    },
+    /// Mailings › Create › Envelopes and Labels
+    EnvelopesLabels {
+        tab: u8,
+        delivery: String,
+        return_addr: String,
+        omit_return: bool,
+        size: String,
+        label_text: String,
+        rows: u32,
+        cols: u32,
+        from_recipients: bool,
+        label_preset: usize,
+    },
 }
 
 /// Standard world languages matching Microsoft Word proofing language list (name, BCP-47 tag).
@@ -942,6 +973,10 @@ impl Dialog {
             Dialog::PageNumbers { .. } => "pageNumbers",
             Dialog::AutoCorrect { .. } => "autocorrect",
             Dialog::CrossReference { .. } => "crossReference",
+            Dialog::Phonetic { .. } => "phonetic",
+            Dialog::Enclose { .. } => "enclose",
+            Dialog::WordArt { .. } => "wordArt",
+            Dialog::EnvelopesLabels { .. } => "envelopesLabels",
         }
     }
 
@@ -1260,6 +1295,51 @@ impl Dialog {
                 let selected_index = if targets.is_empty() { None } else { Some(0) };
                 Dialog::CrossReference { ref_type, insert_as: "text".to_string(), as_hyperlink: true, selected_index, targets }
             }
+            "phonetic" => {
+                let sel = app.session.selected_text();
+                let q = app.session.run("format.phonetic", &json!({})).unwrap_or(json!({}));
+                let base = q.get("baseText").and_then(Value::as_str).unwrap_or(&sel).to_string();
+                let ruby = q.get("ruby").and_then(Value::as_str).unwrap_or("").to_string();
+                let align = q.get("align").and_then(Value::as_str).unwrap_or("distributeLetter").to_string();
+                let font_size = q.get("hps").and_then(Value::as_f64).filter(|h| *h > 0.0).map(|h| (h / 2.0) as f32).unwrap_or(10.0);
+                let raise = q.get("hpsRaise").and_then(Value::as_f64).map(|h| (h / 2.0) as f32).unwrap_or(0.0);
+                Dialog::Phonetic { base_text: base, ruby_text: ruby, alignment: align, font_size, raise }
+            }
+            "enclose" => {
+                let sel = app.session.selected_text();
+                Dialog::Enclose { text: sel, shape: "circle".to_string() }
+            }
+            "wordArt" => {
+                let sel = app.session.selected_text();
+                let text = if sel.is_empty() { "Your text here".to_string() } else { sel };
+                Dialog::WordArt { text, selected: 0 }
+            }
+            "envelopes" | "labels" | "envelopesLabels" => {
+                let tab = if name == "labels" { 1 } else { 0 };
+                let sel = app.session.selected_text();
+                let m = &app.session.merge;
+                let delivery = if !sel.is_empty() {
+                    sel
+                } else if !m.rows.is_empty() {
+                    wordcraft_engine::cmd::mailings::address_block(&app.session, m.record)
+                } else {
+                    "Recipient Name\nStreet Address\nCity, ST 00000".to_string()
+                };
+                let label_text = delivery.clone();
+                let from_recipients = !m.rows.is_empty();
+                Dialog::EnvelopesLabels {
+                    tab,
+                    delivery,
+                    return_addr: String::new(),
+                    omit_return: false,
+                    size: "Envelope #10".to_string(),
+                    label_text,
+                    rows: 10,
+                    cols: 3,
+                    from_recipients,
+                    label_preset: 0,
+                }
+            }
             _ => return None,
         })
     }
@@ -1400,6 +1480,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::PageNumbers { .. } => "Page Number Format",
         Dialog::AutoCorrect { .. } => "AutoCorrect",
         Dialog::CrossReference { .. } => "Cross-reference",
+        Dialog::Phonetic { .. } => "Phonetic Guide",
+        Dialog::Enclose { .. } => "Enclose Characters",
+        Dialog::WordArt { .. } => "WordArt Gallery",
+        Dialog::EnvelopesLabels { .. } => "Envelopes and Labels",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -1408,7 +1492,11 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0))
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.set_min_width(340.0);
+            if matches!(d, Dialog::EnvelopesLabels { .. }) {
+                ui.set_min_width(480.0);
+            } else {
+                ui.set_min_width(340.0);
+            }
             close = body(app, ui, &mut d);
         });
     if open && !close {
@@ -3373,6 +3461,413 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             close
         }
+        Dialog::Phonetic { base_text, ruby_text, alignment, font_size, raise } => {
+            egui::Grid::new("phonetic_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Base text:"));
+                ui.add(egui::TextEdit::singleline(base_text).desired_width(180.0));
+                ui.end_row();
+
+                ui.label(tl!("Ruby text:"));
+                ui.add(egui::TextEdit::singleline(ruby_text).desired_width(180.0));
+                ui.end_row();
+
+                ui.label(tl!("Alignment:"));
+                let align_lbl = match alignment.as_str() {
+                    "distributeSpace" => "1-2-1 (0:1:0)",
+                    "center" => "Centered",
+                    "left" => "Left",
+                    "right" => "Right",
+                    _ => "Distribute Letter (0:1:1)",
+                };
+                egui::ComboBox::from_id_salt("phonetic_align").selected_text(tl!(align_lbl)).width(180.0).show_ui(ui, |ui| {
+                    ui.selectable_value(alignment, "distributeLetter".to_string(), tl!("Distribute Letter (0:1:1)"));
+                    ui.selectable_value(alignment, "distributeSpace".to_string(), tl!("1-2-1 (0:1:0)"));
+                    ui.selectable_value(alignment, "center".to_string(), tl!("Centered"));
+                    ui.selectable_value(alignment, "left".to_string(), tl!("Left"));
+                    ui.selectable_value(alignment, "right".to_string(), tl!("Right"));
+                });
+                ui.end_row();
+
+                ui.label(tl!("Size:"));
+                ui.add(egui::DragValue::new(font_size).range(4.0..=72.0).speed(0.5).suffix(" pt"));
+                ui.end_row();
+
+                ui.label(tl!("Offset:"));
+                ui.add(egui::DragValue::new(raise).range(0.0..=36.0).speed(0.5).suffix(" pt"));
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(tl!("Preview:"));
+                ui.vertical_centered(|ui| {
+                    ui.label(egui::RichText::new(&*ruby_text).size((*font_size).max(6.0)).weak());
+                    ui.label(egui::RichText::new(&*base_text).size(16.0));
+                });
+            });
+            ui.add_space(8.0);
+            let mut close = false;
+            ui.horizontal(|ui| {
+                let can_apply = !base_text.trim().is_empty() && !ruby_text.trim().is_empty();
+                if ui
+                    .add_enabled(
+                        can_apply,
+                        egui::Button::new(egui::RichText::new(tl!("OK")).color(egui::Color32::WHITE)).fill(crate::theme::APP_COLOR),
+                    )
+                    .clicked()
+                {
+                    let hps = (*font_size * 2.0).round() as u32;
+                    let hps_raise = (*raise * 2.0).round() as u32;
+                    let _ = app.run(
+                        "format.phonetic",
+                        json!({
+                            "ruby": ruby_text,
+                            "align": alignment,
+                            "hps": hps,
+                            "hpsRaise": hps_raise,
+                        }),
+                    );
+                    close = true;
+                }
+                if ui.button(tl!("Remove")).clicked() {
+                    let _ = app.run("format.phonetic", json!({"ruby": ""}));
+                    close = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        close = true;
+                    }
+                });
+            });
+            close
+        }
+        Dialog::Enclose { text, shape } => {
+            egui::Grid::new("enclose_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Text:"));
+                ui.add(egui::TextEdit::singleline(text).desired_width(120.0));
+                ui.end_row();
+
+                ui.label(tl!("Enclosure:"));
+                ui.vertical(|ui| {
+                    ui.radio_value(shape, "none".to_string(), tl!("None"));
+                    ui.radio_value(shape, "circle".to_string(), tl!("○ Circle"));
+                    ui.radio_value(shape, "square".to_string(), tl!("□ Square"));
+                    ui.radio_value(shape, "triangle".to_string(), tl!("△ Triangle"));
+                    ui.radio_value(shape, "diamond".to_string(), tl!("◇ Diamond"));
+                });
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(tl!("Preview:"));
+                ui.vertical_centered(|ui| {
+                    let sym = match shape.as_str() {
+                        "square" => "□",
+                        "triangle" => "△",
+                        "diamond" => "◇",
+                        "none" => "",
+                        _ => "○",
+                    };
+                    let display = if shape == "none" { text.clone() } else { format!("{sym}{text}") };
+                    ui.label(egui::RichText::new(display).size(22.0));
+                });
+            });
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                let _ = app.run("format.enclose", json!({"shape": shape}));
+            }
+            ok || cancel
+        }
+        Dialog::WordArt { text, selected } => {
+            ui.horizontal(|ui| {
+                ui.label(tl!("Text:"));
+                ui.add(egui::TextEdit::singleline(text).desired_width(260.0));
+            });
+            ui.add_space(8.0);
+            ui.label(tl!("Select a WordArt style:"));
+            ui.add_space(4.0);
+
+            egui::Grid::new("wordart_gallery_grid").spacing(vec2(8.0, 8.0)).show(ui, |ui| {
+                for (idx, style) in wordcraft_engine::cmd::wordart::WORDART_STYLES.iter().enumerate() {
+                    let is_sel = *selected == idx;
+                    let (r, g, b) = (style.color.0, style.color.1, style.color.2);
+                    let text_color = egui::Color32::from_rgb(r, g, b);
+                    let bg_color = if is_sel { egui::Color32::from_rgba_unmultiplied(r, g, b, 35) } else { ui.visuals().faint_bg_color };
+                    let stroke = if is_sel {
+                        egui::Stroke::new(2.0, text_color)
+                    } else {
+                        egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
+                    };
+
+                    let (rect, resp) = ui.allocate_exact_size(vec2(54.0, 48.0), Sense::click());
+                    if resp.clicked() {
+                        *selected = idx;
+                    }
+
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        painter.rect_filled(rect, 4.0, bg_color);
+                        painter.rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Inside);
+
+                        let font_id = egui::FontId::proportional(24.0);
+                        let center = rect.center() - vec2(0.0, 4.0);
+
+                        if style.shadow_shape.is_some() || style.shadow_char {
+                            painter.text(
+                                center + vec2(1.5, 1.5),
+                                egui::Align2::CENTER_CENTER,
+                                "A",
+                                font_id.clone(),
+                                egui::Color32::from_rgba_unmultiplied(128, 128, 128, 110),
+                            );
+                        } else if let Some(glow) = &style.glow {
+                            let (gr, gg, gb) = (glow.color.0, glow.color.1, glow.color.2);
+                            painter.text(
+                                center,
+                                egui::Align2::CENTER_CENTER,
+                                "A",
+                                egui::FontId::proportional(26.0),
+                                egui::Color32::from_rgba_unmultiplied(gr, gg, gb, 90),
+                            );
+                        }
+
+                        painter.text(center, egui::Align2::CENTER_CENTER, "A", font_id, text_color);
+
+                        painter.text(
+                            rect.center_bottom() - vec2(0.0, 2.0),
+                            egui::Align2::CENTER_BOTTOM,
+                            format!("{}", idx + 1),
+                            egui::FontId::proportional(9.0),
+                            ui.visuals().text_color(),
+                        );
+                    }
+
+                    if (idx + 1) % 5 == 0 {
+                        ui.end_row();
+                    }
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                let cur_idx = (*selected).min(14);
+                let cur_style = &wordcraft_engine::cmd::wordart::WORDART_STYLES[cur_idx];
+                ui.label(format!("{}: {}", tl!("Preset"), tl!(cur_style.name)));
+                ui.vertical_centered(|ui| {
+                    let (r, g, b) = (cur_style.color.0, cur_style.color.1, cur_style.color.2);
+                    let preview_text = if text.trim().is_empty() { "Your text here" } else { text.as_str() };
+                    let mut rich = egui::RichText::new(preview_text).size(20.0).color(egui::Color32::from_rgb(r, g, b));
+                    if cur_style.bold {
+                        rich = rich.strong();
+                    }
+                    if cur_style.italic {
+                        rich = rich.italics();
+                    }
+                    ui.label(rich);
+                });
+            });
+
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                let _ = app.run(
+                    "insert.wordArt",
+                    json!({
+                        "text": text,
+                        "preset": *selected,
+                    }),
+                );
+            }
+            ok || cancel
+        }
+        Dialog::EnvelopesLabels { tab, delivery, return_addr, omit_return, size, label_text, rows, cols, from_recipients, label_preset } => {
+            ui.horizontal(|ui| {
+                if ui.selectable_label(*tab == 0, tl!("Envelopes")).clicked() {
+                    *tab = 0;
+                }
+                if ui.selectable_label(*tab == 1, tl!("Labels")).clicked() {
+                    *tab = 1;
+                }
+            });
+            ui.separator();
+            ui.add_space(4.0);
+
+            if *tab == 0 {
+                ui.label(egui::RichText::new(tl!("Delivery address:")).strong());
+                ui.add(egui::TextEdit::multiline(delivery).desired_rows(4).desired_width(450.0));
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("Return address:")).strong());
+                    ui.checkbox(omit_return, tl!("Omit"));
+                });
+                if !*omit_return {
+                    ui.add(egui::TextEdit::multiline(return_addr).desired_rows(3).desired_width(450.0));
+                }
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Envelope size:"));
+                    egui::ComboBox::from_id_salt("envelope_size_combo").selected_text(tl!(size.as_str())).show_ui(ui, |ui| {
+                        for (name, id) in [
+                            ("Envelope #10 (4 1/8 x 9 1/2 in)", "Envelope #10"),
+                            ("Envelope DL (110 x 220 mm)", "Envelope DL"),
+                            ("Envelope Monarch (3 7/8 x 7 1/2 in)", "Envelope Monarch"),
+                            ("Envelope C5 (162 x 229 mm)", "Envelope C5"),
+                            ("Envelope B5 (176 x 250 mm)", "Envelope B5"),
+                        ] {
+                            ui.selectable_value(size, id.to_string(), tl!(name));
+                        }
+                    });
+                });
+
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new(tl!("Preview")).font(semibold(11.0)));
+                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 70.0), Sense::hover());
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        let bg = ui.visuals().faint_bg_color;
+                        let border_stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+                        painter.rect_filled(rect, 4.0, bg);
+                        painter.rect_stroke(rect, 4.0, border_stroke, egui::StrokeKind::Inside);
+
+                        let stamp_rect = egui::Rect::from_min_size(egui::pos2(rect.right() - 24.0, rect.top() + 8.0), vec2(16.0, 20.0));
+                        painter.rect_stroke(
+                            stamp_rect,
+                            1.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 180, 180)),
+                            egui::StrokeKind::Inside,
+                        );
+
+                        if !*omit_return && !return_addr.is_empty() {
+                            let text = return_addr.lines().take(3).collect::<Vec<_>>().join("\n");
+                            painter.text(
+                                egui::pos2(rect.left() + 10.0, rect.top() + 8.0),
+                                egui::Align2::LEFT_TOP,
+                                text,
+                                egui::FontId::proportional(8.5),
+                                ui.visuals().text_color(),
+                            );
+                        }
+
+                        let deliv_lines = delivery.lines().take(4).collect::<Vec<_>>().join("\n");
+                        painter.text(
+                            egui::pos2(rect.center().x - 20.0, rect.center().y - 10.0),
+                            egui::Align2::LEFT_TOP,
+                            deliv_lines,
+                            egui::FontId::proportional(9.5),
+                            ui.visuals().text_color(),
+                        );
+                    }
+                });
+
+                let (ok, cancel) = buttons(ui, tl!("Add to Document"));
+                if ok {
+                    let ret = if *omit_return { "" } else { return_addr.as_str() };
+                    let _ = app.run(
+                        "mailings.envelopes",
+                        json!({
+                            "delivery": delivery,
+                            "return": ret,
+                            "size": size,
+                        }),
+                    );
+                }
+                ok || cancel
+            } else {
+                ui.label(egui::RichText::new(tl!("Address:")).strong());
+                ui.add(egui::TextEdit::multiline(label_text).desired_rows(4).desired_width(450.0));
+                ui.add_space(8.0);
+
+                if !app.session.merge.rows.is_empty() {
+                    ui.checkbox(from_recipients, tl!("Use mail merge recipients (generate full sheet for recipient list)"));
+                    ui.add_space(4.0);
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Label product:"));
+                    let presets: &[(&str, u32, u32)] = &[
+                        ("Avery 5160 - Address (30 per page: 3 cols × 10 rows)", 10, 3),
+                        ("Avery 5161 - Address (20 per page: 2 cols × 10 rows)", 10, 2),
+                        ("Avery 5162 - Address (14 per page: 2 cols × 7 rows)", 7, 2),
+                        ("Avery 5163 - Shipping (10 per page: 2 cols × 5 rows)", 5, 2),
+                        ("Avery 5164 - Shipping (6 per page: 2 cols × 3 rows)", 3, 2),
+                        ("Custom Label Grid", *rows, *cols),
+                    ];
+                    let cur_name = presets.get(*label_preset).map(|p| p.0).unwrap_or("Custom");
+                    egui::ComboBox::from_id_salt("label_preset_combo").selected_text(tl!(cur_name)).show_ui(ui, |ui| {
+                        for (idx, (p_name, r, c)) in presets.iter().enumerate() {
+                            if ui.selectable_label(*label_preset == idx, tl!(*p_name)).clicked() {
+                                *label_preset = idx;
+                                if idx < 5 {
+                                    *rows = *r;
+                                    *cols = *c;
+                                }
+                            }
+                        }
+                    });
+                });
+
+                if *label_preset == 5 {
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Rows:"));
+                        ui.add(egui::DragValue::new(rows).range(1..=40));
+                        ui.label(tl!("Columns:"));
+                        ui.add(egui::DragValue::new(cols).range(1..=10));
+                    });
+                }
+
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new(tl!("Preview")).font(semibold(11.0)));
+                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 70.0), Sense::hover());
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        let bg = ui.visuals().faint_bg_color;
+                        let border_stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+                        painter.rect_filled(rect, 4.0, bg);
+                        painter.rect_stroke(rect, 4.0, border_stroke, egui::StrokeKind::Inside);
+
+                        let display_rows = (*rows).clamp(1, 10);
+                        let display_cols = (*cols).clamp(1, 5);
+                        let cell_w = (rect.width() - 16.0) / display_cols as f32;
+                        let cell_h = (rect.height() - 16.0) / display_rows as f32;
+                        for r_idx in 0..display_rows {
+                            for c_idx in 0..display_cols {
+                                let c_rect = egui::Rect::from_min_size(
+                                    egui::pos2(rect.left() + 8.0 + c_idx as f32 * cell_w + 1.0, rect.top() + 8.0 + r_idx as f32 * cell_h + 1.0),
+                                    vec2(cell_w - 2.0, cell_h - 2.0),
+                                );
+                                painter.rect_stroke(
+                                    c_rect,
+                                    1.0,
+                                    egui::Stroke::new(0.5, egui::Color32::from_rgb(190, 190, 190)),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                        }
+                    }
+                });
+
+                let (ok, cancel) = buttons(ui, tl!("New Document"));
+                if ok {
+                    let _ = app.run(
+                        "mailings.labels",
+                        json!({
+                            "text": label_text,
+                            "rows": *rows,
+                            "cols": *cols,
+                            "fromRecipients": *from_recipients,
+                        }),
+                    );
+                }
+                ok || cancel
+            }
+        }
     }
 }
 
@@ -4084,5 +4579,129 @@ mod tests {
 
         let doc_text = app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
         assert!(doc_text.contains("Chapter One"));
+    }
+
+    #[test]
+    fn phonetic_guide_dialog_opens_and_applies_ruby() {
+        let mut app = app_with("漢字");
+        app.run("select.all", json!({})).unwrap();
+
+        let d = Dialog::open("phonetic", &mut app).expect("phonetic dialog");
+        let Dialog::Phonetic { base_text, ruby_text, alignment, font_size, .. } = d else {
+            panic!("not phonetic dialog");
+        };
+        assert_eq!(base_text, "漢字");
+        assert_eq!(ruby_text, "");
+        assert_eq!(alignment, "distributeLetter");
+        assert_eq!(font_size, 10.0);
+
+        app.run(
+            "format.phonetic",
+            json!({
+                "ruby": "かんじ",
+                "align": "distributeLetter",
+                "hps": 20,
+            }),
+        )
+        .unwrap();
+
+        let p = app.session.doc.para_at(&app.session.sel.focus).unwrap();
+        assert!(p.objects.iter().any(|o| match o {
+            wordcraft_doc::para::InlineObject::Ruby { base, ruby, .. } => base == "漢字" && ruby == "かんじ",
+            _ => false,
+        }));
+
+        let d2 = Dialog::open("phonetic", &mut app).expect("phonetic dialog reopened");
+        let Dialog::Phonetic { base_text: b2, ruby_text: r2, font_size: s2, .. } = d2 else {
+            panic!("not phonetic dialog");
+        };
+        assert_eq!(b2, "漢字");
+        assert_eq!(r2, "かんじ");
+        assert_eq!(s2, 10.0);
+    }
+
+    #[test]
+    fn enclose_characters_dialog_opens_and_encloses() {
+        let mut app = app_with("1");
+        app.run("select.all", json!({})).unwrap();
+
+        let d = Dialog::open("enclose", &mut app).expect("enclose dialog");
+        let Dialog::Enclose { text, shape } = d else {
+            panic!("not enclose dialog");
+        };
+        assert_eq!(text, "1");
+        assert_eq!(shape, "circle");
+
+        app.run("format.enclose", json!({"shape": "circle"})).unwrap();
+
+        let p = app.session.doc.para_at(&app.session.sel.focus).unwrap();
+        assert!(p.objects.iter().any(|o| match o {
+            wordcraft_doc::para::InlineObject::Field { instr, result, .. } => instr.contains("EQ \\o\\ac") && result == "①",
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn wordart_dialog_opens_and_inserts() {
+        let mut app = app_with("Hero Heading");
+        app.run("select.all", json!({})).unwrap();
+
+        let d = Dialog::open("wordArt", &mut app).expect("wordArt dialog");
+        let Dialog::WordArt { text, selected } = d else {
+            panic!("not wordArt dialog");
+        };
+        assert_eq!(text, "Hero Heading");
+        assert_eq!(selected, 0);
+
+        let res = app.run("insert.wordArt", json!({"text": text, "preset": 1})).unwrap();
+        assert_eq!(res["text"], "Hero Heading");
+        assert_eq!(res["preset"], "style2");
+    }
+
+    #[test]
+    fn envelopes_and_labels_dialog_opens_and_executes() {
+        let mut app = app_with("Jane Doe\n456 Oak Ave\nBoston, MA 02101");
+        app.run("select.all", json!({})).unwrap();
+
+        let d = Dialog::open("envelopes", &mut app).expect("envelopes dialog");
+        let Dialog::EnvelopesLabels { tab, delivery, size, .. } = d else {
+            panic!("not envelopesLabels dialog");
+        };
+        assert_eq!(tab, 0);
+        assert!(delivery.contains("Jane Doe"));
+        assert_eq!(size, "Envelope #10");
+
+        app.session.dirty = false;
+        let res = app
+            .run(
+                "mailings.envelopes",
+                json!({
+                    "delivery": delivery,
+                    "return": "Acme Corp\n123 Market St",
+                    "size": "Envelope DL",
+                }),
+            )
+            .unwrap();
+        assert!((res["width"].as_f64().unwrap() - 623.6).abs() < 0.1);
+
+        let d2 = Dialog::open("labels", &mut app).expect("labels dialog");
+        let Dialog::EnvelopesLabels { tab: t2, rows, cols, .. } = d2 else {
+            panic!("not envelopesLabels dialog");
+        };
+        assert_eq!(t2, 1);
+        assert_eq!((rows, cols), (10, 3));
+
+        app.session.dirty = false;
+        let res2 = app
+            .run(
+                "mailings.labels",
+                json!({
+                    "text": "Label Text",
+                    "rows": 5,
+                    "cols": 2,
+                }),
+            )
+            .unwrap();
+        assert_eq!(res2["labels"], 10);
     }
 }
