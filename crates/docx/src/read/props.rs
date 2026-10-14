@@ -597,6 +597,28 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
             }
             "w:titlePg" => s.title_page = on_off(k),
             "w:bidi" => s.rtl = on_off(k),
+            "w:footnotePr" => {
+                if let Some(st) = k.child_val("w:numStart").and_then(u32_of) {
+                    s.footnote_num_start = Some(st);
+                }
+                if let Some(r) = k.child_val("w:numRestart") {
+                    s.footnote_restart = wordcraft_doc::section::NoteRestart::from_ooxml(r);
+                }
+                if let Some(f) = k.child_val("w:numFmt") {
+                    s.footnote_format = Some(NumFormat::from_ooxml(f));
+                }
+            }
+            "w:endnotePr" => {
+                if let Some(st) = k.child_val("w:numStart").and_then(u32_of) {
+                    s.endnote_num_start = Some(st);
+                }
+                if let Some(r) = k.child_val("w:numRestart") {
+                    s.endnote_restart = wordcraft_doc::section::NoteRestart::from_ooxml(r);
+                }
+                if let Some(f) = k.child_val("w:numFmt") {
+                    s.endnote_format = Some(NumFormat::from_ooxml(f));
+                }
+            }
             "w:pgNumType" => {
                 s.page_num_start = k.attr("w:start").and_then(u32_of);
                 if let Some(f) = k.attr("w:fmt") {

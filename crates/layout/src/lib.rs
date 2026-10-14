@@ -497,17 +497,45 @@ fn left_out_objects(doc: &Document, p: &Paragraph, table_chr: Option<&CharProps>
     move |k| left.get(k).copied().unwrap_or(false)
 }
 
-/// Note part ids in document order → numbers (footnotes and endnotes numbered separately). With
-/// `hide_deleted`, notes whose reference mark is a tracked deletion are left out, as in the final text.
-fn note_numbers(doc: &Document, hide_deleted: bool) -> HashMap<u32, u32> {
+/// Note part ids in document order → numbers and formats (footnotes and endnotes numbered separately).
+/// With `hide_deleted`, notes whose reference mark is a tracked deletion are left out, as in the final text.
+fn note_numbers(doc: &Document, hide_deleted: bool) -> (HashMap<u32, u32>, HashMap<u32, wordcraft_doc::section::NumFormat>) {
     let mut m = HashMap::new();
-    let (mut f, mut e) = (0u32, 0u32);
+    let mut formats = HashMap::new();
+    let sections = doc.sections();
+    let mut cur_sect_idx = 0;
+    let mut cur_sect = sections.first().map(|(_, s)| *s);
+    let mut f = cur_sect.and_then(|s| s.footnote_num_start).unwrap_or(doc.settings.footnote_start).max(1);
+    let mut e = cur_sect.and_then(|s| s.endnote_num_start).unwrap_or(doc.settings.endnote_start).max(1);
+    let mut prev_had_sect_break = false;
     // Reading order, text boxes included where they are. A hidden reference mark still takes
     // its number, as in Word; a deleted one (or one in a deleted text box) does not.
     let mut cur: Option<(usize, Vec<bool>)> = None;
     doc.objects_in_reading_order_at(&mut |p, k| {
         let key = p as *const Paragraph as usize;
         if cur.as_ref().is_none_or(|(at, _)| *at != key) {
+            if prev_had_sect_break {
+                cur_sect_idx += 1;
+                cur_sect = sections.get(cur_sect_idx).map(|(_, s)| *s);
+                let f_restart = cur_sect
+                    .map(|s| s.footnote_restart)
+                    .filter(|&r| r != wordcraft_doc::section::NoteRestart::Continuous)
+                    .unwrap_or(doc.settings.footnote_restart);
+                if f_restart == wordcraft_doc::section::NoteRestart::EachSection {
+                    f = cur_sect.and_then(|s| s.footnote_num_start).unwrap_or(doc.settings.footnote_start).max(1);
+                }
+                let e_restart = cur_sect
+                    .map(|s| s.endnote_restart)
+                    .filter(|&r| r != wordcraft_doc::section::NoteRestart::Continuous)
+                    .unwrap_or(doc.settings.endnote_restart);
+                if e_restart == wordcraft_doc::section::NoteRestart::EachSection {
+                    e = cur_sect.and_then(|s| s.endnote_num_start).unwrap_or(doc.settings.endnote_start).max(1);
+                }
+                prev_had_sect_break = false;
+            }
+            if p.section.is_some() {
+                prev_had_sect_break = true;
+            }
             let deleted = left_out_objects(doc, p, None, true, hide_deleted);
             cur = Some((key, (0..p.objects.len()).map(deleted).collect()));
         }
@@ -515,21 +543,26 @@ fn note_numbers(doc: &Document, hide_deleted: bool) -> HashMap<u32, u32> {
             return false;
         }
         if let Some(InlineObject::NoteRef { kind, id, .. }) = p.objects.get(k) {
-            let n = match kind {
+            let (n, fmt) = match kind {
                 wordcraft_doc::para::NoteKind::Footnote => {
+                    let n = f;
                     f += 1;
-                    f
+                    let fmt = cur_sect.and_then(|s| s.footnote_format).unwrap_or(doc.settings.footnote_format);
+                    (n, fmt)
                 }
                 wordcraft_doc::para::NoteKind::Endnote => {
+                    let n = e;
                     e += 1;
-                    e
+                    let fmt = cur_sect.and_then(|s| s.endnote_format).unwrap_or(doc.settings.endnote_format);
+                    (n, fmt)
                 }
             };
             m.insert(*id, n);
+            formats.insert(*id, fmt);
         }
         true
     });
-    m
+    (m, formats)
 }
 
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
@@ -811,6 +844,13 @@ fn push_para(items: &mut Vec<Placed>, story: StoryRef, path: &[u32], pl: &Arc<Pa
     }
 }
 
+fn has_custom_note_blocks(blocks: &wordcraft_doc::Blocks) -> bool {
+    blocks.iter().any(|b| match &**b {
+        wordcraft_doc::Block::Para(p) => !p.text.is_empty() || !p.objects.is_empty(),
+        wordcraft_doc::Block::Table(t) => !t.rows.is_empty(),
+    })
+}
+
 struct PageBuilder<'a> {
     pages: Vec<Page>,
     sect: &'a SectionProps,
@@ -844,6 +884,9 @@ struct PageBuilder<'a> {
     page_items_start: usize,
     /// Maximum vertical extent across all columns on this page (for balancing and section transitions).
     max_col_bottom: f32,
+    custom_sep: Option<Vec<Placed>>,
+    custom_cont_sep: Option<Vec<Placed>>,
+    custom_cont_notice: Option<Vec<Placed>>,
 }
 
 /// Gap above the footnote separator and its length.
@@ -1032,13 +1075,31 @@ impl PageBuilder<'_> {
             break;
         }
         if let Some(pg) = self.pages.last_mut() {
-            let len = if cont { self.sect.text_width() } else { 144.0 };
-            let sy = top + NOTE_SEP / 2.0;
-            let rx = if self.sect.rtl { self.sect.text_right() - len } else { x };
-            pg.items.push(Placed::Rule { x0: rx, y0: sy, x1: rx + len, y1: sy, border: Border::single(0.5) });
+            let custom_items = if cont { self.custom_cont_sep.as_ref() } else { self.custom_sep.as_ref() };
+            if let Some(citems) = custom_items.filter(|it| !it.is_empty()) {
+                for mut it in citems.clone() {
+                    it.translate(x, top);
+                    pg.items.push(it);
+                }
+            } else {
+                let len = if cont { self.sect.text_width() } else { 144.0 };
+                let sy = top + NOTE_SEP / 2.0;
+                let rx = if self.sect.rtl { self.sect.text_right() - len } else { x };
+                pg.items.push(Placed::Rule { x0: rx, y0: sy, x1: rx + len, y1: sy, border: Border::single(0.5) });
+            }
+            let mut last_bottom = y;
             for (n, ny) in placed {
+                last_bottom = last_bottom.max(ny + n.h);
                 for mut it in n.items {
                     it.translate(x, ny);
+                    pg.items.push(it);
+                }
+            }
+            if !self.carry.is_empty()
+                && let Some(notice) = self.custom_cont_notice.as_ref().filter(|it| !it.is_empty())
+            {
+                for mut it in notice.clone() {
+                    it.translate(x, last_bottom);
                     pg.items.push(it);
                 }
             }
@@ -1311,7 +1372,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         cache.env = env;
     }
     cache.used.clear();
-    let notes = note_numbers(doc, opts.hide_deleted);
+    let (notes, note_formats) = note_numbers(doc, opts.hide_deleted);
     let notes_hash = hash_of(&{
         let mut v: Vec<_> = notes.iter().map(|(a, b)| (*a, *b)).collect();
         v.sort();
@@ -1328,6 +1389,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             section_pages: 1,
             section: 1,
             notes: Arc::new(notes),
+            note_formats: Arc::new(note_formats),
             title: doc.core.title.as_str().into(),
             author: doc.core.creator.as_str().into(),
             ..Default::default()
@@ -1346,6 +1408,21 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         Some((_, s)) => *s,
         None => &default_sect,
     };
+    let custom_sep = doc
+        .parts
+        .iter()
+        .find(|(_, p)| p.kind == wordcraft_doc::PartKind::FootnoteSeparator && has_custom_note_blocks(&p.blocks))
+        .map(|(id, p)| layout_box(&mut ctx, StoryRef::Part(*id), &p.blocks, &[], first_sect.text_width(), None, 0, None).items);
+    let custom_cont_sep = doc
+        .parts
+        .iter()
+        .find(|(_, p)| p.kind == wordcraft_doc::PartKind::FootnoteContinuationSeparator && has_custom_note_blocks(&p.blocks))
+        .map(|(id, p)| layout_box(&mut ctx, StoryRef::Part(*id), &p.blocks, &[], first_sect.text_width(), None, 0, None).items);
+    let custom_cont_notice = doc
+        .parts
+        .iter()
+        .find(|(_, p)| p.kind == wordcraft_doc::PartKind::FootnoteContinuationNotice && has_custom_note_blocks(&p.blocks))
+        .map(|(id, p)| layout_box(&mut ctx, StoryRef::Part(*id), &p.blocks, &[], first_sect.text_width(), None, 0, None).items);
     let sect_ref = if web {
         web_sect = first_sect.clone();
         web_sect.page_w = opts.web_width.max(144.0);
@@ -1379,6 +1456,9 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         line_no: 0,
         page_items_start: 0,
         max_col_bottom: 0.0,
+        custom_sep,
+        custom_cont_sep,
+        custom_cont_notice,
     };
     let mut block = 0usize;
     for (si, (end, sect)) in sections.iter().enumerate() {

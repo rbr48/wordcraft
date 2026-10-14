@@ -223,6 +223,12 @@ pub enum PartKind {
     Endnote,
     Comment,
     TextBox,
+    FootnoteSeparator,
+    FootnoteContinuationSeparator,
+    FootnoteContinuationNotice,
+    EndnoteSeparator,
+    EndnoteContinuationSeparator,
+    EndnoteContinuationNotice,
 }
 
 /// A secondary story.
@@ -334,7 +340,11 @@ pub struct Settings {
     pub theme_colors: Vec<Rgb>,
     pub theme_name: String,
     pub footnote_format: section::NumFormat,
+    pub footnote_restart: section::NoteRestart,
+    pub footnote_start: u32,
     pub endnote_format: section::NumFormat,
+    pub endnote_restart: section::NoteRestart,
+    pub endnote_start: u32,
     pub protection: Option<String>,
     /// Word compatibility mode the document is laid out in (`compatibilityMode`): 15 for Word
     /// 2013 and later, which places a table's border at the margin rather than its text and lets
@@ -407,7 +417,11 @@ impl Default for Settings {
             theme_colors: THEME_COLORS.to_vec(),
             theme_name: "Craft".into(),
             footnote_format: section::NumFormat::Decimal,
+            footnote_restart: section::NoteRestart::Continuous,
+            footnote_start: 1,
             endnote_format: section::NumFormat::LowerRoman,
+            endnote_restart: section::NoteRestart::Continuous,
+            endnote_start: 1,
             protection: None,
             compat_mode: COMPAT_MODE_CURRENT,
             grid_h: DEFAULT_GRID,

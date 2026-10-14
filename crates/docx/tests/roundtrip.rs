@@ -8,7 +8,7 @@ use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
     TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
-use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NumFormat, SectionProps, SectionStart};
+use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NoteRestart, NumFormat, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::table::{Cell, Table};
 use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, Paragraph, PartKind, Revision, RevisionKind, Watermark, para_block};
@@ -1891,4 +1891,76 @@ fn rotated_text_box_vertical_direction_round_trip() {
     assert_eq!(got[0].objects.len(), 2);
     assert_eq!(got[0].objects[0].text_direction(), TextDirection::Down);
     assert_eq!(got[0].objects[1].text_direction(), TextDirection::Up);
+}
+
+#[test]
+fn footnote_and_endnote_restart_and_custom_separators_round_trip() {
+    let mut d = Document::new();
+    d.settings.footnote_start = 5;
+    d.settings.footnote_restart = NoteRestart::EachSection;
+    d.settings.footnote_format = NumFormat::LowerRoman;
+    d.settings.endnote_start = 2;
+    d.settings.endnote_restart = NoteRestart::Continuous;
+    d.settings.endnote_format = NumFormat::UpperRoman;
+
+    // Custom continuation separator and notice parts
+    d.add_part(
+        PartKind::FootnoteContinuationSeparator,
+        vec![para_block(Paragraph::with_text("=== continuation separator ===", CharProps::default()))],
+    );
+    d.add_part(
+        PartKind::FootnoteContinuationNotice,
+        vec![para_block(Paragraph::with_text("(Notice: continued on following page)", CharProps::default()))],
+    );
+
+    // Section 1 paragraph with footnote
+    let mut p1 = Paragraph::with_text("First section body text with footnote", CharProps::default());
+    let fn_id = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("Detailed note text in section 1", CharProps::default()))]);
+    let end1 = p1.len();
+    p1.insert_object(end1, InlineObject::NoteRef { kind: NoteKind::Footnote, id: fn_id, custom: String::new() }, &CharProps::default()).unwrap();
+
+    // Section break on p1 with section-specific overrides
+    let s1 = SectionProps {
+        footnote_num_start: Some(1),
+        footnote_restart: NoteRestart::EachPage,
+        footnote_format: Some(NumFormat::UpperLetter),
+        ..Default::default()
+    };
+    p1.section = Some(Box::new(s1));
+
+    // Section 2 paragraph
+    let p2 = Paragraph::with_text("Second section body text", CharProps::default());
+
+    d.body = vec![para_block(p1), para_block(p2)];
+
+    let r = rt(&d);
+
+    // Verify document-level settings
+    assert_eq!(r.settings.footnote_start, 5);
+    assert_eq!(r.settings.footnote_restart, NoteRestart::EachSection);
+    assert_eq!(r.settings.footnote_format, NumFormat::LowerRoman);
+    assert_eq!(r.settings.endnote_start, 2);
+    assert_eq!(r.settings.endnote_restart, NoteRestart::Continuous);
+    assert_eq!(r.settings.endnote_format, NumFormat::UpperRoman);
+
+    // Verify section-level settings on section 1
+    let sects = r.sections();
+    assert!(sects.len() >= 2);
+    let s_first = sects[0].1;
+    assert_eq!(s_first.footnote_num_start, Some(1));
+    assert_eq!(s_first.footnote_restart, NoteRestart::EachPage);
+    assert_eq!(s_first.footnote_format, Some(NumFormat::UpperLetter));
+
+    // Verify custom parts round-tripped
+    let has_cont_sep = r.parts.values().any(|p| {
+        p.kind == PartKind::FootnoteContinuationSeparator
+            && p.blocks.iter().any(|b| b.as_para().is_some_and(|para| para.plain_text().contains("continuation separator")))
+    });
+    assert!(has_cont_sep, "FootnoteContinuationSeparator should round trip");
+
+    let has_cont_notice = r.parts.values().any(|p| {
+        p.kind == PartKind::FootnoteContinuationNotice
+            && p.blocks.iter().any(|b| b.as_para().is_some_and(|para| para.plain_text().contains("Notice: continued")))
+    });
+    assert!(has_cont_notice, "FootnoteContinuationNotice should round trip");
 }

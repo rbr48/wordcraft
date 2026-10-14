@@ -500,6 +500,16 @@ pub enum Dialog {
         current_mode: Option<String>,
         error_msg: String,
     },
+    NoteOptions {
+        location_type: u8,
+        footnote_format: String,
+        footnote_start: u32,
+        footnote_restart: String,
+        endnote_format: String,
+        endnote_start: u32,
+        endnote_restart: String,
+        applies_to: String,
+    },
 }
 
 /// Standard world languages matching Microsoft Word proofing language list (name, BCP-47 tag).
@@ -994,6 +1004,7 @@ impl Dialog {
             Dialog::WordArt { .. } => "wordArt",
             Dialog::EnvelopesLabels { .. } => "envelopesLabels",
             Dialog::Protect { .. } => "protect",
+            Dialog::NoteOptions { .. } => "noteOptions",
         }
     }
 
@@ -1375,6 +1386,34 @@ impl Dialog {
                     error_msg: String::new(),
                 }
             }
+            "noteOptions" | "footnoteOptions" | "endnoteOptions" => {
+                let sp = wordcraft_engine::cmd::page::sect(&app.session);
+                let st = &app.session.doc.settings;
+                let fn_fmt = sp.footnote_format.unwrap_or(st.footnote_format).ooxml().to_string();
+                let fn_start = sp.footnote_num_start.unwrap_or(st.footnote_start);
+                let fn_restart = if sp.footnote_restart != wordcraft_doc::section::NoteRestart::Continuous {
+                    sp.footnote_restart.ooxml().to_string()
+                } else {
+                    st.footnote_restart.ooxml().to_string()
+                };
+                let en_fmt = sp.endnote_format.unwrap_or(st.endnote_format).ooxml().to_string();
+                let en_start = sp.endnote_num_start.unwrap_or(st.endnote_start);
+                let en_restart = if sp.endnote_restart != wordcraft_doc::section::NoteRestart::Continuous {
+                    sp.endnote_restart.ooxml().to_string()
+                } else {
+                    st.endnote_restart.ooxml().to_string()
+                };
+                Dialog::NoteOptions {
+                    location_type: 0,
+                    footnote_format: fn_fmt,
+                    footnote_start: fn_start,
+                    footnote_restart: fn_restart,
+                    endnote_format: en_fmt,
+                    endnote_start: en_start,
+                    endnote_restart: en_restart,
+                    applies_to: "document".to_string(),
+                }
+            }
             _ => return None,
         })
     }
@@ -1520,6 +1559,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::WordArt { .. } => "WordArt Gallery",
         Dialog::EnvelopesLabels { .. } => "Envelopes and Labels",
         Dialog::Protect { .. } => "Restrict Editing",
+        Dialog::NoteOptions { .. } => "Footnote and Endnote",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -1530,8 +1570,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             if matches!(d, Dialog::EnvelopesLabels { .. }) {
                 ui.set_min_width(480.0);
-            } else if matches!(d, Dialog::Protect { .. }) {
-                ui.set_min_width(420.0);
+            } else if matches!(d, Dialog::Protect { .. } | Dialog::NoteOptions { .. }) {
+                ui.set_min_width(400.0);
             } else {
                 ui.set_min_width(340.0);
             }
@@ -4045,6 +4085,111 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 
             close || cancel
         }
+        Dialog::NoteOptions {
+            location_type,
+            footnote_format,
+            footnote_start,
+            footnote_restart,
+            endnote_format,
+            endnote_start,
+            endnote_restart,
+            applies_to,
+        } => {
+            ui.label(egui::RichText::new(tl!("Location")).font(semibold(12.5)));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.radio_value(location_type, 0, tl!("Footnotes"));
+                ui.radio_value(location_type, 1, tl!("Endnotes"));
+            });
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Format")).font(semibold(12.5)));
+            ui.add_space(4.0);
+
+            let (cur_format, cur_start, cur_restart) = if *location_type == 0 {
+                (&mut *footnote_format, &mut *footnote_start, &mut *footnote_restart)
+            } else {
+                (&mut *endnote_format, &mut *endnote_start, &mut *endnote_restart)
+            };
+
+            egui::Grid::new("note_options_fmt_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Number format:"));
+                let fmt_label = match cur_format.as_str() {
+                    "upperRoman" => "I, II, III, ...",
+                    "lowerRoman" => "i, ii, iii, ...",
+                    "upperLetter" => "A, B, C, ...",
+                    "lowerLetter" => "a, b, c, ...",
+                    _ => "1, 2, 3, ...",
+                };
+                egui::ComboBox::from_id_salt("note_fmt_combo").selected_text(fmt_label).width(160.0).show_ui(ui, |ui| {
+                    ui.selectable_value(cur_format, "decimal".to_string(), "1, 2, 3, ...");
+                    ui.selectable_value(cur_format, "lowerLetter".to_string(), "a, b, c, ...");
+                    ui.selectable_value(cur_format, "upperLetter".to_string(), "A, B, C, ...");
+                    ui.selectable_value(cur_format, "lowerRoman".to_string(), "i, ii, iii, ...");
+                    ui.selectable_value(cur_format, "upperRoman".to_string(), "I, II, III, ...");
+                });
+                ui.end_row();
+
+                ui.label(tl!("Start at:"));
+                ui.add(egui::DragValue::new(cur_start).range(1..=100_000));
+                ui.end_row();
+
+                ui.label(tl!("Numbering:"));
+                egui::ComboBox::from_id_salt("note_restart_combo")
+                    .selected_text(match cur_restart.as_str() {
+                        "eachSection" => tl!("Restart each section"),
+                        "eachPage" if *location_type == 0 => tl!("Restart each page"),
+                        _ => tl!("Continuous"),
+                    })
+                    .width(160.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(cur_restart, "continuous".to_string(), tl!("Continuous"));
+                        ui.selectable_value(cur_restart, "eachSection".to_string(), tl!("Restart each section"));
+                        if *location_type == 0 {
+                            ui.selectable_value(cur_restart, "eachPage".to_string(), tl!("Restart each page"));
+                        }
+                    });
+                ui.end_row();
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Apply changes")).font(semibold(12.5)));
+            ui.add_space(4.0);
+            egui::Grid::new("note_options_apply_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Apply changes to:"));
+                egui::ComboBox::from_id_salt("note_apply_combo")
+                    .selected_text(match applies_to.as_str() {
+                        "section" => tl!("This section"),
+                        _ => tl!("Whole document"),
+                    })
+                    .width(160.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(applies_to, "document".to_string(), tl!("Whole document"));
+                        ui.selectable_value(applies_to, "section".to_string(), tl!("This section"));
+                    });
+                ui.end_row();
+            });
+
+            let (ok, cancel) = buttons(ui, tl!("Apply"));
+            if ok {
+                let _ = app.run(
+                    "references.noteOptions",
+                    json!({
+                        "footnoteFormat": footnote_format,
+                        "footnoteStart": *footnote_start,
+                        "footnoteRestart": footnote_restart,
+                        "endnoteFormat": endnote_format,
+                        "endnoteStart": *endnote_start,
+                        "endnoteRestart": endnote_restart,
+                        "appliesTo": applies_to,
+                    }),
+                );
+            }
+            ok || cancel
+        }
     }
 }
 
@@ -4917,5 +5062,45 @@ mod tests {
 
         // Mutating command should succeed now
         app.session.run("text.insert", &json!({"text": "Allowed"})).unwrap();
+    }
+
+    #[test]
+    fn note_options_dialog_opens_and_configures() {
+        let mut app = app_with("Document content");
+        assert_eq!(app.session.doc.settings.footnote_start, 1);
+        assert_eq!(app.session.doc.settings.footnote_restart, wordcraft_doc::section::NoteRestart::Continuous);
+
+        let d = Dialog::open("noteOptions", &mut app).expect("noteOptions dialog opens");
+        let Dialog::NoteOptions { footnote_format, footnote_start, footnote_restart, .. } = d else {
+            panic!("not noteOptions dialog");
+        };
+        assert_eq!(footnote_format, "decimal");
+        assert_eq!(footnote_start, 1);
+        assert_eq!(footnote_restart, "continuous");
+
+        // Execute references.noteOptions with custom settings
+        app.run(
+            "references.noteOptions",
+            json!({
+                "footnoteFormat": "lowerRoman",
+                "footnoteStart": 5,
+                "footnoteRestart": "eachSection",
+                "appliesTo": "document",
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(app.session.doc.settings.footnote_format, wordcraft_doc::section::NumFormat::LowerRoman);
+        assert_eq!(app.session.doc.settings.footnote_start, 5);
+        assert_eq!(app.session.doc.settings.footnote_restart, wordcraft_doc::section::NoteRestart::EachSection);
+
+        // Reopen dialog: should show new settings
+        let d2 = Dialog::open("noteOptions", &mut app).expect("noteOptions dialog opens");
+        let Dialog::NoteOptions { footnote_format: f2, footnote_start: s2, footnote_restart: r2, .. } = d2 else {
+            panic!("not noteOptions dialog");
+        };
+        assert_eq!(f2, "lowerRoman");
+        assert_eq!(s2, 5);
+        assert_eq!(r2, "eachSect");
     }
 }

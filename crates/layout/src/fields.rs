@@ -18,6 +18,8 @@ pub struct FieldCtx {
     pub section: u32,
     /// Note part id → number, in document order.
     pub notes: Arc<HashMap<u32, u32>>,
+    /// Note part id → number format, reflecting document/section overrides.
+    pub note_formats: Arc<HashMap<u32, NumFormat>>,
     /// Document title / author for TITLE / AUTHOR fields.
     pub title: Arc<str>,
     pub author: Arc<str>,
@@ -27,6 +29,9 @@ pub struct FieldCtx {
 impl FieldCtx {
     pub fn note_number(&self, id: u32) -> u32 {
         self.notes.get(&id).copied().unwrap_or(1)
+    }
+    pub fn note_format(&self, id: u32) -> Option<NumFormat> {
+        self.note_formats.get(&id).copied()
     }
     /// A key for caches: the parts of the context a page-dependent paragraph depends on.
     pub fn page_key(&self) -> (u32, u32, u32, u32) {

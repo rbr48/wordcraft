@@ -1,6 +1,6 @@
 # Layout and pagination parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Multi-column balancing at continuous section breaks & document end landed); previously minor (Contour Text Wrap Polygon <wp:wrapPolygon>) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Footnote continuation separators, notices, per-section restart & Dialog::NoteOptions landed); previously minor (Multi-column balancing at continuous section breaks & document end landed) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 A document only "opens correctly" if its pages break where Word breaks them: the same lines, the
 same page count, footnotes and pictures on the same pages. This checklist covers line breaking,
@@ -31,7 +31,7 @@ font can't match Word's metrics.
 | Columns, column breaks, separators | ✅ | Multi-column balancing at continuous section breaks and document end landed (2026-10-14): discrete line distribution to earlier columns (`col0 >= col1 >= col2`), multi-page section final page balancing, manual ColumnBreak respect, and bounded vertical column separator rules ending at `max_col_bottom` | — |
 | Section breaks (next page, continuous, even, odd), different first page, odd/even headers | ✅ | Section breaks don't show in Draft view (#42) | 1–2 |
 | Body top below a tall header, footer pushes body up | ✅ | #138 | — |
-| Footnotes at the page bottom, endnotes at the end, note numbering | 🟡 | A long note continues onto the next page at a line boundary (its first line stays with the reference), first in that page's note area under a full-width continuation separator (#352); the document's own `w:continuationSeparator`/`w:continuationNotice` aren't read (default line, no notice); per-section restart partial | 2–4 |
+| Footnotes at the page bottom, endnotes at the end, note numbering | ✅ | Footnotes sit at page bottom, endnotes at section/document end; long notes split across pages with full-width or custom continuation separators; continuation notice placed on carry pages; per-section and per-page numbering restarts (`EachSection`, `EachPage`, `Continuous`), custom starting numbers, and custom number formats (`NumFormat`) fully supported with OOXML round-trip | — |
 | Tables: row heights (at least/exact), rows split across pages, header rows repeat, Can't Split | ✅ | 2026-10-06, #138 | — |
 | Tables: autofit to contents/window, fixed widths, Word 2013 edge | 🟡 | #137; #44: AutoFit Contents measures each column's narrowest and widest text and shares the width like Word, and keeps fitting as you type until the table is made fixed (pinned by a test, 2026-10-12); cell preferred widths and spans still differ | 3–5 |
 | Floating tables (`w:tblpPr`) | 🟡 | #137; overlap rules tested 2026-10-12 (a table that may not overlap moves below the one in its way; one that may stays put; text keeps clear of both) | 1–2 |
@@ -68,6 +68,7 @@ font can't match Word's metrics.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Footnote and endnote continuation separators, continuation notices, and restart parity landed: custom OOXML continuation separator and notice parts, split note carry notices, `Continuous`/`EachSection`/`EachPage` restarts with custom number starts, `references.noteOptions` command expansion, and `Dialog::NoteOptions` |
 | 2026-10-14 | minor | RTL sections (`<w:bidi/>`), mirrored right-hand gutter, right-to-left multi-column flow, right-margin line numbering, and right-aligned footnote separator rules landed |
 | 2026-10-14 | minor | Contour Text Wrap Polygon (`wrapPolygon`) landed with ECMA-376 DrawingML `<wp:wrapPolygon>` round-trip in DOCX, scanline polygon edge intersection rasterization in layout, and automated tight wrapping for non-rectangular shapes (stars, hearts, hexagons, octagons, freeforms) |
 | 2026-10-14 | minor | Phonetic Guide (`<w:ruby>`) and Enclose Characters (`format.enclose`) landed with ECMA-376 OOXML round-trip, elevated line layout, raised vector glyph rendering, Home ribbon tab buttons, and interactive modal dialogs (`Dialog::Phonetic`, `Dialog::Enclose`) |

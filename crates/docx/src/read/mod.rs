@@ -838,10 +838,22 @@ impl Reader<'_> {
                     if let Some(f) = k.child_val("w:numFmt") {
                         s.footnote_format = NumFormat::from_ooxml(f);
                     }
+                    if let Some(r) = k.child_val("w:numRestart") {
+                        s.footnote_restart = wordcraft_doc::section::NoteRestart::from_ooxml(r);
+                    }
+                    if let Some(st) = k.child_val("w:numStart").and_then(|v| v.parse::<u32>().ok()) {
+                        s.footnote_start = st;
+                    }
                 }
                 "w:endnotePr" => {
                     if let Some(f) = k.child_val("w:numFmt") {
                         s.endnote_format = NumFormat::from_ooxml(f);
+                    }
+                    if let Some(r) = k.child_val("w:numRestart") {
+                        s.endnote_restart = wordcraft_doc::section::NoteRestart::from_ooxml(r);
+                    }
+                    if let Some(st) = k.child_val("w:numStart").and_then(|v| v.parse::<u32>().ok()) {
+                        s.endnote_start = st;
                     }
                 }
                 "w:documentProtection" => {
@@ -861,15 +873,24 @@ impl Reader<'_> {
         let rels = self.pkg.rels(path);
         let tag = if foot { "w:footnote" } else { "w:endnote" };
         for n in root.children(tag) {
-            if n.attr("w:type").is_some_and(|t| t != "normal") {
-                continue;
-            }
+            let note_type = n.attr("w:type").unwrap_or("normal");
+            let pk = match (foot, note_type) {
+                (true, "separator") => PartKind::FootnoteSeparator,
+                (true, "continuationSeparator") => PartKind::FootnoteContinuationSeparator,
+                (true, "continuationNotice") => PartKind::FootnoteContinuationNotice,
+                (false, "separator") => PartKind::EndnoteSeparator,
+                (false, "continuationSeparator") => PartKind::EndnoteContinuationSeparator,
+                (false, "continuationNotice") => PartKind::EndnoteContinuationNotice,
+                (true, "normal") => PartKind::Footnote,
+                (false, "normal") => PartKind::Endnote,
+                _ => continue,
+            };
             let Some(fid) = n.attr("w:id").and_then(int) else { continue };
             if self.doc.parts.len() >= MAX_PARTS {
                 break;
             }
             // Reserve the id first: the note's own reference mark points at it.
-            let (pk, kind) = if foot { (PartKind::Footnote, NoteKind::Footnote) } else { (PartKind::Endnote, NoteKind::Endnote) };
+            let kind = if foot { NoteKind::Footnote } else { NoteKind::Endnote };
             let id = self.doc.add_part(pk, Blocks::new());
             let mut sc = StoryCtx::default();
             let mut blocks = Blocks::new();
@@ -877,15 +898,25 @@ impl Reader<'_> {
             self.read_blocks(&mut sc, n, &rels, &mut blocks, 0);
             self.flush_pending(&mut sc, &mut blocks);
             self.current_note = None;
+            let has_content = blocks.iter().any(|b| match &**b {
+                wordcraft_doc::Block::Para(p) => !p.text.is_empty() || !p.objects.is_empty(),
+                wordcraft_doc::Block::Table(t) => !t.rows.is_empty(),
+            });
+            if note_type != "normal" && !has_content && note_type != "continuationNotice" {
+                self.doc.parts.remove(&id);
+                continue;
+            }
             if let Some(p) = self.doc.parts.get_mut(&id)
                 && !blocks.is_empty()
             {
                 p.blocks = blocks;
             }
-            if foot {
-                self.footnotes.insert(fid, id);
-            } else {
-                self.endnotes.insert(fid, id);
+            if note_type == "normal" {
+                if foot {
+                    self.footnotes.insert(fid, id);
+                } else {
+                    self.endnotes.insert(fid, id);
+                }
             }
         }
         Ok(())

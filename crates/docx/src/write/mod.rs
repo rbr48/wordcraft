@@ -202,29 +202,74 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
     // Notes (references were collected from the body and headers).
     for foot in [true, false] {
         let ids = if foot { wr.footnotes.clone() } else { wr.endnotes.clone() };
-        if ids.is_empty() {
+        let sep_part = doc
+            .parts
+            .iter()
+            .find(|(_, p)| p.kind == if foot { PartKind::FootnoteSeparator } else { PartKind::EndnoteSeparator })
+            .map(|(k, p)| (*k, p));
+        let cont_sep_part = doc
+            .parts
+            .iter()
+            .find(|(_, p)| p.kind == if foot { PartKind::FootnoteContinuationSeparator } else { PartKind::EndnoteContinuationSeparator })
+            .map(|(k, p)| (*k, p));
+        let cont_notice_part = doc
+            .parts
+            .iter()
+            .find(|(_, p)| p.kind == if foot { PartKind::FootnoteContinuationNotice } else { PartKind::EndnoteContinuationNotice })
+            .map(|(k, p)| (*k, p));
+
+        if ids.is_empty() && sep_part.is_none() && cont_sep_part.is_none() && cont_notice_part.is_none() {
             continue;
         }
         let (root, tag, file) = if foot { ("w:footnotes", "w:footnote", "footnotes.xml") } else { ("w:endnotes", "w:endnote", "endnotes.xml") };
         let mut prels = PartRels::default();
         let mut w = W::new();
         w.open(root, &ns_refs);
-        for (id, kind) in [("-1", "separator"), ("0", "continuationSeparator")] {
-            w.open(tag, &[("w:type", kind), ("w:id", id)]);
+
+        // Separator (-1)
+        w.open(tag, &[("w:type", "separator"), ("w:id", "-1")]);
+        if let Some((pid, part)) = sep_part {
+            wr.note_blocks(&mut w, &part.blocks, &mut prels, foot, pid);
+        } else {
             w.open("w:p", &[]);
             w.open("w:pPr", &[]);
             w.empty("w:spacing", &[("w:after", "0"), ("w:line", "240"), ("w:lineRule", "auto")]);
             w.close("w:pPr");
             w.open("w:r", &[]);
-            w.empty(if kind == "separator" { "w:separator" } else { "w:continuationSeparator" }, &[]);
+            w.empty("w:separator", &[]);
             w.close("w:r");
             w.close("w:p");
+        }
+        w.close(tag);
+
+        // Continuation Separator (0)
+        w.open(tag, &[("w:type", "continuationSeparator"), ("w:id", "0")]);
+        if let Some((pid, part)) = cont_sep_part {
+            wr.note_blocks(&mut w, &part.blocks, &mut prels, foot, pid);
+        } else {
+            w.open("w:p", &[]);
+            w.open("w:pPr", &[]);
+            w.empty("w:spacing", &[("w:after", "0"), ("w:line", "240"), ("w:lineRule", "auto")]);
+            w.close("w:pPr");
+            w.open("w:r", &[]);
+            w.empty("w:continuationSeparator", &[]);
+            w.close("w:r");
+            w.close("w:p");
+        }
+        w.close(tag);
+
+        // Continuation Notice (1 if present)
+        if let Some((pid, part)) = cont_notice_part {
+            w.open(tag, &[("w:type", "continuationNotice"), ("w:id", "1")]);
+            wr.note_blocks(&mut w, &part.blocks, &mut prels, foot, pid);
             w.close(tag);
         }
+
         let mut k = 0;
+        let base_id = if cont_notice_part.is_some() { 1 } else { 0 };
         while let Some(pid) = (if foot { &wr.footnotes } else { &wr.endnotes }).get(k).copied() {
             k += 1;
-            let nid = k.to_string();
+            let nid = (k + base_id).to_string();
             w.open(tag, &[("w:id", &nid)]);
             let blocks: Blocks = doc.parts.get(&pid).map(|p| p.blocks.clone()).unwrap_or_default();
             wr.note_blocks(&mut w, &blocks, &mut prels, foot, pid);
@@ -848,9 +893,24 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     {
         w.open(tag, &[]);
         w.val("w:numFmt", fmt.ooxml());
+        let restart = if tag == "w:footnotePr" { s.footnote_restart } else { s.endnote_restart };
+        if restart != wordcraft_doc::section::NoteRestart::Continuous {
+            w.empty("w:numRestart", &[("w:val", restart.ooxml())]);
+        }
+        let start = if tag == "w:footnotePr" { s.footnote_start } else { s.endnote_start };
+        if start != 1 {
+            w.empty("w:numStart", &[("w:val", &start.to_string())]);
+        }
         if used {
             w.empty(el, &[("w:id", "-1")]);
             w.empty(el, &[("w:id", "0")]);
+            let has_notice = doc
+                .parts
+                .values()
+                .any(|p| p.kind == if tag == "w:footnotePr" { PartKind::FootnoteContinuationNotice } else { PartKind::EndnoteContinuationNotice });
+            if has_notice {
+                w.empty(el, &[("w:id", "1")]);
+            }
         }
         w.close(tag);
     }

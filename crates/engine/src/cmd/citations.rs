@@ -357,15 +357,60 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.crossReference", "Cross-reference", "Insert › Links", cross_ref)
             .params(r#"{"to": "heading|bookmark|figure|table", "target": string (text / name / number), "show"?: "text|page|number|aboveBelow"} or {} to list targets"#),
         CommandSpec::new("references.noteOptions", "Footnote and Endnote", "References › Footnotes", |s, v| {
-            if let Some(f) = p::str(v, "footnoteFormat") {
-                s.doc.settings.footnote_format = wordcraft_doc::section::NumFormat::from_ooxml(f);
+            let applies_to = p::str(v, "appliesTo").unwrap_or("document");
+            if applies_to == "section" {
+                let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+                let sp = s.doc.section_mut(block);
+                if let Some(f) = p::str(v, "footnoteFormat") {
+                    sp.footnote_format = Some(wordcraft_doc::section::NumFormat::from_ooxml(f));
+                }
+                if let Some(st) = p::u64(v, "footnoteStart") {
+                    sp.footnote_num_start = Some(st.clamp(1, 100_000) as u32);
+                }
+                if let Some(r) = p::str(v, "footnoteRestart") {
+                    sp.footnote_restart = wordcraft_doc::section::NoteRestart::from_ooxml(r);
+                }
+                if let Some(f) = p::str(v, "endnoteFormat") {
+                    sp.endnote_format = Some(wordcraft_doc::section::NumFormat::from_ooxml(f));
+                }
+                if let Some(st) = p::u64(v, "endnoteStart") {
+                    sp.endnote_num_start = Some(st.clamp(1, 100_000) as u32);
+                }
+                if let Some(r) = p::str(v, "endnoteRestart") {
+                    sp.endnote_restart = wordcraft_doc::section::NoteRestart::from_ooxml(r);
+                }
+            } else {
+                if let Some(f) = p::str(v, "footnoteFormat") {
+                    s.doc.settings.footnote_format = wordcraft_doc::section::NumFormat::from_ooxml(f);
+                }
+                if let Some(st) = p::u64(v, "footnoteStart") {
+                    s.doc.settings.footnote_start = st.clamp(1, 100_000) as u32;
+                }
+                if let Some(r) = p::str(v, "footnoteRestart") {
+                    s.doc.settings.footnote_restart = wordcraft_doc::section::NoteRestart::from_ooxml(r);
+                }
+                if let Some(f) = p::str(v, "endnoteFormat") {
+                    s.doc.settings.endnote_format = wordcraft_doc::section::NumFormat::from_ooxml(f);
+                }
+                if let Some(st) = p::u64(v, "endnoteStart") {
+                    s.doc.settings.endnote_start = st.clamp(1, 100_000) as u32;
+                }
+                if let Some(r) = p::str(v, "endnoteRestart") {
+                    s.doc.settings.endnote_restart = wordcraft_doc::section::NoteRestart::from_ooxml(r);
+                }
             }
-            if let Some(f) = p::str(v, "endnoteFormat") {
-                s.doc.settings.endnote_format = wordcraft_doc::section::NumFormat::from_ooxml(f);
-            }
-            Ok(json!({"footnoteFormat": s.doc.settings.footnote_format, "endnoteFormat": s.doc.settings.endnote_format}))
+            let st = &s.doc.settings;
+            Ok(json!({
+                "footnoteFormat": st.footnote_format,
+                "footnoteStart": st.footnote_start,
+                "footnoteRestart": st.footnote_restart,
+                "endnoteFormat": st.endnote_format,
+                "endnoteStart": st.endnote_start,
+                "endnoteRestart": st.endnote_restart,
+                "appliesTo": applies_to,
+            }))
         })
-        .params(r#"{"footnoteFormat"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "endnoteFormat"?: …}"#),
+        .params(r#"{"footnoteFormat"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "footnoteStart"?: 1.., "footnoteRestart"?: "continuous|eachSection|eachPage", "endnoteFormat"?: …, "endnoteStart"?: 1.., "endnoteRestart"?: "continuous|eachSection", "appliesTo"?: "document|section"}"#),
         CommandSpec::new("references.researcher", "Researcher", "References › Research", |s, _| {
             s.status = "Researcher needs an online service; WordCraft keeps your documents offline.".into();
             Ok(json!({"available": false}))
@@ -1177,5 +1222,46 @@ mod tests {
         assert_eq!(find_style("ISO 690 - Numerical Reference").map(|x| x.name), Some("ISO 690 (numerical)"));
         assert_eq!(find_style("Harvard - Anglia 2008").map(|x| x.name), Some("Harvard (Anglia)"));
         assert!(find_style("").is_none() && find_style("Vancouver").is_none());
+    }
+
+    #[test]
+    fn references_note_options_updates_document_and_section() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Section 1\nSection 2\n"));
+        // Document level update
+        s.run(
+            "references.noteOptions",
+            &json!({
+                "footnoteStart": 10,
+                "footnoteRestart": "eachSection",
+                "footnoteFormat": "lowerRoman",
+                "endnoteStart": 5,
+                "endnoteRestart": "continuous",
+                "endnoteFormat": "upperRoman",
+                "appliesTo": "document"
+            }),
+        )
+        .unwrap();
+        assert_eq!(s.doc.settings.footnote_start, 10);
+        assert_eq!(s.doc.settings.footnote_restart, wordcraft_doc::section::NoteRestart::EachSection);
+        assert_eq!(s.doc.settings.footnote_format, wordcraft_doc::section::NumFormat::LowerRoman);
+        assert_eq!(s.doc.settings.endnote_start, 5);
+        assert_eq!(s.doc.settings.endnote_restart, wordcraft_doc::section::NoteRestart::Continuous);
+        assert_eq!(s.doc.settings.endnote_format, wordcraft_doc::section::NumFormat::UpperRoman);
+
+        // Section level update
+        s.run(
+            "references.noteOptions",
+            &json!({
+                "footnoteStart": 1,
+                "footnoteRestart": "eachPage",
+                "footnoteFormat": "upperLetter",
+                "appliesTo": "section"
+            }),
+        )
+        .unwrap();
+        let sect = s.doc.sections().first().map(|(_, sc)| (*sc).clone()).unwrap();
+        assert_eq!(sect.footnote_num_start, Some(1));
+        assert_eq!(sect.footnote_restart, wordcraft_doc::section::NoteRestart::EachPage);
+        assert_eq!(sect.footnote_format, Some(wordcraft_doc::section::NumFormat::UpperLetter));
     }
 }

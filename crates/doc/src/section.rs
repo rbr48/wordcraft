@@ -32,6 +32,32 @@ pub enum NumFormat {
     None,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum NoteRestart {
+    #[default]
+    Continuous,
+    EachSection,
+    EachPage,
+}
+
+impl NoteRestart {
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            NoteRestart::Continuous => "continuous",
+            NoteRestart::EachSection => "eachSect",
+            NoteRestart::EachPage => "eachPage",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> NoteRestart {
+        match s {
+            "eachSect" | "eachSection" => NoteRestart::EachSection,
+            "eachPage" => NoteRestart::EachPage,
+            _ => NoteRestart::Continuous,
+        }
+    }
+}
+
 impl NumFormat {
     pub fn ooxml(self) -> &'static str {
         match self {
@@ -296,6 +322,14 @@ pub struct SectionProps {
     pub page_borders: Option<Borders>,
     /// Text direction / bidi section.
     pub rtl: bool,
+    /// Footnote numbering settings for this section (`w:footnotePr`).
+    pub footnote_num_start: Option<u32>,
+    pub footnote_restart: NoteRestart,
+    pub footnote_format: Option<NumFormat>,
+    /// Endnote numbering settings for this section (`w:endnotePr`).
+    pub endnote_num_start: Option<u32>,
+    pub endnote_restart: NoteRestart,
+    pub endnote_format: Option<NumFormat>,
     /// Tracked change of the section's properties (`w:sectPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<crate::props::PropChange<SectionProps>>>,
@@ -326,6 +360,12 @@ impl Default for SectionProps {
             valign: VAlign::Top,
             page_borders: None,
             rtl: false,
+            footnote_num_start: None,
+            footnote_restart: NoteRestart::Continuous,
+            footnote_format: None,
+            endnote_num_start: None,
+            endnote_restart: NoteRestart::Continuous,
+            endnote_format: None,
             fmt_change: None,
         }
     }

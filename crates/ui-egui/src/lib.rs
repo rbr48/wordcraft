@@ -1316,6 +1316,8 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "tools.autocorrect" if params.as_object().is_none_or(|m| m.is_empty()) => Some("autocorrect"),
         // Cross-reference without target shows its dialog.
         "insert.crossReference" if !has("target") => Some("crossReference"),
+        // Footnote and Endnote Options without settings shows its dialog.
+        "references.noteOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("noteOptions"),
         _ => None,
     }
 }

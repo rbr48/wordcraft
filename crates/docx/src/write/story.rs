@@ -1110,6 +1110,32 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
         if s.rtl {
             w.empty("w:bidi", &[]);
         }
+        if s.footnote_restart != wordcraft_doc::section::NoteRestart::Continuous || s.footnote_num_start.is_some() || s.footnote_format.is_some() {
+            w.open("w:footnotePr", &[]);
+            if let Some(st) = s.footnote_num_start {
+                w.empty("w:numStart", &[("w:val", &st.to_string())]);
+            }
+            if s.footnote_restart != wordcraft_doc::section::NoteRestart::Continuous {
+                w.empty("w:numRestart", &[("w:val", s.footnote_restart.ooxml())]);
+            }
+            if let Some(f) = s.footnote_format {
+                w.empty("w:numFmt", &[("w:val", f.ooxml())]);
+            }
+            w.close("w:footnotePr");
+        }
+        if s.endnote_restart != wordcraft_doc::section::NoteRestart::Continuous || s.endnote_num_start.is_some() || s.endnote_format.is_some() {
+            w.open("w:endnotePr", &[]);
+            if let Some(st) = s.endnote_num_start {
+                w.empty("w:numStart", &[("w:val", &st.to_string())]);
+            }
+            if s.endnote_restart != wordcraft_doc::section::NoteRestart::Continuous {
+                w.empty("w:numRestart", &[("w:val", s.endnote_restart.ooxml())]);
+            }
+            if let Some(f) = s.endnote_format {
+                w.empty("w:numFmt", &[("w:val", f.ooxml())]);
+            }
+            w.close("w:endnotePr");
+        }
     }
 }
 

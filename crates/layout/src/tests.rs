@@ -1018,6 +1018,46 @@ fn long_footnote_splits_across_pages_with_continuation_rule() {
 }
 
 #[test]
+fn footnote_continuation_notice_placed_on_split_page() {
+    let mut d = Document::from_text(&"Body text line.\n".repeat(40));
+    let long_note_text = "This is a very long footnote paragraph that goes on and on to fill multiple lines. ".repeat(150);
+    let mut note = wordcraft_doc::Paragraph::with_text(&long_note_text, Default::default()).styled("FootnoteText");
+    note.props.space_after = Some(0.0);
+    let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+    d.insert_object(
+        &Pos::body(0, 4),
+        InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    let notice_para = wordcraft_doc::Paragraph::with_text("(Footnote continues on next page)", Default::default());
+    let notice_id = d.add_part(wordcraft_doc::PartKind::FootnoteContinuationNotice, vec![wordcraft_doc::para_block(notice_para)]);
+    let l = lay(&d);
+    assert!(l.pages.len() >= 2);
+    let notice_on_p0 = l.pages[0].items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Part(nid), .. } if *nid == notice_id));
+    assert!(notice_on_p0, "continuation notice is placed on split page");
+}
+
+#[test]
+fn footnote_restart_per_section_and_custom_start() {
+    let mut d = Document::from_text("Section 1 text.\nSection 2 text.\n");
+    let n1 = footnote(&mut d, &Pos::body(0, 4), "Note in section 1");
+    // Add section break on paragraph 0
+    if let wordcraft_doc::Block::Para(p) = d.body.get_mut(0).map(std::sync::Arc::make_mut).unwrap() {
+        p.section = Some(Box::new(wordcraft_doc::SectionProps::default()));
+    }
+    // Section 2 properties on last_section
+    d.last_section.footnote_restart = wordcraft_doc::section::NoteRestart::EachSection;
+    d.last_section.footnote_num_start = Some(1);
+    d.last_section.footnote_format = Some(wordcraft_doc::section::NumFormat::LowerRoman);
+    let n2 = footnote(&mut d, &Pos::body(1, 4), "Note in section 2");
+    let (nums, formats) = note_numbers(&d, false);
+    assert_eq!(nums.get(&n1), Some(&1));
+    assert_eq!(nums.get(&n2), Some(&1), "footnote restarted to 1 in section 2");
+    assert_eq!(formats.get(&n2), Some(&wordcraft_doc::section::NumFormat::LowerRoman));
+}
+
+#[test]
 fn multi_column_section_balances_columns_on_last_page() {
     let mut d = Document::from_text(&"Column paragraph text with multiple words for testing layout balancing.\n".repeat(12));
     d.last_section.columns = wordcraft_doc::section::Columns { count: 2, space: 18.0, separator: false, widths: Vec::new() };
@@ -2027,7 +2067,7 @@ fn footnotes_inside_text_boxes_are_numbered_and_placed() {
     let b = l.caret(&d.start_of(StoryRef::Part(after))).unwrap();
     assert_eq!((a.page, b.page), (0, 0));
     assert!(a.top > 600.0 && a.top < b.top, "{a:?} {b:?}");
-    let nums = note_numbers(&d, false);
+    let (nums, _) = note_numbers(&d, false);
     assert_eq!((nums.get(&in_box), nums.get(&after)), (Some(&1), Some(&2)));
 }
 
