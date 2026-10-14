@@ -723,6 +723,8 @@ impl Writer<'_> {
             ShapeKind::Triangle => "triangle",
             ShapeKind::Diamond => "diamond",
             ShapeKind::Line => "line",
+            ShapeKind::ElbowConnector => "bentConnector3",
+            ShapeKind::CurvedConnector => "curvedConnector3",
             ShapeKind::Arrow => "rightArrow",
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",

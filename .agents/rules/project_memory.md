@@ -204,4 +204,15 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Compiled optimized release binaries: `wordcraft.exe`, `wordcraft-cli.exe`.
       - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe`.
       - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip`.
+  - **M12.2: Shape Connectors & Vector Rendering (Gap #10 Advancement)**:
+    - **Shape Kinds**: Added `ShapeKind::ElbowConnector` and `ShapeKind::CurvedConnector` to `wordcraft_doc::ShapeKind`.
+    - **OOXML DrawingML Roundtrip**: Mapped `ElbowConnector` to `bentConnector3` (supporting `bentConnector2`..`5` on read) and `CurvedConnector` to `curvedConnector3` (supporting `curvedConnector2`..`5` on read). Tested via `connectors_round_trip` in `crates/docx/tests/roundtrip.rs`.
+    - **Vector Rendering (`crates/render` & `crates/pdf`)**:
+      - Connectors exclude solid fill (`can_fill = false`) while stroking paths.
+      - `ElbowConnector`: 3-segment orthogonal elbow path from $(x_0, y_1) \to (cx, y_1) \to (cx, y_0) \to (x_1, y_0)$.
+      - `CurvedConnector`: Smooth cubic Bézier S-curve connecting endpoints with cardinal control handles.
+    - **Engine & Ribbon UI**:
+      - `insert.shape` defaults connector height to 36pt and fill to `None`. Tested via `insert_connectors_elbow_and_curved` in `crates/engine/src/cmd/objects.rs`.
+      - Added "Elbow Connector" (`elbowConnector`) and "Curved Connector" (`curvedConnector`) to the Shapes palette dropdown on the Insert ribbon tab.
+
 

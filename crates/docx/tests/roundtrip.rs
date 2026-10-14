@@ -853,6 +853,61 @@ fn content_controls_sdt_round_trip() {
 }
 
 #[test]
+fn connectors_round_trip() {
+    let mut p = Paragraph::with_text("Connectors: ", CharProps::default());
+    let elbow = InlineObject::Shape {
+        kind: ShapeKind::ElbowConnector,
+        w: 120.0,
+        h: 60.0,
+        fill: None,
+        stroke: Some(Rgb(0x15, 0x60, 0x82)),
+        stroke_width: 1.5,
+        float: Float { wrap: Wrap::Square, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    };
+    let curved = InlineObject::Shape {
+        kind: ShapeKind::CurvedConnector,
+        w: 100.0,
+        h: 50.0,
+        fill: None,
+        stroke: Some(Rgb(0xC0, 0x50, 0x10)),
+        stroke_width: 2.0,
+        float: Float { wrap: Wrap::TopAndBottom, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    };
+    let n = p.len();
+    p.insert_object(n, elbow, &CharProps::default()).unwrap();
+    let n = p.len();
+    p.insert_object(n, curved, &CharProps::default()).unwrap();
+
+    let d = doc_with(vec![p]);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:prstGeom prst="bentConnector3">"#), "{xml}");
+    assert!(xml.contains(r#"<a:prstGeom prst="curvedConnector3">"#), "{xml}");
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = &paras(&r)[0].objects;
+    assert_eq!(got.len(), 2);
+    match (&got[0], &got[1]) {
+        (
+            InlineObject::Shape { kind: ShapeKind::ElbowConnector, stroke_width: sw1, .. },
+            InlineObject::Shape { kind: ShapeKind::CurvedConnector, stroke_width: sw2, .. },
+        ) => {
+            assert_eq!(*sw1, 1.5);
+            assert_eq!(*sw2, 2.0);
+        }
+        o => panic!("{o:?}"),
+    }
+}
+
+#[test]
 fn fields_and_special_chars_round_trip() {
     let mut p = Paragraph::with_text("a\tb\nc\u{000C}d\u{000E}e\u{2011}f\u{00AD}g  spaced  ", CharProps::default());
     let fields = [

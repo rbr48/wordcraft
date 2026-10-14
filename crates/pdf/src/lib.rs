@@ -372,7 +372,11 @@ fn shape_effects(s: &mut Surface, kind: ShapeKind, rect: &Rect, fx: &wordcraft_d
 
 /// Outline of a basic shape in a rectangle (same geometry as the raster renderer).
 fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
-    let empty = if kind == ShapeKind::Line { r.w < 0.0 || r.h < 0.0 || (r.w == 0.0 && r.h == 0.0) } else { r.w <= 0.0 || r.h <= 0.0 };
+    let empty = if matches!(kind, ShapeKind::Line | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector) {
+        r.w < 0.0 || r.h < 0.0 || (r.w == 0.0 && r.h == 0.0)
+    } else {
+        r.w <= 0.0 || r.h <= 0.0
+    };
     if !(ok(r.x) && ok(r.y) && ok(r.w) && ok(r.h)) || empty {
         return None;
     }
@@ -421,6 +425,11 @@ fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
         ShapeKind::Line => {
             pb.move_to(x0, y1);
             pb.line_to(x1, y0);
+        }
+        ShapeKind::ElbowConnector => poly(&mut pb, &[(x0, y1), (cx, y1), (cx, y0), (x1, y0)]),
+        ShapeKind::CurvedConnector => {
+            pb.move_to(x0, y1);
+            pb.cubic_to(cx, y1, cx, y0, x1, y0);
         }
         ShapeKind::Arrow => {
             let h = r.h;
@@ -850,7 +859,7 @@ impl Exporter<'_> {
             }
             Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects } => {
                 let Some(p) = shape_path(*kind, rect) else { return };
-                let can_fill = *kind != ShapeKind::Line;
+                let can_fill = !matches!(*kind, ShapeKind::Line | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector);
                 let fx = effects.sanitized();
                 if !fx.is_empty() && (f.is_some() && can_fill || stroke.is_some()) {
                     shape_effects(s, *kind, rect, &fx, f.is_some() && can_fill, stroke.is_some(), *stroke_width);

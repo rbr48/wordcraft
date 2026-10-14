@@ -731,6 +731,8 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
                 ("Hexagon", "hexagon"),
                 ("Octagon", "octagon"),
                 ("Line", "line"),
+                ("Elbow Connector", "elbowConnector"),
+                ("Curved Connector", "curvedConnector"),
                 ("Arrow", "arrow"),
                 ("Star", "star"),
                 ("Heart", "heart"),

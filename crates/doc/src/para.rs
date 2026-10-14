@@ -202,6 +202,10 @@ pub enum ShapeKind {
     Triangle,
     Diamond,
     Line,
+    /// Orthogonal elbow connector line.
+    ElbowConnector,
+    /// Smooth S-curve curved connector line.
+    CurvedConnector,
     Arrow,
     Star,
     Heart,

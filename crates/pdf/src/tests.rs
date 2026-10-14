@@ -426,6 +426,8 @@ fn shapes_have_paths() {
         ShapeKind::Heart,
         ShapeKind::Arrow,
         ShapeKind::Line,
+        ShapeKind::ElbowConnector,
+        ShapeKind::CurvedConnector,
         ShapeKind::Diamond,
         ShapeKind::Triangle,
         ShapeKind::RightTriangle,

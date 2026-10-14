@@ -664,7 +664,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let path = shape_path(*kind, r);
             ctx.set_transform(view);
             let fx = effects.sanitized();
-            let can_fill = *kind != ShapeKind::Line && fill.is_some();
+            let can_fill = !matches!(*kind, ShapeKind::Line | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector) && fill.is_some();
             if !fx.is_empty() && (can_fill || stroke.is_some()) {
                 let sw = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) as f64 } else { 0.75 };
                 // The shape's silhouette grown by `g` points and moved by `d`, in the current paint.
@@ -782,6 +782,20 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect) -> BezPath {
             let mut p = BezPath::new();
             p.move_to((r.x0, r.y1));
             p.line_to((r.x1, r.y0));
+            p
+        }
+        ShapeKind::ElbowConnector => {
+            let mut p = BezPath::new();
+            p.move_to((r.x0, r.y1));
+            p.line_to((cx, r.y1));
+            p.line_to((cx, r.y0));
+            p.line_to((r.x1, r.y0));
+            p
+        }
+        ShapeKind::CurvedConnector => {
+            let mut p = BezPath::new();
+            p.move_to((r.x0, r.y1));
+            p.curve_to((cx, r.y1), (cx, r.y0), (r.x1, r.y0));
             p
         }
         ShapeKind::Arrow => {
@@ -1202,6 +1216,8 @@ mod tests {
             ShapeKind::Triangle,
             ShapeKind::Diamond,
             ShapeKind::Line,
+            ShapeKind::ElbowConnector,
+            ShapeKind::CurvedConnector,
             ShapeKind::Arrow,
             ShapeKind::Star,
             ShapeKind::Heart,

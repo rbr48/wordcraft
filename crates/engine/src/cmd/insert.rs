@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.table", "Table", "Insert › Tables", table).params(r#"{"rows": n, "cols": n, "style"?: string}"#),
         CommandSpec::new("insert.picture", "Pictures", "Insert › Illustrations", picture).params(r#"{"path"?: string, "data"?: base64, "width"?: pt, "alt"?: string}"#),
         CommandSpec::new("insert.shape", "Shapes", "Insert › Illustrations", shape)
-            .params(r#"{"kind": "rectangle|roundedRectangle|ellipse|triangle|diamond|line|arrow|star|heart", "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB"}"#),
+            .params(r#"{"kind": "rectangle|roundedRectangle|ellipse|triangle|diamond|line|elbowConnector|curvedConnector|arrow|star|heart", "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB"}"#),
         CommandSpec::new("insert.icon", "Icons", "Insert › Illustrations", icon)
             .params(r#"{"name"?: "arrow|star|heart|ellipse|diamond|triangle", "size"?: pt, "color"?: "RRGGBB"}"#),
         CommandSpec::new("insert.chart", "Chart", "Insert › Illustrations", chart)
@@ -953,10 +953,11 @@ pub(crate) fn shape(s: &mut Session, v: &Value) -> CmdResult {
     let kind: ShapeKind =
         serde_json::from_value(v.get("kind").cloned().unwrap_or(json!("rectangle"))).map_err(|e| CmdError::Params(e.to_string()))?;
     let w = p::f32(v, "width").unwrap_or(108.0).clamp(4.0, 2000.0);
-    let h = p::f32(v, "height").unwrap_or(if kind == ShapeKind::Line { 1.0 } else { 72.0 }).clamp(1.0, 2000.0);
+    let is_line = matches!(kind, ShapeKind::Line | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector);
+    let h = p::f32(v, "height").unwrap_or(if is_line { 36.0 } else { 72.0 }).clamp(1.0, 2000.0);
     let fill = match p::str(v, "fill") {
         Some(c) => Rgb::parse(c),
-        None if kind == ShapeKind::Line => None,
+        None if is_line => None,
         None => Some(Rgb(0x15, 0x60, 0x82)),
     };
     let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0x0E, 0x40, 0x5A)));

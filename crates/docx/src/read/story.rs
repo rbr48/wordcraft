@@ -910,6 +910,8 @@ impl Reader<'_> {
             "rtTriangle" => ShapeKind::RightTriangle,
             "diamond" => ShapeKind::Diamond,
             "line" | "straightConnector1" => ShapeKind::Line,
+            "bentConnector2" | "bentConnector3" | "bentConnector4" | "bentConnector5" => ShapeKind::ElbowConnector,
+            "curvedConnector2" | "curvedConnector3" | "curvedConnector4" | "curvedConnector5" => ShapeKind::CurvedConnector,
             "rightArrow" | "leftArrow" | "upArrow" | "downArrow" => ShapeKind::Arrow,
             "star5" | "star4" | "star6" => ShapeKind::Star,
             "heart" => ShapeKind::Heart,
