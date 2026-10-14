@@ -373,6 +373,32 @@ pub enum InlineObject {
         #[serde(default)]
         text: String,
     },
+    /// East Asian ruby annotation (Phonetic Guide).
+    Ruby {
+        /// Base text (e.g. "漢" or "漢字").
+        base: String,
+        /// Phonetic guide / ruby text (e.g. "かん" or "かんじ").
+        ruby: String,
+        /// Alignment: "distributeLetter", "distributeSpace", "center", "left", "right".
+        #[serde(default = "default_ruby_align")]
+        align: String,
+        /// Font size of ruby text in half-points (0 = automatic).
+        #[serde(default)]
+        hps: u32,
+        /// Raise distance above baseline in half-points (0 = automatic).
+        #[serde(default)]
+        hps_raise: u32,
+        /// Base text font size in half-points (0 = automatic).
+        #[serde(default)]
+        hps_base_text: u32,
+        /// Language ID (e.g. "ja-JP", "zh-CN").
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        lid: String,
+    },
+}
+
+fn default_ruby_align() -> String {
+    "distributeLetter".to_string()
 }
 
 /// One member of an [`InlineObject::Group`]: a picture or shape (its own `w`, `h` and story), at
@@ -504,12 +530,17 @@ impl InlineObject {
             _ => None,
         }
     }
+    /// Whether this object is an East Asian ruby annotation (Phonetic Guide).
+    pub fn is_ruby(&self) -> bool {
+        matches!(self, InlineObject::Ruby { .. })
+    }
     /// The text this object contributes to plain-text extraction.
     pub fn plain_text(&self) -> &str {
         match self {
             InlineObject::Field { result, .. } => result,
             InlineObject::Equation { linear, .. } => linear,
             InlineObject::Opaque { text, .. } => text,
+            InlineObject::Ruby { base, .. } => base,
             _ => "",
         }
     }

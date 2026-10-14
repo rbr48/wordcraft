@@ -1,6 +1,6 @@
 # Layout and pagination parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** trivial (space before at the top of a page like Word); previously major (first version; line breaking, pagination and object placement checked against Word's behaviour from the layout source on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Phonetic Guide ruby and Enclose Characters landed); previously trivial (space before at the top of a page like Word) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 A document only "opens correctly" if its pages break where Word breaks them: the same lines, the
 same page count, footnotes and pictures on the same pages. This checklist covers line breaking,
@@ -47,7 +47,7 @@ font can't match Word's metrics.
 | Gutter, mirror margins, book fold, 2 pages per sheet | 🟡 | gutter and mirror margins; book fold missing | 2–3 |
 | Document grid (`w:docGrid`, lines per page, characters per line) | ❌ | East Asian documents paginate differently without it | 4–6 |
 | Vertical text (`tbRl`) in sections and text boxes; cell text direction | 🟡 | cell text direction landed (#245); page-level and text-box vertical text missing | 8–12 |
-| Ruby / phonetic guide, enclose characters, combined characters | ❌ | | 4–6 |
+| Ruby / phonetic guide, enclose characters, combined characters | ✅ | Phonetic Guide (`<w:ruby>`) and Enclose Characters (`format.enclose`) landed (2026-10-14) with ECMA-376 OOXML round-trip, layout elevation, vector rendering and modal dialogs | — |
 | Bidirectional paragraphs, mixed-direction lines | 🟡 | #207; right-to-left tables (`w:bidiVisual`: first column on the right, sides, indent and alignment mirrored) landed 2026-10-12; RTL sections missing | 4–6 |
 | Equations: display layout, numbering, wrapping long display equations | ✅ | #191; long display equations break at top-level operators (`m:brkBin`, `m:brkBinSub`), manual breaks and `m:alnAt`, continuation lines indented by `m:wrapIndent` or set right (`m:wrapRight`) (#326) | — |
 | Hidden text excluded from breaking and hyphenation | ✅ | #173 | — |
@@ -68,6 +68,7 @@ font can't match Word's metrics.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Phonetic Guide (`<w:ruby>`) and Enclose Characters (`format.enclose`) landed with ECMA-376 OOXML round-trip, elevated line layout, raised vector glyph rendering, Home ribbon tab buttons, and interactive modal dialogs (`Dialog::Phonetic`, `Dialog::Enclose`) |
 | 2026-10-13 | trivial | Space before at the top of a page like Word: after a page break the paragraph's mark stays with the break (no space at the top of the next page), a paragraph starting with a page break keeps its space before on the new page, and the previous space after comes off after a page break before or a section break (32 cases measured in Word for Windows) |
 | 2026-10-11 | trivial | Group and Ungroup keep turned members' orientation and placement (#441, #443); Size resizes a group (#442); the eraser hits turned ink where it is drawn (#445) |
 | 2026-10-10 | trivial | Long footnotes continue onto the next page with a continuation separator (#352) |

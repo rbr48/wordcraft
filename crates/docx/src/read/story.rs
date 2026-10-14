@@ -428,8 +428,8 @@ impl Reader<'_> {
                     self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
                 }
             }
-            // Some generators write a break directly under the paragraph instead of inside a run.
-            "w:br" | "w:cr" => {
+            // Some generators write a break or ruby directly under the paragraph instead of inside a run.
+            "w:br" | "w:cr" | "w:ruby" => {
                 let props = self.run_props_none(ctx);
                 self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
             }
@@ -579,7 +579,47 @@ impl Reader<'_> {
             }
             "w:pgNum" => self.emit_obj(sc, pb, InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false }, props),
             "w:ruby" => {
+                let pr = k.child("w:rubyPr");
+                let align = pr.and_then(|p| p.child("w:rubyAlign")).and_then(|a| a.attr("w:val")).unwrap_or("distributeLetter");
+                let hps = pr.and_then(|p| p.child("w:hps")).and_then(|h| h.attr("w:val")).and_then(|v| v.parse().ok()).unwrap_or(0);
+                let hps_raise = pr.and_then(|p| p.child("w:hpsRaise")).and_then(|h| h.attr("w:val")).and_then(|v| v.parse().ok()).unwrap_or(0);
+                let hps_base_text = pr.and_then(|p| p.child("w:hpsBaseText")).and_then(|h| h.attr("w:val")).and_then(|v| v.parse().ok()).unwrap_or(0);
+                let lid = pr.and_then(|p| p.child("w:lid")).and_then(|l| l.attr("w:val")).unwrap_or("");
+
+                let mut ruby_text = String::new();
+                if let Some(rt) = k.child("w:rt") {
+                    for r in rt.children("w:r") {
+                        for t in r.children("w:t") {
+                            ruby_text.push_str(&t.text());
+                        }
+                    }
+                }
+
+                let mut base_text = String::new();
                 if let Some(base) = k.child("w:rubyBase") {
+                    for r in base.children("w:r") {
+                        for t in r.children("w:t") {
+                            base_text.push_str(&t.text());
+                        }
+                    }
+                }
+
+                if !base_text.is_empty() {
+                    self.emit_obj(
+                        sc,
+                        pb,
+                        InlineObject::Ruby {
+                            base: base_text,
+                            ruby: ruby_text,
+                            align: align.to_string(),
+                            hps,
+                            hps_raise,
+                            hps_base_text,
+                            lid: lid.to_string(),
+                        },
+                        props,
+                    );
+                } else if let Some(base) = k.child("w:rubyBase") {
                     for r in base.children("w:r") {
                         for c in r.els() {
                             self.read_run_child(sc, pb, c, props, rels, note, depth + 1);

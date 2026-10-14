@@ -308,3 +308,25 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Added `drawing_canvas_round_trip` in `crates/docx/tests/roundtrip.rs` (39/39 tests passing).
       - Added `insert_drawing_canvas_creates_group_with_is_canvas` in `crates/engine/src/tests.rs`.
       - All 6 CI quality gates pass cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **M16.1: East Asian Typography — Phonetic Guide (`<w:ruby>`) & Enclose Characters (`format.enclose`) (Gap #17 Advancement)**:
+    - **Document AST & Data Model (`crates/doc/src/para.rs`)**:
+      - Added `InlineObject::Ruby { base: String, ruby: String, align: String, hps: u32, hps_raise: u32, hps_base_text: u32, lid: String }` with helper `is_ruby(&self) -> bool` and plain text extraction returning `base`.
+    - **OOXML Roundtrip Serialization (`crates/docx`)**:
+      - `crates/docx/src/read/story.rs`: Parses `<w:ruby>` containing `<w:rubyPr>` (`rubyAlign`, `hps`, `hpsRaise`, `hpsBaseText`, `lid`), `<w:rt>` ruby pronunciation text, and `<w:rubyBase>` base text into `InlineObject::Ruby`. Handles direct `<w:ruby>` occurrences under `<w:p>` and inside `<w:r>`.
+      - `crates/docx/src/write/story.rs`: Emits ECMA-376 compliant `<w:ruby>` wrapped inside `<w:r>` with complete `<w:rubyPr>`, `<w:rt>`, and `<w:rubyBase>` elements, setting ruby font size from `hps`.
+    - **Layout Elevation & Line Height Compensation (`crates/layout`)**:
+      - `crates/layout/src/para.rs`: Defined `RubyLayout` struct and tracked ruby clusters in `ParaLayout.rubies`. In `layout_para()`, shaped base text atomically, elevated line headroom via `c.obj_h = (raise + rsize).max(c.obj_h)` to prevent line collisions.
+      - `crates/layout/src/display.rs`: Implemented vector rendering for ruby text raised above the base text baseline with alignment options (`center`, `left`, `right`, `distributeLetter`, `distributeSpace`).
+    - **Engine Commands & Enclose Characters (`crates/engine/src/cmd/format.rs`)**:
+      - `format.phonetic`: Inserts, queries, or clears phonetic guides on selected text.
+      - `format.enclose`: Encloses 1-2 characters in circle (`○`), square (`□`), triangle (`△`), or diamond (`◇`), mapping standard numbers and letters to Unicode enclosed alphanumerics (`①`..`⑳`, `Ⓐ`..`Ⓩ`, `ⓐ`..`ⓩ`) and persisting native OOXML `EQ \o\ac` fields.
+    - **UI Ribbon, Vector Icons & Interactive Dialogs (`crates/ui-egui`)**:
+      - Added procedural vector icons for `"phonetic"` and `"enclose"` in `crates/ui-egui/src/icons.rs`.
+      - Added "Phonetic Guide" and "Enclose Characters" buttons to Home ribbon tab Font group row 2.
+      - Built interactive modal dialogs `Dialog::Phonetic` (base text, ruby text, alignment, font size, offset raise) and `Dialog::Enclose` (character text, enclosure shape selector), bringing total modal dialog count to 34.
+    - **Test Coverage & Verification**:
+      - Added `ruby_phonetic_guide_round_trip` in `crates/docx/tests/roundtrip.rs`.
+      - Added `phonetic_guide_dialog_opens_and_applies_ruby` and `enclose_characters_dialog_opens_and_encloses` in `crates/ui-egui/src/dialogs.rs`.
+      - Survived hostile/garbage parameters without panics in `crates/engine/src/tests.rs::hostile_params_never_panic`.
+      - All 6 CI quality gates verified passing: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+

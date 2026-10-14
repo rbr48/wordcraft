@@ -453,6 +453,19 @@ pub enum Dialog {
         selected_index: Option<usize>,
         targets: Vec<String>,
     },
+    /// Home › Font › Phonetic Guide
+    Phonetic {
+        base_text: String,
+        ruby_text: String,
+        alignment: String,
+        font_size: f32,
+        raise: f32,
+    },
+    /// Home › Font › Enclose Characters
+    Enclose {
+        text: String,
+        shape: String,
+    },
 }
 
 /// Standard world languages matching Microsoft Word proofing language list (name, BCP-47 tag).
@@ -942,6 +955,8 @@ impl Dialog {
             Dialog::PageNumbers { .. } => "pageNumbers",
             Dialog::AutoCorrect { .. } => "autocorrect",
             Dialog::CrossReference { .. } => "crossReference",
+            Dialog::Phonetic { .. } => "phonetic",
+            Dialog::Enclose { .. } => "enclose",
         }
     }
 
@@ -1260,6 +1275,20 @@ impl Dialog {
                 let selected_index = if targets.is_empty() { None } else { Some(0) };
                 Dialog::CrossReference { ref_type, insert_as: "text".to_string(), as_hyperlink: true, selected_index, targets }
             }
+            "phonetic" => {
+                let sel = app.session.selected_text();
+                let q = app.session.run("format.phonetic", &json!({})).unwrap_or(json!({}));
+                let base = q.get("baseText").and_then(Value::as_str).unwrap_or(&sel).to_string();
+                let ruby = q.get("ruby").and_then(Value::as_str).unwrap_or("").to_string();
+                let align = q.get("align").and_then(Value::as_str).unwrap_or("distributeLetter").to_string();
+                let font_size = q.get("hps").and_then(Value::as_f64).filter(|h| *h > 0.0).map(|h| (h / 2.0) as f32).unwrap_or(10.0);
+                let raise = q.get("hpsRaise").and_then(Value::as_f64).map(|h| (h / 2.0) as f32).unwrap_or(0.0);
+                Dialog::Phonetic { base_text: base, ruby_text: ruby, alignment: align, font_size, raise }
+            }
+            "enclose" => {
+                let sel = app.session.selected_text();
+                Dialog::Enclose { text: sel, shape: "circle".to_string() }
+            }
             _ => return None,
         })
     }
@@ -1400,6 +1429,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::PageNumbers { .. } => "Page Number Format",
         Dialog::AutoCorrect { .. } => "AutoCorrect",
         Dialog::CrossReference { .. } => "Cross-reference",
+        Dialog::Phonetic { .. } => "Phonetic Guide",
+        Dialog::Enclose { .. } => "Enclose Characters",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -3373,6 +3404,124 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             close
         }
+        Dialog::Phonetic { base_text, ruby_text, alignment, font_size, raise } => {
+            egui::Grid::new("phonetic_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Base text:"));
+                ui.add(egui::TextEdit::singleline(base_text).desired_width(180.0));
+                ui.end_row();
+
+                ui.label(tl!("Ruby text:"));
+                ui.add(egui::TextEdit::singleline(ruby_text).desired_width(180.0));
+                ui.end_row();
+
+                ui.label(tl!("Alignment:"));
+                let align_lbl = match alignment.as_str() {
+                    "distributeSpace" => "1-2-1 (0:1:0)",
+                    "center" => "Centered",
+                    "left" => "Left",
+                    "right" => "Right",
+                    _ => "Distribute Letter (0:1:1)",
+                };
+                egui::ComboBox::from_id_salt("phonetic_align").selected_text(tl!(align_lbl)).width(180.0).show_ui(ui, |ui| {
+                    ui.selectable_value(alignment, "distributeLetter".to_string(), tl!("Distribute Letter (0:1:1)"));
+                    ui.selectable_value(alignment, "distributeSpace".to_string(), tl!("1-2-1 (0:1:0)"));
+                    ui.selectable_value(alignment, "center".to_string(), tl!("Centered"));
+                    ui.selectable_value(alignment, "left".to_string(), tl!("Left"));
+                    ui.selectable_value(alignment, "right".to_string(), tl!("Right"));
+                });
+                ui.end_row();
+
+                ui.label(tl!("Size:"));
+                ui.add(egui::DragValue::new(font_size).range(4.0..=72.0).speed(0.5).suffix(" pt"));
+                ui.end_row();
+
+                ui.label(tl!("Offset:"));
+                ui.add(egui::DragValue::new(raise).range(0.0..=36.0).speed(0.5).suffix(" pt"));
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(tl!("Preview:"));
+                ui.vertical_centered(|ui| {
+                    ui.label(egui::RichText::new(&*ruby_text).size((*font_size).max(6.0)).weak());
+                    ui.label(egui::RichText::new(&*base_text).size(16.0));
+                });
+            });
+            ui.add_space(8.0);
+            let mut close = false;
+            ui.horizontal(|ui| {
+                let can_apply = !base_text.trim().is_empty() && !ruby_text.trim().is_empty();
+                if ui
+                    .add_enabled(
+                        can_apply,
+                        egui::Button::new(egui::RichText::new(tl!("OK")).color(egui::Color32::WHITE)).fill(crate::theme::APP_COLOR),
+                    )
+                    .clicked()
+                {
+                    let hps = (*font_size * 2.0).round() as u32;
+                    let hps_raise = (*raise * 2.0).round() as u32;
+                    let _ = app.run(
+                        "format.phonetic",
+                        json!({
+                            "ruby": ruby_text,
+                            "align": alignment,
+                            "hps": hps,
+                            "hpsRaise": hps_raise,
+                        }),
+                    );
+                    close = true;
+                }
+                if ui.button(tl!("Remove")).clicked() {
+                    let _ = app.run("format.phonetic", json!({"ruby": ""}));
+                    close = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        close = true;
+                    }
+                });
+            });
+            close
+        }
+        Dialog::Enclose { text, shape } => {
+            egui::Grid::new("enclose_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Text:"));
+                ui.add(egui::TextEdit::singleline(text).desired_width(120.0));
+                ui.end_row();
+
+                ui.label(tl!("Enclosure:"));
+                ui.vertical(|ui| {
+                    ui.radio_value(shape, "none".to_string(), tl!("None"));
+                    ui.radio_value(shape, "circle".to_string(), tl!("○ Circle"));
+                    ui.radio_value(shape, "square".to_string(), tl!("□ Square"));
+                    ui.radio_value(shape, "triangle".to_string(), tl!("△ Triangle"));
+                    ui.radio_value(shape, "diamond".to_string(), tl!("◇ Diamond"));
+                });
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(tl!("Preview:"));
+                ui.vertical_centered(|ui| {
+                    let sym = match shape.as_str() {
+                        "square" => "□",
+                        "triangle" => "△",
+                        "diamond" => "◇",
+                        "none" => "",
+                        _ => "○",
+                    };
+                    let display = if shape == "none" { text.clone() } else { format!("{sym}{text}") };
+                    ui.label(egui::RichText::new(display).size(22.0));
+                });
+            });
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                let _ = app.run("format.enclose", json!({"shape": shape}));
+            }
+            ok || cancel
+        }
     }
 }
 
@@ -4084,5 +4233,65 @@ mod tests {
 
         let doc_text = app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
         assert!(doc_text.contains("Chapter One"));
+    }
+
+    #[test]
+    fn phonetic_guide_dialog_opens_and_applies_ruby() {
+        let mut app = app_with("漢字");
+        app.run("select.all", json!({})).unwrap();
+
+        let d = Dialog::open("phonetic", &mut app).expect("phonetic dialog");
+        let Dialog::Phonetic { base_text, ruby_text, alignment, font_size, .. } = d else {
+            panic!("not phonetic dialog");
+        };
+        assert_eq!(base_text, "漢字");
+        assert_eq!(ruby_text, "");
+        assert_eq!(alignment, "distributeLetter");
+        assert_eq!(font_size, 10.0);
+
+        app.run(
+            "format.phonetic",
+            json!({
+                "ruby": "かんじ",
+                "align": "distributeLetter",
+                "hps": 20,
+            }),
+        )
+        .unwrap();
+
+        let p = app.session.doc.para_at(&app.session.sel.focus).unwrap();
+        assert!(p.objects.iter().any(|o| match o {
+            wordcraft_doc::para::InlineObject::Ruby { base, ruby, .. } => base == "漢字" && ruby == "かんじ",
+            _ => false,
+        }));
+
+        let d2 = Dialog::open("phonetic", &mut app).expect("phonetic dialog reopened");
+        let Dialog::Phonetic { base_text: b2, ruby_text: r2, font_size: s2, .. } = d2 else {
+            panic!("not phonetic dialog");
+        };
+        assert_eq!(b2, "漢字");
+        assert_eq!(r2, "かんじ");
+        assert_eq!(s2, 10.0);
+    }
+
+    #[test]
+    fn enclose_characters_dialog_opens_and_encloses() {
+        let mut app = app_with("1");
+        app.run("select.all", json!({})).unwrap();
+
+        let d = Dialog::open("enclose", &mut app).expect("enclose dialog");
+        let Dialog::Enclose { text, shape } = d else {
+            panic!("not enclose dialog");
+        };
+        assert_eq!(text, "1");
+        assert_eq!(shape, "circle");
+
+        app.run("format.enclose", json!({"shape": "circle"})).unwrap();
+
+        let p = app.session.doc.para_at(&app.session.sel.focus).unwrap();
+        assert!(p.objects.iter().any(|o| match o {
+            wordcraft_doc::para::InlineObject::Field { instr, result, .. } => instr.contains("EQ \\o\\ac") && result == "①",
+            _ => false,
+        }));
     }
 }

@@ -1648,3 +1648,52 @@ fn drawing_canvas_round_trip() {
         o => panic!("unexpected child: {o:?}"),
     }
 }
+
+#[test]
+fn ruby_phonetic_guide_round_trip() {
+    let mut d = Document::default();
+    let mut p = Paragraph::with_text("Before ", CharProps::default());
+    let ruby = InlineObject::Ruby {
+        base: "漢字".into(),
+        ruby: "かんじ".into(),
+        align: "distributeLetter".into(),
+        hps: 10,
+        hps_raise: 18,
+        hps_base_text: 21,
+        lid: "ja-JP".into(),
+    };
+    let end = p.len();
+    p.insert_object(end, ruby, &CharProps::default()).unwrap();
+    let end = p.len();
+    p.insert_text(end, " After", &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("<w:ruby>"), "should contain w:ruby: {xml}");
+    assert!(xml.contains(r#"<w:rubyAlign w:val="distributeLetter"/>"#), "should contain rubyAlign: {xml}");
+    assert!(xml.contains(r#"<w:hps w:val="10"/>"#), "should contain hps: {xml}");
+    assert!(xml.contains(r#"<w:hpsRaise w:val="18"/>"#), "should contain hpsRaise: {xml}");
+    assert!(xml.contains(r#"<w:hpsBaseText w:val="21"/>"#), "should contain hpsBaseText: {xml}");
+    assert!(xml.contains(r#"<w:lid w:val="ja-JP"/>"#), "should contain lid: {xml}");
+    assert!(xml.contains("<w:rt>"), "should contain w:rt: {xml}");
+    assert!(xml.contains("かんじ"), "should contain ruby text: {xml}");
+    assert!(xml.contains("<w:rubyBase>"), "should contain w:rubyBase: {xml}");
+    assert!(xml.contains("漢字"), "should contain base text: {xml}");
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r);
+    assert_eq!(got[0].objects.len(), 1);
+    let InlineObject::Ruby { base, ruby, align, hps, hps_raise, hps_base_text, lid } = &got[0].objects[0] else {
+        panic!("expected ruby: {:?}", got[0].objects);
+    };
+    assert_eq!(base, "漢字");
+    assert_eq!(ruby, "かんじ");
+    assert_eq!(align, "distributeLetter");
+    assert_eq!(*hps, 10);
+    assert_eq!(*hps_raise, 18);
+    assert_eq!(*hps_base_text, 21);
+    assert_eq!(lid, "ja-JP");
+}

@@ -259,6 +259,19 @@ pub struct ParaLayout {
     /// equations) rather than for the paragraph's own text, by cluster index, sorted, with each of
     /// the cluster's glyphs' byte range in that text (a ligature's glyph spans its letters).
     pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// East Asian ruby annotations (Phonetic Guide) by base text cluster index.
+    pub rubies: Vec<(usize, RubyLayout)>,
+}
+
+/// Position and formatting for an East Asian ruby text annotation (Phonetic Guide).
+#[derive(Clone, Debug)]
+pub struct RubyLayout {
+    pub base: String,
+    pub ruby: String,
+    pub align: String,
+    pub ruby_size: f32,
+    pub raise: f32,
+    pub style: u16,
 }
 
 /// What a table style gives the text of a cell: its paragraph and run formatting, with the
@@ -719,6 +732,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut drop_cap_w = 0.0;
     let mut maths = Vec::new();
     let mut displays = Vec::new();
+    let mut rubies = Vec::new();
     let mut eq_counter = env.eq_number;
     let math_props = doc.settings.math.clone().unwrap_or_default();
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
@@ -877,6 +891,18 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             maths.push((k, Arc::new(ml)));
                         }
                         Some(InlineObject::Opaque { text, .. }) => b.shape_atomic(text, start, end, &rc),
+                        Some(InlineObject::Ruby { base, ruby, align, hps, hps_raise, .. }) => {
+                            let rsize = if *hps > 0 { *hps as f32 / 2.0 } else { (rc.size * 0.5).max(4.0) };
+                            let raise = if *hps_raise > 0 { *hps_raise as f32 / 2.0 } else { rc.size * 0.85 };
+                            b.shape_atomic(base, start, end, &rc);
+                            if let Some(c) = b.clusters.last_mut() {
+                                c.obj_h = (raise + rsize).max(c.obj_h);
+                            }
+                            rubies.push((
+                                b.clusters.len().saturating_sub(1),
+                                RubyLayout { base: base.clone(), ruby: ruby.clone(), align: align.clone(), ruby_size: rsize, raise, style: si },
+                            ));
+                        }
                         _ => push(&mut b, ClKind::Marker, 0.0, 0.0),
                     }
                 }
@@ -992,6 +1018,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         drop_cap_w,
         maths,
         displays,
+        rubies,
         left_out: Vec::new(),
     };
     pl.hyph_after =

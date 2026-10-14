@@ -626,6 +626,47 @@ impl Writer<'_> {
             InlineObject::SdtEnd { .. } => {
                 w.raw("</w:sdtContent></w:sdt>");
             }
+            InlineObject::Ruby { base, ruby, align, hps, hps_raise, hps_base_text, lid } => {
+                self.rev_open(w, props);
+                w.open("w:r", &[]);
+                self.rpr(w, props);
+                w.open("w:ruby", &[]);
+                w.open("w:rubyPr", &[]);
+                let al = if align.is_empty() { "distributeLetter" } else { align.as_str() };
+                w.empty("w:rubyAlign", &[("w:val", al)]);
+                if *hps > 0 {
+                    w.empty("w:hps", &[("w:val", &hps.to_string())]);
+                }
+                if *hps_raise > 0 {
+                    w.empty("w:hpsRaise", &[("w:val", &hps_raise.to_string())]);
+                }
+                if *hps_base_text > 0 {
+                    w.empty("w:hpsBaseText", &[("w:val", &hps_base_text.to_string())]);
+                }
+                if !lid.is_empty() {
+                    w.empty("w:lid", &[("w:val", lid)]);
+                }
+                w.close("w:rubyPr");
+                w.open("w:rt", &[]);
+                w.open("w:r", &[]);
+                let mut rt_props = props.clone();
+                if *hps > 0 {
+                    rt_props.size = Some(*hps as f32 / 2.0);
+                }
+                self.rpr(w, &rt_props);
+                w.leaf("w:t", &[("xml:space", "preserve")], ruby);
+                w.close("w:r");
+                w.close("w:rt");
+                w.open("w:rubyBase", &[]);
+                w.open("w:r", &[]);
+                self.rpr(w, props);
+                w.leaf("w:t", &[("xml:space", "preserve")], base);
+                w.close("w:r");
+                w.close("w:rubyBase");
+                w.close("w:ruby");
+                w.close("w:r");
+                self.rev_close(w, props);
+            }
         }
     }
 
