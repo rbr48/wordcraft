@@ -371,6 +371,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.language", "Language", "Review › Language", |s, v| {
             let lang = p::str(v, "lang").unwrap_or("en-US").to_string();
             let no_proof = p::bool(v, "noProof");
+            let set_default = p::bool(v, "default").unwrap_or(false);
+            if set_default
+                && let Some(normal) = s.doc.styles.get_mut("Normal")
+            {
+                normal.chr.lang = Some(lang.clone());
+                if let Some(np) = no_proof {
+                    normal.chr.no_proof = Some(np);
+                }
+            }
             super::format::apply(s, &|c| {
                 c.lang = Some(lang.clone());
                 if let Some(np) = no_proof {
@@ -378,7 +387,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
             })
         })
-        .params(r#"{"lang": "en-US|en-GB|fr-FR|…", "noProof"?: bool}"#),
+        .params(r#"{"lang": "en-US|en-GB|fr-FR|…", "noProof"?: bool, "default"?: bool}"#),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
             s.relayout();
@@ -1836,9 +1845,9 @@ fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let new: Vec<Paragraph> = revised.body.iter().filter_map(|b| b.as_para().cloned()).collect();
     let author = "Compare".to_string();
     let date = super::now_iso();
-    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone(), moved: false });
+    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone() });
     let ins = (s.doc.revisions.len() - 1) as u32;
-    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author, date, moved: false });
+    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author, date });
     let del = (s.doc.revisions.len() - 1) as u32;
     let ops = lcs_ops(&old.iter().map(|p| p.plain_text()).collect::<Vec<_>>(), &new.iter().map(|p| p.plain_text()).collect::<Vec<_>>());
     let mut out: Vec<Paragraph> = Vec::new();

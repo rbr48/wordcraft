@@ -1509,4 +1509,31 @@ mod tests {
         s.run("arrange.position", &json!({"preset": "inline"})).unwrap();
         assert_eq!(selected(&s).unwrap().1.frame().unwrap().2.wrap, Wrap::Inline);
     }
+
+    #[test]
+    fn insert_connectors_elbow_and_curved() {
+        use wordcraft_doc::para::ShapeKind;
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.shape", &json!({"kind": "elbowConnector", "width": 120, "height": 60})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        assert_eq!(o.frame().unwrap().0, 120.0);
+        assert_eq!(o.frame().unwrap().1, 60.0);
+        assert_eq!(
+            match o {
+                InlineObject::Shape { kind, fill, stroke, .. } => (kind, fill, stroke.is_some()),
+                _ => panic!(),
+            },
+            (ShapeKind::ElbowConnector, None, true)
+        );
+
+        s.run("insert.shape", &json!({"kind": "curvedConnector", "width": 90, "height": 45})).unwrap();
+        let (_, o2) = selected(&s).unwrap();
+        assert_eq!(
+            match o2 {
+                InlineObject::Shape { kind, fill, stroke, .. } => (kind, fill, stroke.is_some()),
+                _ => panic!(),
+            },
+            (ShapeKind::CurvedConnector, None, true)
+        );
+    }
 }

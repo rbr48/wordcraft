@@ -118,7 +118,7 @@ pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
     if let Some((i, _)) = s.doc.revisions.iter().enumerate().rev().find(|(_, r)| r.kind == kind && r.author == s.author && r.date == date) {
         return i as u32;
     }
-    s.doc.revisions.push(Revision { kind, author: s.author.clone(), date, moved: false });
+    s.doc.revisions.push(Revision { kind, author: s.author.clone(), date });
     (s.doc.revisions.len() - 1) as u32
 }
 

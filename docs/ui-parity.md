@@ -24,7 +24,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | Backstage (Home, New, Open, Info, Save As, Print, Share, Export, Options) | Home and New separate (#254), Info properties kept (#268) | | 68% | 4–6 |
 | Rulers: indents, tabs, margins, table columns | indents draggable (one undo, #62); tabs; table column drag pending (#49) | ✅ | 70% | 2–3 |
 | On-canvas objects: select, drag, resize handles, nudge | ✅ tested (#228) | ✅ | 75% | — |
-| Rotation handle, crop handles on canvas, alignment guides, smart guides | rotation handle (Shift: 15° steps), turned frames resize along their axes (#332); crop handles and guides missing | ✅ | 25% | 3–5 |
+| Rotation handle, crop handles on canvas, alignment guides, smart guides | rotation handle (Shift: 15° steps), turned frames resize along their axes; interactive canvas picture crop handles (L-shaped corner brackets, edge bars, live drag, ribbon & context menu toggle) | ✅ | 60% | 2–3 |
 | Selection: word/sentence/paragraph clicks, Shift extend, F8 extend mode, column (Alt+drag, #237) | ✅ | ✅ | 85% | 1 |
 | Zoom: Ctrl+scroll, pinch (#179), zoom buttons (#232), pages side by side when zoomed out (#251) | ✅ | ✅ | 85% | — |
 | Touchpad smooth/inertial scroll | ✅ (#252) | ✅ | 90% | — |
@@ -39,6 +39,8 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | trivial | Font dialog tabbed Advanced typography (Font vs Advanced tabs, Character Spacing Scale %, Spacing Expanded/Condensed, Position Raised/Lowered, Kerning threshold, and OpenType ligatures/number forms) |
+| 2026-10-13 | trivial | Interactive Canvas Picture Crop Tool: thick L-shaped corner brackets and edge bar handles with live drag on canvas, rule-of-thirds grid, ribbon toggle button, and context menu item |
 | 2026-10-11 | trivial | Interface size setting in File › Options › General (80–200 %), kept between runs and applied on top of the system's display scale; `ui.interfaceSize` for agents (#475) |
 | 2026-10-11 | trivial | Font box (ribbon and mini toolbar): typing lists the matching fonts (prefix first, then any part of the name); Up/Down, Enter or a click picks one, Escape cancels (#359) |
 | 2026-10-10 | trivial | Tabs dialog (Paragraph › Tabs…, double-click a ruler tab) and Borders and Shading with Borders, Page Border and Shading tabs (#320) |

@@ -202,6 +202,10 @@ pub enum ShapeKind {
     Triangle,
     Diamond,
     Line,
+    /// Orthogonal elbow connector line.
+    ElbowConnector,
+    /// Smooth S-curve curved connector line.
+    CurvedConnector,
     Arrow,
     Star,
     Heart,
@@ -331,6 +335,24 @@ pub enum InlineObject {
     CommentEnd {
         id: u32,
     },
+    /// Structured Document Tag (content control) start.
+    SdtStart {
+        #[serde(default)]
+        id: u32,
+        #[serde(default)]
+        tag: String,
+        #[serde(default)]
+        alias: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lock: Option<String>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        props_xml: String,
+    },
+    /// Structured Document Tag (content control) end.
+    SdtEnd {
+        #[serde(default)]
+        id: u32,
+    },
     /// An equation: its linear format (`x=(-b±√(b^2-4ac))/2a`, for plain text) and structure.
     /// A display equation sits on a line of its own.
     Equation {
@@ -455,6 +477,8 @@ impl InlineObject {
                 | InlineObject::CommentEnd { .. }
                 | InlineObject::FieldStart { .. }
                 | InlineObject::FieldEnd
+                | InlineObject::SdtStart { .. }
+                | InlineObject::SdtEnd { .. }
         )
     }
     pub fn is_floating(&self) -> bool {

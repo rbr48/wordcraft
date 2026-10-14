@@ -51,9 +51,9 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Footnotes, endnotes, comments | ✅ | ✅ | `commentsExtended` written; `commentsIds`, modern threaded comments (`w16cex`) partly |
 | Tracked insertions and deletions (`w:ins`/`w:del`), paragraph-mark revisions | ✅ | ✅ | #125, #244 |
 | Formatting revisions (`w:rPrChange`, `w:pPrChange`, `w:sectPrChange`, `w:tblPrChange`, `w:trPrChange`, `w:tcPrChange`, `w:numberingChange`) | ✅ | ✅ | #41: kept on open and save, schema order (change element last); changes inside `styles.xml` are dropped. RTF/ODT ignore them |
-| Move tracking (`w:moveFrom`/`w:moveTo`) | 🟡 | ❌ | Read as plain insert/delete |
+| Move tracking (`w:moveFrom`/`w:moveTo`) | ✅ | ✅ | Tracked moves for text runs and paragraph marks with full author/date attribution round-trip with `w:moveFrom` and `w:moveTo` |
 | Fields (`w:fldChar`, `w:fldSimple`), TOC, cross-references, `ADDIN` citations | ✅ | ✅ | Field codes Word supports but we don't evaluate keep their cached result |
-| Content controls (`w:sdt`) | 🟡 | ❌ | Content kept, the control (type, binding, placeholder, lock) dropped |
+| Content controls (`w:sdt`) | ✅ | ✅ | Inline content controls round-trip with `w:id`, `w:tag`, `w:alias`, `w:lock`, and inner `w:sdtPr` extensions (date, dropdown, placeholder, checkbox); block content controls preserve body content |
 | Legacy form fields (`w:ffData`), check boxes, drop-downs | ❌ | ❌ | |
 | DrawingML pictures inline and anchored (`wp:anchor`), wrap square/tight/through/top-bottom | ✅ | ✅ | Tight/through read and written, laid out as square |
 | Group shapes (`wpg:`), drawing canvas | 🟡 | 🟡 | Group shapes read and written (#267); drawing canvas (`wpc:`) dropped |
@@ -65,7 +65,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Word ink (`w14:contentPart`, InkML), 3D models | ❌ | ❌ | Dropped on read, not preserved on save |
 | Equations (OMML `m:oMath`) | ✅ | ✅ | #191; manual breaks (`m:brk`) and the settings' `m:mathPr` wrapping options (#326) |
 | Themes, font table, settings, compatibility mode | ✅ | ✅ | Embedded fonts (`w:embedRegular`) not read |
-| Custom XML parts, document properties, bibliography sources | 🟡 | 🟡 | Custom properties round-trip; bibliography sources pending (#169) |
+| Custom XML parts, document properties, bibliography sources | ✅ | ✅ | Custom properties and bibliography sources round-trip (#169 closed) |
 | Ruby, `w:eastAsianLayout`, `w:fitText`, document grid (`w:docGrid`) | ❌ | ❌ | East Asian layout |
 | Glossary document (building blocks), `w:altChunk`, sub-documents | ❌ | ❌ | |
 | Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard |
@@ -83,6 +83,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Move tracking (`w:moveFrom`/`w:moveTo`) and content controls (`w:sdt`) round-trip in DOCX; Gap #5 closed |
 | 2026-10-11 | trivial | Formatting revisions (`w:rPrChange`, `w:pPrChange`, table, row, cell, section and numbering changes) read and written (#41) |
 | 2026-10-10 | trivial | OLE objects turned or flipped in WordCraft keep the turn on save (VML `rotation`/`flip`, DrawingML `a:xfrm` with the rotated effect extent); test counts refreshed |
 | 2026-10-10 | trivial | Charts, SmartArt and OLE objects written back on save with their parts (#319); chart/SmartArt reading (#292) recorded |

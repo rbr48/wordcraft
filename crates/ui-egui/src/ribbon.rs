@@ -731,6 +731,8 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
                 ("Hexagon", "hexagon"),
                 ("Octagon", "octagon"),
                 ("Line", "line"),
+                ("Elbow Connector", "elbowConnector"),
+                ("Curved Connector", "curvedConnector"),
                 ("Arrow", "arrow"),
                 ("Star", "star"),
                 ("Heart", "heart"),
@@ -1325,7 +1327,7 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Language", None, app, |ui, app| {
         big(ui, app, "translate", "Translate", "review.translate", json!({}), false);
-        big(ui, app, "language", "Language", "review.language", json!({}), false);
+        big(ui, app, "language", "Language", "ui.dialog", json!({"name": "language"}), false);
     });
     group(ui, "Comments", None, app, |ui, app| {
         big(ui, app, "newComment", "New\nComment", "review.newComment", json!({}), false);
@@ -1628,6 +1630,8 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Size", None, app, |ui, app| {
+        let is_crop = app.canvas.crop_active;
+        big(ui, app, "crop", "Crop", "ui.cropToggle", json!({}), is_crop);
         let (media, off, w0, h0, crop0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
             Some((pos, wordcraft_doc::para::InlineObject::Image { media, w, h, alt, crop, .. })) => (media, pos.off, w, h, crop, alt),
             _ => (String::new(), 0, 0.0, 0.0, [0.0; 4], String::new()),

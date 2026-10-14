@@ -246,9 +246,9 @@ impl Reader<'_> {
                 for k in rpr.els() {
                     match k.name.as_str() {
                         "w:ins" => para.mark.ins = Some(self.revision(RevisionKind::Insert, k)),
-                        "w:moveTo" => para.mark.ins = Some(self.revision_with(RevisionKind::Insert, k, true)),
+                        "w:moveTo" => para.mark.ins = Some(self.revision(RevisionKind::MoveTo, k)),
                         "w:del" => para.mark.del = Some(self.revision(RevisionKind::Delete, k)),
-                        "w:moveFrom" => para.mark.del = Some(self.revision_with(RevisionKind::Delete, k, true)),
+                        "w:moveFrom" => para.mark.del = Some(self.revision(RevisionKind::MoveFrom, k)),
                         _ => {}
                     }
                 }
@@ -336,14 +336,24 @@ impl Reader<'_> {
                 };
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
-            "w:ins" | "w:moveTo" => {
+            "w:ins" => {
                 let mut c = ctx.clone();
-                c.ins = Some(self.revision_with(RevisionKind::Insert, k, k.name == "w:moveTo"));
+                c.ins = Some(self.revision(RevisionKind::Insert, k));
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
-            "w:del" | "w:moveFrom" => {
+            "w:moveTo" => {
                 let mut c = ctx.clone();
-                c.del = Some(self.revision_with(RevisionKind::Delete, k, k.name == "w:moveFrom"));
+                c.ins = Some(self.revision(RevisionKind::MoveTo, k));
+                self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
+            }
+            "w:del" => {
+                let mut c = ctx.clone();
+                c.del = Some(self.revision(RevisionKind::Delete, k));
+                self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
+            }
+            "w:moveFrom" => {
+                let mut c = ctx.clone();
+                c.del = Some(self.revision(RevisionKind::MoveFrom, k));
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
             "w:fldSimple" => {
@@ -362,8 +372,32 @@ impl Reader<'_> {
                 }
             }
             "w:sdt" => {
-                if let Some(c) = k.child("w:sdtContent") {
+                let pr = k.child("w:sdtPr");
+                let id = pr.and_then(|p| p.child("w:id")).and_then(|i| i.attr("w:val")).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+                let tag = pr.and_then(|p| p.child("w:tag")).and_then(|t| t.attr("w:val")).unwrap_or("").to_string();
+                let alias = pr.and_then(|p| p.child("w:alias")).and_then(|a| a.attr("w:val")).unwrap_or("").to_string();
+                let lock = pr.and_then(|p| p.child("w:lock")).and_then(|l| l.attr("w:val")).map(str::to_string);
+                let mut props_xml = String::new();
+                if let Some(pr) = pr {
+                    for child in pr.els() {
+                        let name = child.name.as_str();
+                        if !matches!(name, "w:id" | "w:tag" | "w:alias" | "w:lock" | "w:rPr") {
+                            props_xml.push_str(&child.to_xml());
+                        }
+                    }
+                }
+                let has_sdt = id != 0 || !tag.is_empty() || !alias.is_empty() || lock.is_some() || !props_xml.is_empty();
+                if has_sdt {
+                    let props = self.run_props_none(ctx);
+                    pb.push_obj(InlineObject::SdtStart { id, tag, alias, lock, props_xml }, &props);
+                    if let Some(c) = k.child("w:sdtContent") {
+                        self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
+                    }
+                    pb.push_obj(InlineObject::SdtEnd { id }, &props);
+                } else if let Some(c) = k.child("w:sdtContent") {
                     self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
+                } else {
+                    self.read_inline_children(sc, pb, k, rels, ctx, depth + 1);
                 }
             }
             "w:smartTag" | "w:customXml" | "w:dir" | "w:bdo" => self.read_inline_children(sc, pb, k, rels, ctx, depth + 1),
@@ -876,6 +910,8 @@ impl Reader<'_> {
             "rtTriangle" => ShapeKind::RightTriangle,
             "diamond" => ShapeKind::Diamond,
             "line" | "straightConnector1" => ShapeKind::Line,
+            "bentConnector2" | "bentConnector3" | "bentConnector4" | "bentConnector5" => ShapeKind::ElbowConnector,
+            "curvedConnector2" | "curvedConnector3" | "curvedConnector4" | "curvedConnector5" => ShapeKind::CurvedConnector,
             "rightArrow" | "leftArrow" | "upArrow" | "downArrow" => ShapeKind::Arrow,
             "star5" | "star4" | "star6" => ShapeKind::Star,
             "heart" => ShapeKind::Heart,

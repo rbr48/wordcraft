@@ -5281,6 +5281,7 @@ version = "0.6.3"
 dependencies = [
  "image",
  "log",
+ "miniz_oxide 0.8.9",
  "proptest",
  "quick-xml",
  "wordcraft-doc",

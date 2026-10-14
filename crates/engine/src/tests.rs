@@ -3250,3 +3250,33 @@ fn print_native_validates_page_ranges_and_parameters() {
     );
     assert!(refused.is_err());
 }
+
+#[test]
+fn pdf_reflow_opens_pdf_via_open_bytes() {
+    let pdf = "%PDF-1.4\n\
+               1 0 obj\n\
+               << /Type /Catalog /Pages 2 0 R >>\n\
+               endobj\n\
+               2 0 obj\n\
+               << /Type /Pages /Kids [3 0 R] /Count 1 >>\n\
+               endobj\n\
+               3 0 obj\n\
+               << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>\n\
+               endobj\n\
+               4 0 obj\n\
+               << /Length 47 >>\n\
+               stream\n\
+               BT\n/F1 14 Tf\n72 700 Td\n(Editable PDF Document) Tj\nET\n\
+               endstream\n\
+               endobj\n\
+               xref\n\
+               0 5\n\
+               trailer\n\
+               << /Root 1 0 R >>\n\
+               %%EOF";
+    let doc = crate::io::open_bytes("report.pdf", pdf.as_bytes()).unwrap();
+    let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains("Editable PDF Document"), "PDF text should reflow into editable document AST: {text}");
+    let p = doc.body[0].as_para().expect("block should be paragraph");
+    assert_eq!(p.props.style.as_deref(), Some("Heading2"), "14pt font mapped to Heading2");
+}

@@ -35,6 +35,8 @@ pub mod rt {
     pub const CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
     pub const DIAGRAM_DATA: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData";
     pub const DIAGRAM_DRAWING: &str = "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing";
+    pub const CUSTOM_XML: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
+    pub const CUSTOM_XML_PROPS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
 }
 
 /// `Document::passthrough` key for a macro project, kept as opaque bytes (never parsed or run).
@@ -172,6 +174,11 @@ impl Package {
             files.insert(name, buf);
         }
         Ok(Package { files })
+    }
+
+    /// All part names in the package.
+    pub fn part_names(&self) -> impl Iterator<Item = &str> {
+        self.files.keys().map(|s| s.as_str())
     }
 
     /// Part bytes by name (leading `/` ignored; case-insensitive fallback).

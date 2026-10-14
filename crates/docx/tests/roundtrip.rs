@@ -730,8 +730,8 @@ fn toc_field_skips_nested_stories() {
 #[test]
 fn tracked_changes_round_trip() {
     let mut d = Document::new();
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into(), moved: false });
-    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), moved: false });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into() });
     d.settings.track_changes = true;
     let ins = CharProps { ins: Some(0), ..Default::default() };
     let del = CharProps { del: Some(1), bold: Some(true), ..Default::default() };
@@ -755,8 +755,8 @@ fn tracked_paragraph_marks_round_trip() {
     // Issue #229: an inserted / deleted paragraph mark is `w:ins` / `w:del` in the mark's
     // `w:rPr` (ECMA-376 §17.13.5.16, §17.13.5.15), alone or with mark formatting.
     let mut d = Document::new();
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into(), moved: false });
-    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), moved: false });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into() });
     let mut split = Paragraph::with_text("Owned ALPHA ", CharProps::default());
     split.mark.ins = Some(0);
     let mut joined = Paragraph::with_text("Owned BETA", CharProps::default());
@@ -783,39 +783,128 @@ fn tracked_paragraph_marks_round_trip() {
 }
 
 #[test]
-fn tracked_moves_round_trip() {
-    // A move is `w:moveFrom` (the source, shown as deleted) and `w:moveTo` (the destination,
-    // shown as inserted), ECMA-376 §17.13.5.22 and §17.13.5.24. It must come back as a move, not
-    // a plain delete and insert, and a plain insert by the same author and time stays separate.
-    let when = "2026-05-03T09:00:00Z";
+fn tracked_move_revisions_round_trip() {
     let mut d = Document::new();
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: when.into(), moved: true });
-    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: when.into(), moved: true });
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: when.into(), moved: false });
+    d.revisions.push(Revision { kind: RevisionKind::MoveTo, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
+    d.revisions.push(Revision { kind: RevisionKind::MoveFrom, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
+    d.settings.track_changes = true;
     let to = CharProps { ins: Some(0), ..Default::default() };
     let from = CharProps { del: Some(1), ..Default::default() };
-    let plain = CharProps { ins: Some(2), ..Default::default() };
-    let p = para_runs(&[("moved here ", to.clone()), ("moved away", from.clone()), (" typed", plain.clone())]);
-    let mut moved_mark = Paragraph::with_text("Mark moved in", CharProps::default());
-    moved_mark.mark.ins = Some(0);
-    let mut gone_mark = Paragraph::with_text("Mark moved out", CharProps::default());
-    gone_mark.mark.del = Some(1);
-    d.body = vec![para_block(p.clone()), para_block(moved_mark), para_block(gone_mark)];
+    let mut p = para_runs(&[("original ", CharProps::default()), ("moved away", from), (" and ", CharProps::default()), ("moved here", to)]);
+    p.mark.ins = Some(0);
+    d.body = vec![para_block(p.clone())];
     let bytes = wordcraft_docx::write(&d).expect("write");
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
     let mut xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
-    assert!(xml.contains("<w:moveTo w:id="), "{xml}");
-    assert!(xml.contains("<w:moveFrom w:id="), "{xml}");
+    assert!(xml.contains(r#"<w:moveFrom w:id="#), "{xml}");
+    assert!(xml.contains(r#"<w:moveTo w:id="#), "{xml}");
     assert!(xml.contains(r#"<w:rPr><w:moveTo w:id="#), "{xml}");
-    assert!(xml.contains(r#"<w:rPr><w:moveFrom w:id="#), "{xml}");
-    assert_eq!(xml.matches("<w:ins w:id=").count(), 1, "the plain insert stays w:ins: {xml}");
     let r = wordcraft_docx::read(&bytes).expect("read");
-    let moved: Vec<_> = r.revisions.iter().filter(|v| v.moved).map(|v| v.kind).collect();
-    assert_eq!(moved, [RevisionKind::Insert, RevisionKind::Delete], "{:?}", r.revisions);
-    assert!(r.revisions.iter().any(|v| !v.moved && v.kind == RevisionKind::Insert), "{:?}", r.revisions);
-    let got = paras(&r);
-    assert_eq!(got.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), [p.text.as_str(), "Mark moved in", "Mark moved out"]);
+    assert_eq!(r.revisions, d.revisions);
+    let got = paras(&r)[0];
+    assert_eq!(got.text, p.text);
+    let rev = |i: Option<u32>| i.and_then(|i| r.revisions.get(i as usize)).map(|v| (v.kind, v.author.as_str(), v.date.as_str()));
+    assert_eq!(rev(got.mark.ins), Some((RevisionKind::MoveTo, "Alice", "2026-05-01T10:00:00Z")));
+}
+
+#[test]
+fn content_controls_sdt_round_trip() {
+    let mut p = Paragraph::with_text("Before inside after", CharProps::default());
+    let sdt_start = InlineObject::SdtStart {
+        id: 12345,
+        tag: "EmployeeName".into(),
+        alias: "Employee Name".into(),
+        lock: Some("sdtLocked".into()),
+        props_xml: "<w:placeholder><w:docPart w:val=\"DefaultPlaceholder\"/></w:placeholder>".into(),
+    };
+    let sdt_end = InlineObject::SdtEnd { id: 12345 };
+    p.insert_object(7, sdt_start, &CharProps::default()).unwrap();
+    p.insert_object(16, sdt_end, &CharProps::default()).unwrap();
+
+    let d = doc_with(vec![p]);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:sdt><w:sdtPr>"#), "{xml}");
+    assert!(xml.contains(r#"<w:alias w:val="Employee Name"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:tag w:val="EmployeeName"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:id w:val="12345"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:lock w:val="sdtLocked"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:placeholder><w:docPart w:val="DefaultPlaceholder"/></w:placeholder>"#), "{xml}");
+    assert!(xml.contains(r#"</w:sdtPr><w:sdtContent>"#), "{xml}");
+    assert!(xml.contains(r#"</w:sdtContent></w:sdt>"#), "{xml}");
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r)[0];
+    assert_eq!(got.objects.len(), 2);
+    match (&got.objects[0], &got.objects[1]) {
+        (InlineObject::SdtStart { id, tag, alias, lock, props_xml }, InlineObject::SdtEnd { id: id_end }) => {
+            assert_eq!(*id, 12345);
+            assert_eq!(tag, "EmployeeName");
+            assert_eq!(alias, "Employee Name");
+            assert_eq!(lock.as_deref(), Some("sdtLocked"));
+            assert!(props_xml.contains("DefaultPlaceholder"));
+            assert_eq!(*id_end, 12345);
+        }
+        o => panic!("{o:?}"),
+    }
+}
+
+#[test]
+fn connectors_round_trip() {
+    let mut p = Paragraph::with_text("Connectors: ", CharProps::default());
+    let elbow = InlineObject::Shape {
+        kind: ShapeKind::ElbowConnector,
+        w: 120.0,
+        h: 60.0,
+        fill: None,
+        stroke: Some(Rgb(0x15, 0x60, 0x82)),
+        stroke_width: 1.5,
+        float: Float { wrap: Wrap::Square, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    };
+    let curved = InlineObject::Shape {
+        kind: ShapeKind::CurvedConnector,
+        w: 100.0,
+        h: 50.0,
+        fill: None,
+        stroke: Some(Rgb(0xC0, 0x50, 0x10)),
+        stroke_width: 2.0,
+        float: Float { wrap: Wrap::TopAndBottom, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    };
+    let n = p.len();
+    p.insert_object(n, elbow, &CharProps::default()).unwrap();
+    let n = p.len();
+    p.insert_object(n, curved, &CharProps::default()).unwrap();
+
+    let d = doc_with(vec![p]);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:prstGeom prst="bentConnector3">"#), "{xml}");
+    assert!(xml.contains(r#"<a:prstGeom prst="curvedConnector3">"#), "{xml}");
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = &paras(&r)[0].objects;
+    assert_eq!(got.len(), 2);
+    match (&got[0], &got[1]) {
+        (
+            InlineObject::Shape { kind: ShapeKind::ElbowConnector, stroke_width: sw1, .. },
+            InlineObject::Shape { kind: ShapeKind::CurvedConnector, stroke_width: sw2, .. },
+        ) => {
+            assert_eq!(*sw1, 1.5);
+            assert_eq!(*sw2, 2.0);
+        }
+        o => panic!("{o:?}"),
+    }
 }
 
 #[test]
@@ -1052,7 +1141,7 @@ fn kitchen_sink() -> Document {
     let f = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]);
     let c = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Comment", CharProps::default()))]);
     d.comments.insert(3, Comment { author: "X".into(), part: c, ..Default::default() });
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), moved: false });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new() });
     d.last_section.headers.default = Some(h);
     let mut blocks: Blocks = Vec::new();
     let mut p = para_runs(&[

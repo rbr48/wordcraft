@@ -828,6 +828,13 @@ impl WordApp {
             // page; this is the button on it, and the one programmatic call that opens system UI
             // here, like `ui.openFileDialog` — only when the host can print.
             "ui.print" => return Some(self.print_to_system()),
+            "ui.cropToggle" => {
+                if !crate::ribbon::has_picture_selected(&self.session) {
+                    return Some(Err("no picture selected".into()));
+                }
+                self.canvas.crop_active = !self.canvas.crop_active;
+                json!({"cropActive": self.canvas.crop_active})
+            }
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
@@ -2749,6 +2756,35 @@ mod tests {
         let mut b = app();
         assert!(b.execute("mailings.recipients", json!({})).is_err());
         assert!(b.dialog.is_none());
+    }
+
+    #[test]
+    fn language_dialog_opens_and_sets_proofing_language() {
+        let mut a = app();
+        a.run("text.insert", json!({"text": "Hello world"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+
+        // Opening the language dialog:
+        a.run("ui.dialog", json!({"name": "language"})).unwrap();
+        assert_eq!(dialog_name(&a), Some("language"));
+        if let Some(dialogs::Dialog::Language { lang, no_proof, .. }) = &a.dialog {
+            assert_eq!(lang, "en-US");
+            assert!(!*no_proof);
+        } else {
+            panic!("expected Dialog::Language");
+        }
+
+        // Setting language to Spanish with noProof:
+        a.run("review.language", json!({"lang": "es-ES", "noProof": true})).unwrap();
+        let focus = &a.session.sel.focus;
+        let props = a.session.doc.para_at(focus).map(|p| p.props_of_char(focus.off).clone()).unwrap_or_default();
+        assert_eq!(props.lang.as_deref(), Some("es-ES"));
+        assert_eq!(props.no_proof, Some(true));
+
+        // Language name lookup matches:
+        assert_eq!(dialogs::language_name("es-ES"), "Spanish (Spain)");
+        assert_eq!(dialogs::language_name("bn-BD"), "Bengali (Bangladesh)");
+        assert_eq!(dialogs::language_name("fr-FR"), "French (France)");
     }
 
     /// Rules › If…Then…Else… asks for its condition and inserts the IF field it describes; Next

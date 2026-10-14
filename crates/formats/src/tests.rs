@@ -666,3 +666,136 @@ fn hostile_html_tables_import_with_valid_merges_and_no_lost_cells() {
         }
     }
 }
+
+fn make_synthetic_pdf(content_stream: &str) -> Vec<u8> {
+    format!(
+        "%PDF-1.4\n\
+         1 0 obj\n\
+         << /Type /Catalog /Pages 2 0 R >>\n\
+         endobj\n\
+         2 0 obj\n\
+         << /Type /Pages /Kids [3 0 R] /Count 1 >>\n\
+         endobj\n\
+         3 0 obj\n\
+         << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>\n\
+         endobj\n\
+         4 0 obj\n\
+         << /Length {} >>\n\
+         stream\n\
+         {}\n\
+         endstream\n\
+         endobj\n\
+         xref\n\
+         0 5\n\
+         trailer\n\
+         << /Root 1 0 R >>\n\
+         %%EOF",
+        content_stream.len(),
+        content_stream
+    )
+    .into_bytes()
+}
+
+#[test]
+fn pdf_import_reflows_headings_body_and_lists() {
+    let stream = "BT\n/F1 20 Tf\n72 700 Td\n(Report Title) Tj\nET\n\
+                  BT\n/F2 12 Tf\n72 650 Td\n(This is the first paragraph with some details.) Tj\nET\n\
+                  BT\n/F2 12 Tf\n72 600 Td\n(\u{2022} Bullet item one) Tj\nET\n\
+                  BT\n/F2 12 Tf\n72 570 Td\n(\u{2022} Bullet item two) Tj\nET";
+    let pdf_bytes = make_synthetic_pdf(stream);
+    let doc_res = import("pdf", &pdf_bytes);
+    assert!(doc_res.is_some(), "PDF format should be recognized");
+    let doc = doc_res.unwrap().expect("PDF should import successfully");
+
+    let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains("Report Title"), "Title should be extracted");
+    assert!(text.contains("first paragraph"), "Body paragraph should be extracted");
+    assert!(text.contains("Bullet item one"), "List items should be extracted");
+
+    // Check heading style
+    let p0 = doc.body[0].as_para().expect("first block should be a paragraph");
+    assert_eq!(p0.props.style.as_deref(), Some("Heading1"), "20pt text should be mapped to Heading1");
+
+    // Check list item numbering
+    let p2 = doc.body[2].as_para().expect("third block should be paragraph");
+    assert!(p2.props.numbering.is_some(), "bullet item should have list numbering");
+}
+
+#[test]
+fn pdf_import_tounicode_cmap_decoding() {
+    let cmap_stream = "/CIDInit /ProcSet findresource begin\n\
+                       12 dict begin\n\
+                       begincmap\n\
+                       /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n\
+                       1 begincodespacerange\n\
+                       <0000> <FFFF>\n\
+                       endcodespacerange\n\
+                       2 beginbfchar\n\
+                       <0001> <0048>\n\
+                       <0002> <0069>\n\
+                       endbfchar\n\
+                       endcmap\n\
+                       end\n\
+                       end";
+
+    let pdf = format!(
+        "%PDF-1.4\n\
+         1 0 obj\n\
+         << /Type /Catalog /Pages 2 0 R >>\n\
+         endobj\n\
+         2 0 obj\n\
+         << /Type /Pages /Kids [3 0 R] /Count 1 >>\n\
+         endobj\n\
+         3 0 obj\n\
+         << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\n\
+         endobj\n\
+         4 0 obj\n\
+         << /Length 39 >>\n\
+         stream\n\
+         BT\n/F1 12 Tf\n72 700 Td\n<00010002> Tj\nET\n\
+         endstream\n\
+         endobj\n\
+         5 0 obj\n\
+         << /Type /Font /Subtype /Type0 /BaseFont /CustomFont /ToUnicode 6 0 R >>\n\
+         endobj\n\
+         6 0 obj\n\
+         << /Length {} >>\n\
+         stream\n\
+         {}\n\
+         endstream\n\
+         endobj\n\
+         xref\n\
+         0 7\n\
+         trailer\n\
+         << /Root 1 0 R >>\n\
+         %%EOF",
+        cmap_stream.len(),
+        cmap_stream
+    );
+
+    let doc = import("pdf", pdf.as_bytes()).unwrap().expect("CMap PDF should import");
+    let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text.trim(), "Hi", "Characters <0001> and <0002> should map to 'Hi' via CMap");
+}
+
+#[test]
+fn pdf_import_hostile_corrupted_inputs_never_panic() {
+    let hostile_cases: &[&[u8]] = &[
+        b"",
+        b"%PDF",
+        b"%PDF-1.7\n",
+        b"%PDF-1.4\n1 0 obj << >> endobj",
+        b"%PDF-1.4\n1 0 obj << /Type /Pages /Kids [1 0 R] >> endobj", // circular
+        b"%PDF-1.4\n1 0 obj << /Length 999999999 >> stream\nabc\nendstream",
+        &[0xFF; 256],
+        &[0x00; 1024],
+    ];
+
+    for case in hostile_cases {
+        let res = import("pdf", case);
+        // Must either return Err or Ok(Document), never panic!
+        if let Some(Ok(doc)) = res {
+            assert!(!doc.body.is_empty());
+        }
+    }
+}

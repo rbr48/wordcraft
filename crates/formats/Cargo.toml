@@ -15,6 +15,7 @@ image = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }
 log = { workspace = true }
+miniz_oxide = "0.8"
 
 [dev-dependencies]
 proptest = { workspace = true }

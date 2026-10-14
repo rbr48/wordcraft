@@ -96,10 +96,17 @@ impl Writer<'_> {
         }
         let section = if top { p.section.as_deref() } else { None };
         // A tracked paragraph mark: `w:ins` / `w:del` first in the mark's `w:rPr` (CT_ParaRPr).
-        let mark_revs: Vec<(u32, &str)> = [(p.mark.ins, true), (p.mark.del, false)]
+        let mark_revs: Vec<(u32, &str)> = [(p.mark.ins, "w:ins"), (p.mark.del, "w:del")]
             .into_iter()
-            .filter_map(|(idx, insert)| {
-                idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| (i, self.rev_tag(i, insert)))
+            .filter_map(|(idx, default_tag)| {
+                idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| {
+                    let tag = match self.rev_kind(Some(i)) {
+                        Some(RevisionKind::MoveTo) => "w:moveTo",
+                        Some(RevisionKind::MoveFrom) => "w:moveFrom",
+                        _ => default_tag,
+                    };
+                    (i, tag)
+                })
             })
             .collect();
         let has_mark = super::props::has_rpr(&p.mark) || !mark_revs.is_empty() || p.mark.fmt_change.is_some();
@@ -272,18 +279,6 @@ impl Writer<'_> {
         idx.and_then(|i| self.doc.revisions.get(i as usize)).map(|r| r.kind)
     }
 
-    /// The element for a tracked insert or delete: `w:ins` / `w:del`, or `w:moveTo` / `w:moveFrom`
-    /// when the revision is a move.
-    fn rev_tag(&self, idx: u32, insert: bool) -> &'static str {
-        let moved = self.doc.revisions.get(idx as usize).is_some_and(|r| r.moved);
-        match (insert, moved) {
-            (true, false) => "w:ins",
-            (true, true) => "w:moveTo",
-            (false, false) => "w:del",
-            (false, true) => "w:moveFrom",
-        }
-    }
-
     fn is_del(&self, props: &CharProps) -> bool {
         props.del.is_some() && self.rev_kind(props.del) != Some(RevisionKind::Format)
     }
@@ -325,12 +320,17 @@ impl Writer<'_> {
     }
 
     fn rev_open(&mut self, w: &mut W, props: &CharProps) {
-        for (idx, insert) in [(props.ins, true), (props.del, false)] {
+        for (idx, default_tag) in [(props.ins, "w:ins"), (props.del, "w:del")] {
             let Some(idx) = idx else { continue };
-            if self.rev_kind(Some(idx)) == Some(RevisionKind::Format) {
+            let kind = self.rev_kind(Some(idx));
+            if kind == Some(RevisionKind::Format) {
                 continue;
             }
-            let tag = self.rev_tag(idx, insert);
+            let tag = match kind {
+                Some(RevisionKind::MoveTo) => "w:moveTo",
+                Some(RevisionKind::MoveFrom) => "w:moveFrom",
+                _ => default_tag,
+            };
             let (id, author, date) = self.rev_attrs(idx);
             if date.is_empty() {
                 w.open(tag, &[("w:id", &id), ("w:author", &author)]);
@@ -341,10 +341,18 @@ impl Writer<'_> {
     }
 
     fn rev_close(&mut self, w: &mut W, props: &CharProps) {
-        for (idx, insert) in [(props.del, false), (props.ins, true)] {
-            if let Some(idx) = idx.filter(|_| self.rev_kind(idx) != Some(RevisionKind::Format)) {
-                w.close(self.rev_tag(idx, insert));
+        for (idx, default_tag) in [(props.del, "w:del"), (props.ins, "w:ins")] {
+            let Some(idx) = idx else { continue };
+            let kind = self.rev_kind(Some(idx));
+            if kind == Some(RevisionKind::Format) {
+                continue;
             }
+            let tag = match kind {
+                Some(RevisionKind::MoveTo) => "w:moveTo",
+                Some(RevisionKind::MoveFrom) => "w:moveFrom",
+                _ => default_tag,
+            };
+            w.close(tag);
         }
     }
 
@@ -568,6 +576,28 @@ impl Writer<'_> {
                     self.rev_close(w, props);
                 }
             }
+            InlineObject::SdtStart { id, tag, alias, lock, props_xml } => {
+                w.raw("<w:sdt><w:sdtPr>");
+                if !alias.is_empty() {
+                    w.empty("w:alias", &[("w:val", alias)]);
+                }
+                if !tag.is_empty() {
+                    w.empty("w:tag", &[("w:val", tag)]);
+                }
+                if *id != 0 {
+                    w.empty("w:id", &[("w:val", &id.to_string())]);
+                }
+                if let Some(l) = lock.as_deref().filter(|s| !s.is_empty()) {
+                    w.empty("w:lock", &[("w:val", l)]);
+                }
+                if !props_xml.is_empty() {
+                    w.raw(props_xml);
+                }
+                w.raw("</w:sdtPr><w:sdtContent>");
+            }
+            InlineObject::SdtEnd { .. } => {
+                w.raw("</w:sdtContent></w:sdt>");
+            }
         }
     }
 
@@ -693,6 +723,8 @@ impl Writer<'_> {
             ShapeKind::Triangle => "triangle",
             ShapeKind::Diamond => "diamond",
             ShapeKind::Line => "line",
+            ShapeKind::ElbowConnector => "bentConnector3",
+            ShapeKind::CurvedConnector => "curvedConnector3",
             ShapeKind::Arrow => "rightArrow",
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",

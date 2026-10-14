@@ -252,6 +252,8 @@ pub enum RevisionKind {
     Insert,
     Delete,
     Format,
+    MoveTo,
+    MoveFrom,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -260,9 +262,6 @@ pub struct Revision {
     pub kind: RevisionKind,
     pub author: String,
     pub date: String,
-    /// Tracked as a move (`w:moveTo` for an insert, `w:moveFrom` for a delete), not a plain
-    /// change. Accept and reject treat it as the insert or delete it is.
-    pub moved: bool,
 }
 
 /// A bibliography source.

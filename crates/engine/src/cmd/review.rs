@@ -680,9 +680,9 @@ pub fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> 
                 && (c.no_proof == Some(true)
                     || c.link.is_some()
                     || c.font.as_deref().is_some_and(wordcraft_fonts::word::is_bengali_family)
-                    || c.lang.as_deref().is_some_and(|l| l.starts_with("bn")))
+                    || c.lang.as_deref().is_some_and(|l| !l.starts_with("en")))
         }) || p.mark.font.as_deref().is_some_and(wordcraft_fonts::word::is_bengali_family)
-            || p.mark.lang.as_deref().is_some_and(|l| l.starts_with("bn"))
+            || p.mark.lang.as_deref().is_some_and(|l| !l.starts_with("en"))
             || s.bangla_mode != crate::cmd::bangla::BanglaMode::Off
     };
     v.into_iter()
