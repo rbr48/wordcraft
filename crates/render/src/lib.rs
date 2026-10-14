@@ -520,11 +520,31 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_stroke(st);
             line(ctx, 0.0);
         }
-        Draw::Glyphs { face, size, glyphs, color: c, alpha, synth_bold, synth_italic, .. } => {
+        Draw::Glyphs { face, size, glyphs, color: c, alpha, synth_bold, synth_italic, effects, .. } => {
             let db = FontDb::global();
             let k = *size as f64 / face.upem.max(1.0);
             ctx.set_paint(color(opts.ink(*c), *alpha));
             let skew = if *synth_italic { Affine::new([1.0, 0.0, -0.21, 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
+            // Text effects (Word's Text Effects): a shadow copy of the glyphs behind the text, and an
+            // outline stroke over it. Both are plain path fills and strokes, so they need no filter.
+            let on_page = |gx: f64, gy: f64| gx >= visible.x0 - 100.0 && gx <= visible.x1 && gy >= visible.y0 && gy <= visible.y1 + 200.0;
+            if let Some(sh) = effects.active_shadow() {
+                ctx.set_paint(color(opts.ink(sh.color), *alpha));
+                for (gid, x, y) in glyphs {
+                    let (gx, gy) = (*x as f64 + sh.dx as f64, *y as f64 + sh.dy as f64);
+                    if !on_page(gx, gy) {
+                        continue;
+                    }
+                    let o = db.outline(face, *gid);
+                    if o.elements().is_empty() {
+                        continue;
+                    }
+                    ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
+                    ctx.fill_path(&o);
+                }
+                // The run's own fill follows, so restore its paint.
+                ctx.set_paint(color(opts.ink(*c), *alpha));
+            }
             // Outline strokes, in font units: synthetic bold, then on-screen stem darkening (a
             // stroke grows the outline by half its width on each side). Darkening is skipped for
             // translucent text, where the stroke overlapping the fill would show as a darker rim.
@@ -550,6 +570,26 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
                 ctx.fill_path(&o);
                 if outline_stroke > 0.0 {
+                    ctx.stroke_path(&o);
+                }
+            }
+            // The text outline is stroked over the fill. Its width is in points, the glyph paths are in
+            // font units scaled by `k`, so the stroke is `width / k` in font units.
+            if let Some(ol) = effects.active_outline()
+                && k > 0.0
+            {
+                ctx.set_paint(color(opts.ink(ol.color), *alpha));
+                ctx.set_stroke(kurbo::Stroke::new(ol.width as f64 / k).with_join(kurbo::Join::Round));
+                for (gid, x, y) in glyphs {
+                    let (gx, gy) = (*x as f64, *y as f64);
+                    if !on_page(gx, gy) {
+                        continue;
+                    }
+                    let o = db.outline(face, *gid);
+                    if o.elements().is_empty() {
+                        continue;
+                    }
+                    ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
                     ctx.stroke_path(&o);
                 }
             }
@@ -909,6 +949,60 @@ mod tests {
         assert!(dark > 30, "dark {dark}");
         assert_eq!(img.pixel(5, 5), [255, 255, 255, 255]);
         assert!(!img.to_png().is_empty());
+    }
+
+    /// A large black run with the given text effects, and its page raster.
+    fn effect_text(effects: wordcraft_doc::text_effects::TextEffects) -> Rendered {
+        use wordcraft_doc::{CharProps, Document, Paragraph, para_block, props::TextColor};
+        let mut d = Document::from_text("");
+        let props = CharProps { size: Some(48.0), color: Some(TextColor::Rgb(Rgb(0, 0, 0))), text_effects: Some(effects), ..Default::default() };
+        d.body = vec![para_block(Paragraph::with_text("WordArt", props))];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        render_page(&d, &l.pages[0], 1.0, &RenderOptions::default())
+    }
+
+    /// The bounding box of the pixels matching `hit`, as (x0, y0, x1, y1), and their count.
+    fn ink_box(img: &Rendered, hit: impl Fn(&[u8]) -> bool) -> (usize, Option<(u32, u32, u32, u32)>) {
+        let px: Vec<(u32, u32)> =
+            (0..img.width).flat_map(|x| (0..img.height).map(move |y| (x, y))).filter(|(x, y)| hit(&img.pixel(*x, *y))).collect();
+        let bx = px.iter().fold(None, |b: Option<(u32, u32, u32, u32)>, &(x, y)| match b {
+            None => Some((x, y, x, y)),
+            Some((x0, y0, x1, y1)) => Some((x0.min(x), y0.min(y), x1.max(x), y1.max(y))),
+        });
+        (px.len(), bx)
+    }
+
+    /// Text Effects (WordArt): a shadow is a copy of the glyphs behind the text, offset right and
+    /// down, and it is drawn only when on.
+    #[test]
+    fn text_shadow_is_drawn_offset_behind_the_text() {
+        use wordcraft_doc::text_effects::{TextEffects, TextShadow};
+        let red = |p: &[u8]| p[0] > 200 && p[1] < 60 && p[2] < 60;
+        let black = |p: &[u8]| p[0] < 60 && p[1] < 60 && p[2] < 60;
+        let plain = effect_text(TextEffects::default());
+        assert_eq!(ink_box(&plain, red).0, 0, "no shadow, no red");
+        let shadowed = effect_text(TextEffects { outline: None, shadow: Some(TextShadow { on: true, color: Rgb(255, 0, 0), dx: 6.0, dy: 6.0 }) });
+        let (n, red_box) = ink_box(&shadowed, red);
+        let (_, black_box) = ink_box(&shadowed, black);
+        let (rb, bb) = (red_box.expect("red shadow"), black_box.expect("black text"));
+        assert!(n > 200, "shadow pixels {n}");
+        assert!(rb.2 > bb.2 && rb.3 > bb.3, "shadow {rb:?} not offset down-right of text {bb:?}");
+        let off = effect_text(TextEffects { outline: None, shadow: Some(TextShadow { on: false, color: Rgb(255, 0, 0), dx: 6.0, dy: 6.0 }) });
+        assert_eq!(ink_box(&off, red).0, 0, "an off shadow draws nothing");
+    }
+
+    /// Text Effects (WordArt): an outline is stroked over the glyphs, and only when on.
+    #[test]
+    fn text_outline_is_stroked_over_the_glyphs_only_when_on() {
+        use wordcraft_doc::text_effects::{TextEffects, TextOutline};
+        let green = |p: &[u8]| p[0] < 60 && p[1] > 200 && p[2] < 60;
+        let plain = effect_text(TextEffects::default());
+        assert_eq!(ink_box(&plain, green).0, 0);
+        let outlined = effect_text(TextEffects { outline: Some(TextOutline { on: true, color: Rgb(0, 255, 0), width: 3.0 }), shadow: None });
+        let (n, _) = ink_box(&outlined, green);
+        assert!(n > 100, "outline pixels {n}");
+        let off = effect_text(TextEffects { outline: Some(TextOutline { on: false, color: Rgb(0, 255, 0), width: 3.0 }), shadow: None });
+        assert_eq!(ink_box(&off, green).0, 0, "an off outline draws nothing");
     }
 
     /// Table Layout › Text Direction (#226): a turned cell's text is painted running down the

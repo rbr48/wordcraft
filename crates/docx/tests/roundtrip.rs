@@ -92,6 +92,7 @@ fn every_char_prop_round_trips() {
         ins: None,
         del: None,
         fmt_change: None,
+        text_effects: None,
     };
     let auto =
         CharProps { color: Some(TextColor::Auto), highlight: Some(Highlight::None), vert_align: Some(VertAlign::Subscript), ..Default::default() };
@@ -905,6 +906,42 @@ fn connectors_round_trip() {
         }
         o => panic!("{o:?}"),
     }
+}
+
+#[test]
+fn text_effects_round_trip() {
+    // Text effects (Word's Text Effects) are `w14:textOutline` and `w14:shadow` in the run's rPr
+    // (MS-DOCX). A shadow comes back at the same offset, to within the EMU and 60000ths of a
+    // degree the format stores.
+    use wordcraft_doc::text_effects::{TextEffects, TextOutline, TextShadow};
+    let fx = TextEffects {
+        outline: Some(TextOutline { on: true, color: Rgb(0, 0x80, 0), width: 1.5 }),
+        shadow: Some(TextShadow { on: true, color: Rgb(0, 0, 255), dx: 3.0, dy: 2.0 }),
+    };
+    let off = TextEffects { outline: Some(TextOutline { on: false, color: Rgb(0, 0, 0), width: 1.0 }), shadow: None };
+    let p = para_runs(&[
+        ("both ", CharProps { text_effects: Some(fx), ..Default::default() }),
+        ("none", CharProps { text_effects: Some(off), ..Default::default() }),
+    ]);
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w14:textOutline w14:w="19050""#), "{xml}");
+    assert!(xml.contains(r#"<w14:shadow w14:blurRad="0" w14:dist="#), "{xml}");
+    assert!(xml.contains("<w14:noFill/>"), "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r)[0];
+    let first = got.runs.first().and_then(|c| c.props.text_effects).expect("effects on the first run");
+    let outline = first.outline.expect("outline");
+    assert!(outline.on && outline.color == Rgb(0, 0x80, 0) && outline.width == 1.5, "{outline:?}");
+    let shadow = first.shadow.expect("shadow");
+    assert!(shadow.on && shadow.color == Rgb(0, 0, 255), "{shadow:?}");
+    assert!((shadow.dx - 3.0).abs() < 0.01 && (shadow.dy - 2.0).abs() < 0.01, "{shadow:?}");
+    let last = got.runs.last().and_then(|c| c.props.text_effects).expect("effects on the last run");
+    assert!(!last.outline.expect("outline").on && last.shadow.is_none());
 }
 
 #[test]

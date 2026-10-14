@@ -106,6 +106,42 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
         (None, Some(b)) => w.empty("w:lang", &[("w:bidi", b)]),
         (None, None) => {}
     }
+    // Word 2010 text effects (`w14`, MS-DOCX). They follow the standard properties, and `w14` is
+    // declared ignorable, so older readers skip them.
+    if let Some(fx) = &c.text_effects {
+        text_effects(w, fx);
+    }
+}
+
+/// `w14:textOutline` and `w14:shadow` for a run's text effects. An outline that is off is written
+/// as `noFill`; an off shadow is left out (its absence is "no shadow").
+fn text_effects(w: &mut W, fx: &wordcraft_doc::text_effects::TextEffects) {
+    if let Some(o) = fx.outline {
+        let width = wordcraft_geom::to_emu(o.width.clamp(0.0, wordcraft_doc::text_effects::MAX_OUTLINE_WIDTH)).to_string();
+        if o.on {
+            w.open("w14:textOutline", &[("w14:w", &width), ("w14:cap", "flat"), ("w14:cmpd", "sng"), ("w14:algn", "ctr")]);
+            w.open("w14:solidFill", &[]);
+            w.empty("w14:srgbClr", &[("w14:val", &o.color.hex())]);
+            w.close("w14:solidFill");
+            w.empty("w14:round", &[]);
+            w.close("w14:textOutline");
+        } else {
+            w.open("w14:textOutline", &[]);
+            w.empty("w14:noFill", &[]);
+            w.close("w14:textOutline");
+        }
+    }
+    if let Some(sh) = fx.shadow.filter(|s| s.on) {
+        // DrawingML measures the distance in EMU and the direction in 60000ths of a degree,
+        // clockwise from the positive x axis, so straight down is 90 degrees.
+        let dx = sh.dx.clamp(-wordcraft_doc::text_effects::MAX_SHADOW_OFFSET, wordcraft_doc::text_effects::MAX_SHADOW_OFFSET);
+        let dy = sh.dy.clamp(-wordcraft_doc::text_effects::MAX_SHADOW_OFFSET, wordcraft_doc::text_effects::MAX_SHADOW_OFFSET);
+        let dist = wordcraft_geom::to_emu(dx.hypot(dy)).to_string();
+        let dir = ((dy.atan2(dx).to_degrees().rem_euclid(360.0)) * 60_000.0).round() as i64;
+        w.open("w14:shadow", &[("w14:blurRad", "0"), ("w14:dist", &dist), ("w14:dir", &dir.to_string())]);
+        w.empty("w14:srgbClr", &[("w14:val", &sh.color.hex())]);
+        w.close("w14:shadow");
+    }
 }
 
 /// Does `c` produce any `w:rPr` content (besides a tracked change)?

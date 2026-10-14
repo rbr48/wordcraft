@@ -866,3 +866,23 @@ fn internal_links_export_in_linear_time() {
     let ratio = fastest(&big) / fastest(&small).max(1e-9);
     assert!(ratio < 9.0, "4x the paragraphs and links took {ratio:.1}x as long (quadratic would be ~16x)");
 }
+
+#[test]
+fn text_effects_are_extra_vector_paths_beside_the_text() {
+    // The outline and shadow are vector paths beside the real text: the file grows, and the text is
+    // still there to extract.
+    use wordcraft_doc::text_effects::{TextEffects, TextOutline, TextShadow};
+    let make = |fx: TextEffects| {
+        let mut d = Document::new();
+        let props = CharProps { size: Some(40.0), text_effects: Some(fx), ..Default::default() };
+        d.body = vec![para_block(Paragraph::with_text("WordArt", props))];
+        export(&d, &PdfOptions::default()).expect("pdf")
+    };
+    let plain = make(TextEffects::default());
+    let fx = make(TextEffects {
+        outline: Some(TextOutline { on: true, color: wordcraft_doc::props::Rgb(0, 255, 0), width: 1.5 }),
+        shadow: Some(TextShadow { on: true, color: wordcraft_doc::props::Rgb(255, 0, 0), dx: 2.0, dy: 2.0 }),
+    });
+    assert!(fx.len() > plain.len(), "effects add paths: {} vs {}", fx.len(), plain.len());
+    assert!(squash(&extract_text(&fx).join(" ")).contains("WordArt"), "text stays extractable");
+}

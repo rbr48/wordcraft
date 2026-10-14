@@ -310,6 +310,10 @@ pub struct CharProps {
     pub emboss: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engrave: Option<bool>,
+    /// Text effects (Word's Text Effects): an outline and a shadow drawn with the glyphs. Merged per
+    /// effect when a patch is applied, so setting one keeps the other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_effects: Option<crate::text_effects::TextEffects>,
     /// BCP 47 language tag (proofing).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
@@ -405,6 +409,9 @@ impl CharProps {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
             cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del, fmt_change);
+        if let Some(p) = &patch.text_effects {
+            self.text_effects = Some(self.text_effects.unwrap_or_default().merged(p));
+        }
         if patch.size.is_some() && patch.size_cs.is_none() {
             self.size_cs = None;
         }

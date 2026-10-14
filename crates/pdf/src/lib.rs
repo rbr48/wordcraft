@@ -794,10 +794,35 @@ impl Exporter<'_> {
                     self.draw(s, d);
                 }
             }
-            Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges } => {
+            Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, effects } => {
+                // Text effects are vector paths beside the real text, so the text stays extractable: a
+                // shadow (the glyphs offset) behind it, and an outline stroke over it.
+                if let Some(sh) = effects.active_shadow() {
+                    let moved: Vec<(u32, f32, f32)> = glyphs.iter().map(|&(g, x, y)| (g, x + sh.dx, y + sh.dy)).collect();
+                    if let Some(p) = glyph_outlines(face, *size, &moved) {
+                        s.set_stroke(None);
+                        s.set_fill(Some(fill(sh.color, *alpha)));
+                        s.draw_path(&p);
+                        s.set_fill(None);
+                    }
+                }
                 self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges);
                 if let Some(l) = link {
                     self.link_rect(face, *size, glyphs, l);
+                }
+                if let Some(ol) = effects.active_outline()
+                    && let Some(p) = glyph_outlines(face, *size, glyphs)
+                {
+                    s.set_fill(None);
+                    s.set_stroke(Some(Stroke {
+                        paint: rgb::Color::new(ol.color.0, ol.color.1, ol.color.2).into(),
+                        width: ol.width,
+                        opacity: norm(*alpha),
+                        line_join: LineJoin::Round,
+                        ..Default::default()
+                    }));
+                    s.draw_path(&p);
+                    s.set_stroke(None);
                 }
             }
             Draw::Fill { rect, color, alpha } => {

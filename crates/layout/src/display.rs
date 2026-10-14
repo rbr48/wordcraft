@@ -38,6 +38,8 @@ pub enum Draw {
         /// Byte range of `text` each glyph shows (one per glyph; a ligature's range covers all
         /// its characters). Empty when unknown: the PDF writer then guesses from the font.
         ranges: Vec<std::ops::Range<usize>>,
+        /// Text effects (outline, shadow) of the run; empty for labels, marks and leaders.
+        effects: wordcraft_doc::text_effects::TextEffects,
     },
     Fill {
         rect: Rect,
@@ -524,6 +526,7 @@ fn lines(
                 text: lab.text.clone(),
                 link: None,
                 ranges: Vec::new(),
+                effects: Default::default(),
             });
         }
         // Hyphen at a hyphenated line end.
@@ -542,6 +545,7 @@ fn lines(
                 text: "-".into(),
                 link: None,
                 ranges: Vec::new(),
+                effects: Default::default(),
             });
         }
         // Glyph runs grouped by style.
@@ -681,6 +685,7 @@ fn lines(
                     text,
                     link: rc.link.clone(),
                     ranges,
+                    effects: rc.text_effects,
                 });
             }
             // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
@@ -779,6 +784,7 @@ fn lines(
                 text: String::new(),
                 link: None,
                 ranges: Vec::new(),
+                effects: Default::default(),
             });
         }
         // Inline objects.
@@ -948,6 +954,7 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
                 link: None,
                 // Equation text maps back through the font (no per-glyph ranges from the math layout).
                 ranges: Vec::new(),
+                effects: Default::default(),
             }),
             MItem::Rect { x: rx, y, w, h, color } => out.push(Draw::Fill { rect: Rect::new(x + rx, base - y - h, *w, *h), color: *color, alpha }),
             MItem::Line { x0, y0, x1, y1, width, color, dotted } => out.push(Draw::Line {
@@ -1143,6 +1150,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
         text: text.clone(),
         link: None,
         ranges: Vec::new(),
+        effects: Default::default(),
     })
 }
 

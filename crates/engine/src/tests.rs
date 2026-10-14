@@ -3280,3 +3280,39 @@ fn pdf_reflow_opens_pdf_via_open_bytes() {
     let p = doc.body[0].as_para().expect("block should be paragraph");
     assert_eq!(p.props.style.as_deref(), Some("Heading2"), "14pt font mapped to Heading2");
 }
+
+/// The text effects of the first run of the first paragraph.
+fn first_run_effects(s: &Session) -> wordcraft_doc::text_effects::TextEffects {
+    match &*s.doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p.runs[0].props.text_effects.unwrap_or_default(),
+        _ => panic!("first block is not a paragraph"),
+    }
+}
+
+#[test]
+fn text_outline_and_shadow_merge_per_effect_and_switch_off() {
+    let mut s = Session::new(Document::from_text("WordArt"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.textShadow", json!({"color": "FF0000", "dx": 3, "dy": 3}));
+    run(&mut s, "format.textOutline", json!({"color": "00FF00", "width": 1.5}));
+    let fx = first_run_effects(&s);
+    let (o, sh) = (fx.outline.expect("outline"), fx.shadow.expect("shadow"));
+    assert!(o.on && o.color == wordcraft_doc::props::Rgb(0, 255, 0) && o.width == 1.5, "{o:?}");
+    assert!(sh.on && sh.color == wordcraft_doc::props::Rgb(255, 0, 0) && sh.dx == 3.0 && sh.dy == 3.0, "{sh:?}");
+    // Switching the outline off keeps the shadow that was set on its own.
+    run(&mut s, "format.textOutline", json!({"off": true}));
+    let fx = first_run_effects(&s);
+    assert!(!fx.outline.expect("outline").on, "the outline is off");
+    assert!(fx.shadow.expect("shadow").on, "the shadow is kept");
+}
+
+#[test]
+fn text_effect_commands_reject_bad_parameters() {
+    let mut s = Session::new(Document::from_text("x"));
+    run(&mut s, "select.all", json!({}));
+    assert!(s.run("format.textOutline", &json!({"width": 99})).is_err());
+    assert!(s.run("format.textOutline", &json!({"width": -1})).is_err());
+    assert!(s.run("format.textOutline", &json!({"color": "nope"})).is_err());
+    assert!(s.run("format.textShadow", &json!({"dx": 500})).is_err());
+    assert!(s.run("format.textShadow", &json!({"color": "xyz"})).is_err());
+}

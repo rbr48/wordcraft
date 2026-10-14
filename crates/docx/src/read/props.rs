@@ -170,6 +170,31 @@ impl PropCtx {
                     c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                     c.lang_bidi = k.attr("w:bidi").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                 }
+                // Word 2010 text effects (MS-DOCX). An outline is on unless it is `noFill`.
+                "w14:textOutline" => {
+                    let on = k.child("w14:noFill").is_none();
+                    let color = k
+                        .child("w14:solidFill")
+                        .and_then(|f| f.child("w14:srgbClr"))
+                        .and_then(|c| c.attr("w14:val"))
+                        .and_then(wordcraft_doc::props::Rgb::parse)
+                        .unwrap_or(wordcraft_doc::props::Rgb::BLACK);
+                    let width = k.attr("w14:w").and_then(|v| v.parse::<i64>().ok()).map(wordcraft_geom::emu).unwrap_or(0.75);
+                    c.text_effects.get_or_insert_with(Default::default).outline = Some(wordcraft_doc::text_effects::TextOutline { on, color, width });
+                }
+                "w14:shadow" => {
+                    let emu = |name: &str| k.attr(name).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+                    let dist = wordcraft_geom::emu(emu("w14:dist"));
+                    let dir = (emu("w14:dir") as f32 / 60_000.0).to_radians();
+                    let color = k
+                        .child("w14:srgbClr")
+                        .and_then(|c| c.attr("w14:val"))
+                        .and_then(wordcraft_doc::props::Rgb::parse)
+                        .unwrap_or(wordcraft_doc::props::Rgb::BLACK);
+                    let (dx, dy) = (dist * dir.cos(), dist * dir.sin());
+                    c.text_effects.get_or_insert_with(Default::default).shadow =
+                        Some(wordcraft_doc::text_effects::TextShadow { on: true, color, dx, dy });
+                }
                 _ => {}
             }
         }

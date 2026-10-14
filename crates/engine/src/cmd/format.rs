@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::Pos;
 use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
+use wordcraft_doc::text_effects::{MAX_OUTLINE_WIDTH, MAX_SHADOW_OFFSET, TextEffects, TextOutline, TextShadow};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -92,6 +93,10 @@ pub fn specs() -> Vec<CommandSpec> {
             toggle(s, v, |r| r.outline, |c, on| c.outline = Some(on))
         }),
         CommandSpec::new("format.shadow", "Shadow", "Home › Font › Text Effects", |s, v| toggle(s, v, |r| r.shadow, |c, on| c.shadow = Some(on))),
+        CommandSpec::new("format.textOutline", "Text Outline", "WordArt Styles › Text Outline", text_outline)
+            .params(r#"{"color"?: "RRGGBB", "width"?: points (0 to 10), "off"?: bool}"#),
+        CommandSpec::new("format.textShadow", "Text Shadow", "WordArt Styles › Text Effects", text_shadow)
+            .params(r#"{"color"?: "RRGGBB", "dx"?: points (-50 to 50), "dy"?: points (-50 to 50), "off"?: bool}"#),
         CommandSpec::new("format.emboss", "Emboss", "Home › Font › Font", |s, v| toggle(s, v, |r| r.emboss, |c, on| c.emboss = Some(on))),
         CommandSpec::new("format.engrave", "Engrave", "Home › Font › Font", |s, v| toggle(s, v, |r| r.engrave, |c, on| c.engrave = Some(on))),
         CommandSpec::new("format.font", "Font", "Home › Font", font).key("Mod+Shift+F").params(r#"{"name": string}"#),
@@ -337,6 +342,38 @@ fn color(s: &mut Session, v: &Value) -> CmdResult {
     let c = p::req_str(v, "color")?;
     let tc = TextColor::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB or auto".into()))?;
     apply(s, &|x| x.color = Some(tc))
+}
+
+/// Text Outline: a stroke around the selected text. `off` removes it; `width` is in points.
+fn text_outline(s: &mut Session, v: &Value) -> CmdResult {
+    let on = !p::bool(v, "off").unwrap_or(false);
+    let color = match p::str(v, "color") {
+        Some(c) => Rgb::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB".into()))?,
+        None => Rgb::BLACK,
+    };
+    let width = p::f32(v, "width").unwrap_or(0.75);
+    if !width.is_finite() || !(0.0..=MAX_OUTLINE_WIDTH).contains(&width) {
+        return Err(CmdError::Params("width must be 0 to 10 points".into()));
+    }
+    let patch = TextEffects { outline: Some(TextOutline { on, color, width }), shadow: None };
+    // The closure runs on each run's own properties, so it merges the one effect it sets.
+    apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
+}
+
+/// Text Shadow: a copy of the selected text offset behind it. `off` removes it.
+fn text_shadow(s: &mut Session, v: &Value) -> CmdResult {
+    let on = !p::bool(v, "off").unwrap_or(false);
+    let color = match p::str(v, "color") {
+        Some(c) => Rgb::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB".into()))?,
+        None => Rgb::BLACK,
+    };
+    let (dx, dy) = (p::f32(v, "dx").unwrap_or(2.0), p::f32(v, "dy").unwrap_or(2.0));
+    let ok = |d: f32| d.is_finite() && (-MAX_SHADOW_OFFSET..=MAX_SHADOW_OFFSET).contains(&d);
+    if !ok(dx) || !ok(dy) {
+        return Err(CmdError::Params("dx and dy must be -50 to 50 points".into()));
+    }
+    let patch = TextEffects { outline: None, shadow: Some(TextShadow { on, color, dx, dy }) };
+    apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
 }
 
 fn highlight(s: &mut Session, v: &Value) -> CmdResult {
