@@ -9,6 +9,7 @@
 
 mod fontdb;
 pub mod math;
+pub mod outline;
 mod ui_fallback;
 pub mod word;
 

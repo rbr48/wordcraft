@@ -3347,6 +3347,7 @@ fn text_effects_reach_the_glyph_draw_item() {
         outline: Some(TextOutline { on: true, color: wordcraft_doc::props::Rgb(0, 255, 0), width: 1.5 }),
         shadow: Some(TextShadow { on: true, color: wordcraft_doc::props::Rgb(255, 0, 0), dx: 2.0, dy: 2.0 }),
         fill: None,
+        ..Default::default()
     };
     let mut d = Document::new();
     let p = Paragraph::with_text("Effect", wordcraft_doc::CharProps { text_effects: Some(fx), ..Default::default() });

@@ -5,7 +5,7 @@ use wordcraft_doc::Pos;
 use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
 use wordcraft_doc::text_effects::{
-    GradientStop, MAX_GRADIENT_STOPS, MAX_OUTLINE_WIDTH, MAX_SHADOW_OFFSET, TextEffects, TextGradient, TextOutline, TextShadow,
+    GradientStop, MAX_GRADIENT_STOPS, MAX_OUTLINE_WIDTH, MAX_SHADOW_OFFSET, TextEffects, TextGradient, TextOutline, TextShadow, TextWarp, WarpPreset,
 };
 
 use super::sel_result;
@@ -101,6 +101,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"stops": [{"pos": 0 to 100 (percent), "color": "RRGGBB"}] (2 to 8 stops), "angle"?: degrees (0 left to right, 90 top to bottom), "off"?: bool}"#),
         CommandSpec::new("format.textShadow", "Text Shadow", "WordArt Styles › Text Effects", text_shadow)
             .params(r#"{"color"?: "RRGGBB", "dx"?: points (-50 to 50), "dy"?: points (-50 to 50), "off"?: bool}"#),
+        CommandSpec::new("format.textWarp", "Text Warp", "WordArt Styles › Transform", text_warp).params(
+            r#"{"preset": "textArchUp" | "textArchDown" | "textCircle" | "textChevron" | "textChevronInverted" | "textWave1" | "textDoubleWave1" | "textInflate" | "textDeflate" | "textSlantUp" | "textSlantDown", "amount"?: 0 to 1 (1 is the preset's full bend), "off"?: bool}"#,
+        ),
         CommandSpec::new("format.emboss", "Emboss", "Home › Font › Font", |s, v| toggle(s, v, |r| r.emboss, |c, on| c.emboss = Some(on))),
         CommandSpec::new("format.engrave", "Engrave", "Home › Font › Font", |s, v| toggle(s, v, |r| r.engrave, |c, on| c.engrave = Some(on))),
         CommandSpec::new("format.font", "Font", "Home › Font", font).key("Mod+Shift+F").params(r#"{"name": string}"#),
@@ -359,7 +362,7 @@ fn text_outline(s: &mut Session, v: &Value) -> CmdResult {
     if !width.is_finite() || !(0.0..=MAX_OUTLINE_WIDTH).contains(&width) {
         return Err(CmdError::Params("width must be 0 to 10 points".into()));
     }
-    let patch = TextEffects { outline: Some(TextOutline { on, color, width }), shadow: None, fill: None };
+    let patch = TextEffects { outline: Some(TextOutline { on, color, width }), ..Default::default() };
     // The closure runs on each run's own properties, so it merges the one effect it sets.
     apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
 }
@@ -393,7 +396,7 @@ fn text_fill(s: &mut Session, v: &Value) -> CmdResult {
     if !angle.is_finite() || !(0.0..=360.0).contains(&angle) {
         return Err(CmdError::Params("angle must be 0 to 360 degrees".into()));
     }
-    let patch = TextEffects { outline: None, shadow: None, fill: Some(TextGradient { on, stops, count: count as u8, angle }) };
+    let patch = TextEffects { fill: Some(TextGradient { on, stops, count: count as u8, angle }), ..Default::default() };
     apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
 }
 
@@ -409,7 +412,29 @@ fn text_shadow(s: &mut Session, v: &Value) -> CmdResult {
     if !ok(dx) || !ok(dy) {
         return Err(CmdError::Params("dx and dy must be -50 to 50 points".into()));
     }
-    let patch = TextEffects { outline: None, shadow: Some(TextShadow { on, color, dx, dy }), fill: None };
+    let patch = TextEffects { shadow: Some(TextShadow { on, color, dx, dy }), ..Default::default() };
+    apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
+}
+
+/// Text Warp (Word's Transform): bends the selected text along a preset, `amount` 0 to 1 of the
+/// preset's full bend. `off` makes the text flat again; it needs no preset.
+fn text_warp(s: &mut Session, v: &Value) -> CmdResult {
+    let on = !p::bool(v, "off").unwrap_or(false);
+    let preset = match p::str(v, "preset") {
+        Some(name) => WarpPreset::parse(name).ok_or_else(|| CmdError::Params(format!("unknown warp preset `{name}`")))?,
+        None if !on => WarpPreset::TextArchUp,
+        None => return Err(CmdError::Params(format!("preset is required: {}", WarpPreset::ALL.map(WarpPreset::name).join(", ")))),
+    };
+    // A given amount must be a number; left out, it is the full bend.
+    let amount = match v.get("amount") {
+        None => 1.0,
+        Some(a) => a
+            .as_f64()
+            .map(|x| x as f32)
+            .filter(|x| x.is_finite() && (0.0..=1.0).contains(x))
+            .ok_or_else(|| CmdError::Params("amount must be a number from 0 to 1".into()))?,
+    };
+    let patch = TextEffects { warp: Some(TextWarp { on, preset, amount }), ..Default::default() };
     apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
 }
 

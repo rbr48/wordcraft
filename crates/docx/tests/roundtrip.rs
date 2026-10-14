@@ -918,8 +918,10 @@ fn text_effects_round_trip() {
         outline: Some(TextOutline { on: true, color: Rgb(0, 0x80, 0), width: 1.5 }),
         shadow: Some(TextShadow { on: true, color: Rgb(0, 0, 255), dx: 3.0, dy: 2.0 }),
         fill: None,
+        ..Default::default()
     };
-    let off = TextEffects { outline: Some(TextOutline { on: false, color: Rgb(0, 0, 0), width: 1.0 }), shadow: None, fill: None };
+    let off =
+        TextEffects { outline: Some(TextOutline { on: false, color: Rgb(0, 0, 0), width: 1.0 }), shadow: None, fill: None, ..Default::default() };
     let p = para_runs(&[
         ("both ", CharProps { text_effects: Some(fx), ..Default::default() }),
         ("none", CharProps { text_effects: Some(off), ..Default::default() }),
@@ -961,11 +963,11 @@ fn text_gradient_fill_round_trips_in_docx() {
     let grad = TextGradient { on: true, stops, count: 3, angle: 90.0 };
     let off = CharProps {
         color: Some(TextColor::Rgb(Rgb(0, 255, 0))),
-        text_effects: Some(TextEffects { outline: None, shadow: None, fill: Some(TextGradient::off()) }),
+        text_effects: Some(TextEffects { fill: Some(TextGradient::off()), ..Default::default() }),
         ..Default::default()
     };
     let p = para_runs(&[
-        ("gradient", CharProps { text_effects: Some(TextEffects { outline: None, shadow: None, fill: Some(grad) }), ..Default::default() }),
+        ("gradient", CharProps { text_effects: Some(TextEffects { fill: Some(grad), ..Default::default() }), ..Default::default() }),
         ("solid", off),
     ]);
     let mut d = Document::new();

@@ -883,6 +883,7 @@ fn text_effects_are_extra_vector_paths_beside_the_text() {
         outline: Some(TextOutline { on: true, color: wordcraft_doc::props::Rgb(0, 255, 0), width: 1.5 }),
         shadow: Some(TextShadow { on: true, color: wordcraft_doc::props::Rgb(255, 0, 0), dx: 2.0, dy: 2.0 }),
         fill: None,
+        ..Default::default()
     });
     assert!(fx.len() > plain.len(), "effects add paths: {} vs {}", fx.len(), plain.len());
     assert!(squash(&extract_text(&fx).join(" ")).contains("WordArt"), "text stays extractable");
@@ -902,8 +903,64 @@ fn text_gradient_fill_keeps_the_text_and_paints_it_with_a_shading() {
     stops[0] = GradientStop { pos: 0.0, color: wordcraft_doc::props::Rgb(255, 0, 0) };
     stops[1] = GradientStop { pos: 1.0, color: wordcraft_doc::props::Rgb(0, 0, 255) };
     let plain = make(TextEffects::default());
-    let grad = make(TextEffects { outline: None, shadow: None, fill: Some(TextGradient { on: true, stops, count: 2, angle: 0.0 }) });
+    let grad = make(TextEffects { fill: Some(TextGradient { on: true, stops, count: 2, angle: 0.0 }), ..Default::default() });
     assert!(!String::from_utf8_lossy(&plain).contains("ShadingType"), "no gradient, no shading");
     assert!(String::from_utf8_lossy(&grad).contains("ShadingType"), "the gradient is a PDF shading");
     assert!(squash(&extract_text(&grad).join(" ")).contains("WordArt"), "the text stays extractable");
+}
+
+#[test]
+fn a_warped_run_is_drawn_as_its_bent_glyphs_so_its_text_is_not_extracted() {
+    // A warp bends the glyphs, so the run is vector paths and not in the text layer. That is the known
+    // limit of warped text (docs/gaps.md); this test pins it so a change to it is deliberate.
+    use wordcraft_doc::text_effects::{TextEffects, TextWarp, WarpPreset};
+    let make = |fx: TextEffects| {
+        let mut d = Document::new();
+        let props = CharProps { size: Some(40.0), text_effects: Some(fx), ..Default::default() };
+        d.body = vec![para_block(Paragraph::with_text("WordArt", props))];
+        export(&d, &PdfOptions::default()).expect("pdf")
+    };
+    let plain = make(TextEffects::default());
+    let warped = make(TextEffects { warp: Some(TextWarp { on: true, preset: WarpPreset::TextArchUp, amount: 1.0 }), ..Default::default() });
+    assert!(squash(&extract_text(&plain).join(" ")).contains("WordArt"), "plain text is extractable");
+    assert!(!squash(&extract_text(&warped).join(" ")).contains("WordArt"), "a warped run is paths, not text");
+}
+
+#[test]
+fn a_warped_gradient_is_a_shading_on_the_bent_glyphs() {
+    use wordcraft_doc::text_effects::{GradientStop, MAX_GRADIENT_STOPS, TextEffects, TextGradient, TextWarp, WarpPreset};
+    let mut stops = [GradientStop { pos: 0.0, color: wordcraft_doc::props::Rgb(0, 0, 0) }; MAX_GRADIENT_STOPS];
+    stops[0] = GradientStop { pos: 0.0, color: wordcraft_doc::props::Rgb(255, 0, 0) };
+    stops[1] = GradientStop { pos: 1.0, color: wordcraft_doc::props::Rgb(0, 0, 255) };
+    let fx = TextEffects {
+        fill: Some(TextGradient { on: true, stops, count: 2, angle: 0.0 }),
+        warp: Some(TextWarp { on: true, preset: WarpPreset::TextWave1, amount: 1.0 }),
+        ..Default::default()
+    };
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("WordArt", CharProps { size: Some(40.0), text_effects: Some(fx), ..Default::default() }))];
+    let bytes = export(&d, &PdfOptions::default()).expect("pdf");
+    assert!(String::from_utf8_lossy(&bytes).contains("ShadingType"), "the gradient is a shading on the warped paths");
+}
+
+#[test]
+fn gradient_bounds_ignore_a_space() {
+    // A space has no outline. Counting it as a glyph at the origin pulled the bounds, and so the
+    // gradient, to the page's corner.
+    let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+    let (w, space) = (face.glyph_for('W'), face.glyph_for(' '));
+    let b = glyph_bounds(&face, 40.0, &[(w, 200.0, 100.0), (space, 230.0, 100.0), (w, 250.0, 100.0)]).expect("bounds");
+    assert!(b.x0 > 150.0 && b.y0 > 50.0, "the bounds are the letters', not the origin's: {b:?}");
+}
+
+#[test]
+fn an_italic_runs_shadow_and_outline_lean_with_its_letters() {
+    // Synthetic italic shears the letters about the baseline. A capital I is a tall stem, so the sheared
+    // outline is wider than the upright one by about a fifth of its height, and its baseline stays put.
+    let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+    let at = [(face.glyph_for('I'), 20.0, 100.0)];
+    let upright = kurbo::Shape::bounding_box(&glyph_bez(&face, 40.0, &at, false));
+    let leaning = kurbo::Shape::bounding_box(&glyph_bez(&face, 40.0, &at, true));
+    assert!(leaning.width() > upright.width() + 2.0, "the stem leans: {leaning:?} against {upright:?}");
+    assert!((leaning.y1 - upright.y1).abs() < 1e-6, "the baseline does not move: {leaning:?} against {upright:?}");
 }

@@ -3360,3 +3360,29 @@ fn text_fill_command_sets_a_gradient_and_rejects_bad_stops() {
     }
     assert!(s.run("format.textFill", &ok).is_err(), "no stops is not a gradient");
 }
+
+#[test]
+fn text_warp_command_sets_a_preset_and_rejects_bad_parameters() {
+    use wordcraft_doc::text_effects::WarpPreset;
+    let mut s = Session::new(Document::from_text("WordArt"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.textWarp", json!({"preset": "textArchUp"}));
+    let w = first_run_effects(&s).warp.expect("the warp");
+    assert!(w.on && w.preset == WarpPreset::TextArchUp && w.amount == 1.0, "{w:?}");
+    run(&mut s, "format.textWarp", json!({"preset": "TEXTWAVE1", "amount": 0.25}));
+    let w = first_run_effects(&s).warp.expect("the warp");
+    assert_eq!((w.preset, w.amount), (WarpPreset::TextWave1, 0.25), "names ignore case");
+    run(&mut s, "format.textWarp", json!({"off": true}));
+    assert!(!first_run_effects(&s).warp.expect("off").on, "the warp is off");
+    let bad = [
+        json!({}),
+        json!({"preset": "textPlain"}),
+        json!({"preset": 3}),
+        json!({"preset": "textWave1", "amount": 2}),
+        json!({"preset": "textWave1", "amount": -0.5}),
+        json!({"preset": "textWave1", "amount": "x"}),
+    ];
+    for b in bad {
+        assert!(s.run("format.textWarp", &b).is_err(), "{b}");
+    }
+}
