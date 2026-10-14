@@ -1847,23 +1847,29 @@ fn place_objects(
             // text itself stays upright), unless the box budget says no (a box inside itself,
             // too deep, too many).
             let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-            let boxes: Vec<(u32, Rect)> = match obj {
+            let boxes: Vec<(u32, Rect, TextDirection)> = match obj {
                 InlineObject::Group { .. } => group_members(obj, rect)
                     .into_iter()
                     .filter_map(|(r, c)| {
                         c.text_box()
                             .filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox))
-                            .map(|id| (id, carried(r, float.spin(), centre)))
+                            .map(|id| (id, carried(r, float.spin(), centre), c.text_direction()))
                     })
                     .collect(),
-                _ => text_box.map(|id| (id, rect)).into_iter().collect(),
+                InlineObject::Shape { .. } => text_box.map(|id| (id, rect, obj.text_direction())).into_iter().collect(),
+                _ => Vec::new(),
             };
-            for (id, rect) in boxes {
+            for (id, rect, dir) in boxes {
                 if !ctx.boxes.enter(id) {
                     continue;
                 }
                 let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
-                let inner = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None).items;
+                let (line_w, max_h) = if dir.is_turned() {
+                    ((rect.h - 2.0 * BOX_INSET_Y).max(12.0), (rect.w - 2.0 * BOX_INSET_X).max(12.0))
+                } else {
+                    ((rect.w - 2.0 * BOX_INSET_X).max(12.0), (rect.h - 2.0 * BOX_INSET_Y).max(12.0))
+                };
+                let inner = layout_box(ctx, StoryRef::Part(id), &blocks, &[], line_w, None, depth + 1, None).items;
                 ctx.boxes.leave();
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 // Also place an Object hit target for each child text box in a group so hit testing,
@@ -1881,8 +1887,13 @@ fn place_objects(
                     });
                 }
                 // Text that doesn't fit inside the margins is hidden, as in Word.
-                for mut it in fit_box(inner, rect.h - 2.0 * BOX_INSET_Y) {
-                    it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
+                let (ox, oy) = match dir {
+                    TextDirection::Down => (rect.x + rect.w - BOX_INSET_X, rect.y + BOX_INSET_Y),
+                    TextDirection::Up => (rect.x + BOX_INSET_X, rect.y + rect.h - BOX_INSET_Y),
+                    TextDirection::Horizontal => (rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y),
+                };
+                for mut it in fit_box(inner, max_h) {
+                    it.turn(dir, ox, oy);
                     layer.push(it);
                 }
             }

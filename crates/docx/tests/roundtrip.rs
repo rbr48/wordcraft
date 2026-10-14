@@ -1751,3 +1751,59 @@ fn wrap_polygon_tight_round_trip() {
         assert!((poly_back[i].1 - py).abs() < 1e-3, "pt {i} y: {} vs {py}", poly_back[i].1);
     }
 }
+
+/// M18.3 (Gap #10 & #17): Vertical text direction in shapes and text boxes round-trips
+/// via DrawingML `wps:bodyPr/@vert="vert"` (Down / rotate90) and `vert="vert270"` (Up / rotate270).
+#[test]
+fn rotated_text_box_vertical_direction_round_trip() {
+    use wordcraft_doc::props::TextDirection;
+    let mut d = Document::new();
+    let s_down = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Downwards", CharProps::default()))]);
+    let s_up = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Upwards", CharProps::default()))]);
+
+    let tb_down = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 100.0,
+        h: 200.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Float { text_direction: TextDirection::Down, ..Default::default() },
+        story: Some(s_down),
+        freeform: None,
+        effects: Default::default(),
+    };
+
+    let tb_up = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 120.0,
+        h: 220.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Float { text_direction: TextDirection::Up, ..Default::default() },
+        story: Some(s_up),
+        freeform: None,
+        effects: Default::default(),
+    };
+
+    let mut p = Paragraph::with_text("Vertical text boxes: ", CharProps::default());
+    let end = p.len();
+    p.insert_object(end, tb_down, &CharProps::default()).unwrap();
+    let end = p.len();
+    p.insert_object(end, tb_up, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+
+    let bytes = wordcraft_docx::write(&d).expect("write docx with vertical text boxes");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"vert="vert""#), "XML should contain vert=\"vert\": {xml}");
+    assert!(xml.contains(r#"vert="vert270""#), "XML should contain vert=\"vert270\": {xml}");
+
+    let r = wordcraft_docx::read(&bytes).expect("read docx with vertical text boxes");
+    let got = paras(&r);
+    assert_eq!(got[0].objects.len(), 2);
+    assert_eq!(got[0].objects[0].text_direction(), TextDirection::Down);
+    assert_eq!(got[0].objects[1].text_direction(), TextDirection::Up);
+}

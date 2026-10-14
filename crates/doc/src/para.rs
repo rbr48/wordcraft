@@ -162,6 +162,9 @@ pub struct Float {
     /// normalised coordinates 0.0..1.0 relative to object bounds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrap_polygon: Option<std::sync::Arc<[(f32, f32)]>>,
+    /// Text direction inside the shape or text box (`wps:bodyPr/@vert` or `a:bodyPr/@vert`).
+    #[serde(default, skip_serializing_if = "crate::props::TextDirection::is_horizontal")]
+    pub text_direction: crate::props::TextDirection,
 }
 
 fn is_zero(v: &f32) -> bool {
@@ -475,6 +478,16 @@ impl InlineObject {
             InlineObject::Shape { story: Some(id), .. } => vec![*id],
             InlineObject::Group { children, .. } => children.iter().filter_map(|c| c.obj.text_box()).collect(),
             _ => Vec::new(),
+        }
+    }
+    /// Text direction inside the shape/text box.
+    pub fn text_direction(&self) -> crate::props::TextDirection {
+        self.frame().map(|(_, _, f)| f.text_direction).unwrap_or(crate::props::TextDirection::Horizontal)
+    }
+    /// Set the text direction inside the shape/text box.
+    pub fn set_text_direction(&mut self, dir: crate::props::TextDirection) {
+        if let Some(f) = self.float_mut() {
+            f.text_direction = dir;
         }
     }
     /// The text box story slots of this object and its group members, to repoint.

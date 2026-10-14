@@ -1525,6 +1525,22 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
+    group(ui, "Text", None, app, |ui, app| {
+        let current_dir = wordcraft_engine::cmd::objects::target_shape(&app.session).map(|(_, o)| o.text_direction()).unwrap_or_default();
+        menu_button(ui, app, "textDirection", Some("Text Direction"), "Change text direction", false, |ui, app| {
+            let mut item = |label: &str, dir: &str, target_dir: wordcraft_doc::props::TextDirection| {
+                let active = current_dir == target_dir;
+                let text = if active { format!("✓ {}", tl!(label)) } else { format!("  {}", tl!(label)) };
+                if ui.button(text).clicked() {
+                    let _ = app.run("shape.textDirection", json!({"direction": dir}));
+                    ui.close();
+                }
+            };
+            item("Horizontal", "horizontal", wordcraft_doc::props::TextDirection::Horizontal);
+            item("Rotate all text 90°", "rotate90", wordcraft_doc::props::TextDirection::Down);
+            item("Rotate all text 270°", "rotate270", wordcraft_doc::props::TextDirection::Up);
+        });
+    });
     group(ui, "Arrange", None, app, |ui, app| {
         position_menu(ui, app);
         wrap_menu(ui, app);

@@ -377,16 +377,35 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Verified all 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
   - **M18.1: Multi-column Balancing at Section Breaks & Document End (Gap #4 Pagination & Layout Parity)**:
     - **Algorithmic Parity (`crates/layout/src/lib.rs`)**:
-      - Replaced raw target-height division with Word-matching line distribution: surplus lines distribute strictly to earlier columns (`target_count = (lines_left + cols_left - 1) / cols_left`), enforcing `col0 >= col1 >= col2` with maximum line difference `<= 1`.
-      - Fixed multi-page section balancing: sections spanning multiple pages now properly calculate `start_item` from `pb.page_items_start` on the final page rather than prematurely aborting against `sect_start_item` from page 0.
-      - Respected manual column breaks: explicit `ColumnBreak` (`\u{000E}`) preserves the user's manual column breaks without being clobbered by automatic balancing.
-      - Integrated `push_para`: balanced column runs automatically regenerate paragraph shading fills (`Placed::Fill`) and border rules (`Placed::Rule`) at exact column coordinates and column widths, with proper paragraph spacing between runs.
-      - Bounded vertical column separators: column separator lines now extend only to the bottom of the balanced text (`max_col_bottom`) rather than cutting through continuous following sections to the bottom page margin.
-    - **Test Coverage & Verification**:
-      - Added `multi_column_balancing_earlier_columns_are_larger_or_equal`.
-      - Added `multi_column_section_spans_multiple_pages_and_balances_final_page`.
-      - Added `continuous_section_breaks_with_balanced_columns_and_separators`.
-      - Added `manual_column_break_is_respected_and_not_rebalanced`.
-      - Verified all 161 layout unit tests passing with zero regressions.
+  - **M18.2: Document Protection & Restrict Editing Dialog (`Dialog::Protect`, 37th Modal Dialog) (Gap #7 Dialog Depth & Gap #9)**:
+    - **Interactive Modal Dialog (`crates/ui-egui/src/dialogs.rs`)**:
+      - Added `Dialog::Protect` variant featuring 3 standard Word sections: Formatting restrictions (limit formatting to a selection of styles), Editing restrictions (`readOnly`, `trackedChanges`, `comments`, `forms`), and Enforcement ("Yes, Start Enforcing Protection" / "Stop Protection") with optional password confirmation.
+      - Integrated with `session.doc.settings.protection` and session protection state.
+      - Wired Review ribbon tab ("Restrict Editing") and File Backstage (Info › Protect Document) to open `Dialog::Protect`.
+      - Keytips updated to open `Target::Dialog { name: "restrict" }`.
+      - Added unit test `protect_document_dialog_opens_and_enforces` in `crates/ui-egui/src/dialogs.rs`.
+  - **M18.3: Rotated Text-Box Text & Vertical Text Direction in Shapes (Gap #10 Objects & Gap #17 East Asian Typography)**:
+    - **Document Model (`crates/doc`)**:
+      - Added `pub text_direction: TextDirection` to `Float` struct with `#[serde(default, skip_serializing_if = "TextDirection::is_horizontal")]`.
+      - Added `pub fn text_direction(&self) -> TextDirection` and `pub fn set_text_direction(&mut self, dir: TextDirection)` on `InlineObject`.
+      - Added `TextDirection::from_drawingml`, `TextDirection::drawingml`, and `&self` receivers for `is_horizontal` and `is_turned`.
+      - Added `Document::find_shape_with_story(id)` to locate enclosing shapes across stories.
+    - **OOXML DrawingML Roundtrip (`crates/docx`)**:
+      - Writer (`crates/docx/src/write/story.rs`): Emits `<wps:bodyPr vert="vert"/>` (Down / 90°) and `<wps:bodyPr vert="vert270"/>` (Up / 270°) for turned shapes and text boxes.
+      - Reader (`crates/docx/src/read/story.rs`): Reads `wps:bodyPr/@vert` / `a:bodyPr/@vert` and legacy VML `mso-layout-flow-alt` / `mso-rotate` into `float.text_direction`.
+      - Added round-trip test `rotated_text_box_vertical_direction_round_trip` in `crates/docx/tests/roundtrip.rs`.
+    - **Layout Engine Rotation (`crates/layout`)**:
+      - `crates/layout/src/lib.rs`: Placed text box lines compute line length and line stack across dimensions for turned text boxes (`TextDirection::Down` & `TextDirection::Up`).
+      - Sets origin (`ox`, `oy`) according to turn direction and passes items to `it.turn(dir, ox, oy)`.
+      - Added test `turned_text_box_layout_produces_rotated_lines` in `crates/layout/src/tests.rs` (162/162 passed).
+    - **Engine Command (`crates/engine/src/cmd/objects.rs`)**:
+      - Added `target_shape(s)` locating the shape whether selected directly or while the caret is actively typing inside its text box story.
+      - Added `shape.textDirection` command with `"horizontal"`, `"rotate90"`, `"rotate270"`, and `"next"` cycling.
+      - Added unit test `shape_text_direction_command_and_story_caret` in `crates/engine/src/cmd/objects.rs`.
+    - **UI Ribbon & Context Menu (`crates/ui-egui`)**:
+      - Added "Text Direction" dropdown menu to the Shape Format ribbon tab with live direction indicators.
+      - Added right-click `Text Direction ▸` submenu in the canvas context menu for shapes and text boxes.
+    - **Quality Gates**:
       - All 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+
 

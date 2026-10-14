@@ -1040,6 +1040,12 @@ impl Reader<'_> {
         let stroke = solid(ln);
         let stroke_width = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0);
         let effects = sppr.and_then(|s| s.child("a:effectLst")).map(effect_list).unwrap_or_default();
+        float.text_direction = wsp
+            .child("wps:bodyPr")
+            .or_else(|| wsp.child("a:bodyPr"))
+            .and_then(|b| b.attr("vert"))
+            .map(wordcraft_doc::props::TextDirection::from_drawingml)
+            .unwrap_or_default();
         let story = match txbx {
             Some(t) if sc.story_depth < MAX_STORY_DEPTH => Some(self.read_textbox(sc, t, rels)),
             _ => None,
@@ -1061,7 +1067,7 @@ impl Reader<'_> {
         let style = shape.attr("style").unwrap_or("");
         let len = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
         let (w, h) = (len("width"), len("height"));
-        let float = vml_float(shape, style);
+        let mut float = vml_float(shape, style);
         if let Some(img) = shape.find("v:imagedata") {
             let id = img.attr("r:id").or_else(|| img.attr("r:pict"))?;
             let media = self.media_for(rels, id)?;
@@ -1074,6 +1080,13 @@ impl Reader<'_> {
             let story = Some(self.read_textbox(sc, t, rels));
             let fill = shape.attr("fillcolor").and_then(Rgb::parse);
             let stroke = shape.attr("strokecolor").and_then(Rgb::parse);
+            float.text_direction = if style.contains("bottom-to-top") {
+                wordcraft_doc::props::TextDirection::Up
+            } else if style.contains("top-to-bottom") {
+                wordcraft_doc::props::TextDirection::Down
+            } else {
+                wordcraft_doc::props::TextDirection::Horizontal
+            };
             return Some(InlineObject::Shape {
                 kind: ShapeKind::TextBox,
                 w,
