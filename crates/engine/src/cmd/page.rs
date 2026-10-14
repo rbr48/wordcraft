@@ -30,21 +30,53 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"kind": "page|column|textWrapping|nextPage|continuous|evenPage|oddPage"}"#),
         CommandSpec::new("layout.lineNumbers", "Line Numbers", "Layout › Page Setup", |s, v| {
             let mode = p::str(v, "value").unwrap_or("continuous");
+            let enabled = p::bool(v, "enabled").unwrap_or(mode != "none");
+            let start = p::u64(v, "start").unwrap_or(1).clamp(1, 100_000) as u32;
+            let count_by = p::u64(v, "countBy").or_else(|| p::u64(v, "count_by")).unwrap_or(1).clamp(1, 1000) as u32;
+            let distance = p::f32(v, "distance").unwrap_or(0.0).max(0.0);
             with_sect(s, |x| {
-                x.line_numbers = match mode {
-                    "none" => None,
-                    "restartPage" => Some(LineNumbering { restart: wordcraft_doc::section::LineNumberRestart::Page, ..Default::default() }),
-                    "restartSection" => Some(LineNumbering { restart: wordcraft_doc::section::LineNumberRestart::Section, ..Default::default() }),
-                    _ => Some(LineNumbering { restart: wordcraft_doc::section::LineNumberRestart::Continuous, ..Default::default() }),
+                if !enabled || mode == "none" {
+                    x.line_numbers = None;
+                } else {
+                    let restart = match mode {
+                        "restartPage" | "page" => wordcraft_doc::section::LineNumberRestart::Page,
+                        "restartSection" | "section" => wordcraft_doc::section::LineNumberRestart::Section,
+                        _ => wordcraft_doc::section::LineNumberRestart::Continuous,
+                    };
+                    x.line_numbers = Some(LineNumbering {
+                        count_by,
+                        start,
+                        distance,
+                        restart,
+                    });
                 }
             })
         })
-        .params(r#"{"value": "none|continuous|restartPage|restartSection"}"#),
+        .params(r#"{"value"?: "none|continuous|restartPage|restartSection", "enabled"?: bool, "start"?: u32, "countBy"?: u32, "distance"?: pt}"#),
         CommandSpec::new("layout.hyphenation", "Hyphenation", "Layout › Page Setup", |s, v| {
-            let on = p::bool(v, "value").unwrap_or(!s.doc.settings.auto_hyphenation);
-            s.doc.settings.auto_hyphenation = on;
-            Ok(json!({"value": on}))
-        }),
+            if let Some(on) = p::bool(v, "auto").or_else(|| p::bool(v, "value")) {
+                s.doc.settings.auto_hyphenation = on;
+            } else if v.as_object().is_none_or(|m| m.is_empty()) {
+                s.doc.settings.auto_hyphenation = !s.doc.settings.auto_hyphenation;
+            }
+            if let Some(caps) = p::bool(v, "caps") {
+                s.doc.settings.hyphenate_caps = caps;
+            }
+            if let Some(zone) = p::f32(v, "zone") {
+                s.doc.settings.hyphenation_zone = zone.max(0.0);
+            }
+            if let Some(lim) = p::u64(v, "limit") {
+                s.doc.settings.consecutive_hyphen_limit = lim as u32;
+            }
+            Ok(json!({
+                "value": s.doc.settings.auto_hyphenation,
+                "auto": s.doc.settings.auto_hyphenation,
+                "caps": s.doc.settings.hyphenate_caps,
+                "zone": s.doc.settings.hyphenation_zone,
+                "limit": s.doc.settings.consecutive_hyphen_limit,
+            }))
+        })
+        .params(r#"{"value"?: bool, "auto"?: bool, "caps"?: bool, "zone"?: pt, "limit"?: u32}"#),
         CommandSpec::new("layout.pageSetup", "Page Setup", "Layout › Page Setup", |s, v| {
             if let Some(props) = v.get("section") {
                 let new: SectionProps = serde_json::from_value(props.clone()).map_err(|e| CmdError::Params(e.to_string()))?;

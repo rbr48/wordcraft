@@ -3280,3 +3280,19 @@ fn pdf_reflow_opens_pdf_via_open_bytes() {
     let p = doc.body[0].as_para().expect("block should be paragraph");
     assert_eq!(p.props.style.as_deref(), Some("Heading2"), "14pt font mapped to Heading2");
 }
+
+#[test]
+fn caption_command_supports_above_below_and_exclude_label() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "First paragraph."}));
+    // Insert caption above
+    run(&mut s, "references.caption", json!({"label": "Table", "text": "Summary Table", "position": "above"}));
+    let plain = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(plain.starts_with("Table 1: Summary Table"), "Caption should be placed above: {plain}");
+
+    // Move to end and insert caption with excludeLabel
+    s.sel = crate::Selection::caret(s.doc.end_of(wordcraft_doc::StoryRef::Body));
+    run(&mut s, "references.caption", json!({"label": "Table", "text": "Second Table", "position": "below", "excludeLabel": true}));
+    let plain2 = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(plain2.contains("2: Second Table"), "Caption with excludeLabel should omit Table prefix: {plain2}");
+}

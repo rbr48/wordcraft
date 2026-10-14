@@ -825,6 +825,15 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     if s.auto_hyphenation {
         w.empty("w:autoHyphenation", &[]);
     }
+    if !s.hyphenate_caps {
+        w.empty("w:doNotHyphenateCaps", &[]);
+    }
+    if s.hyphenation_zone > 0.0 && (s.hyphenation_zone - 18.0).abs() > 0.01 {
+        w.val("w:hyphenationZone", &crate::units::twips(s.hyphenation_zone));
+    }
+    if s.consecutive_hyphen_limit > 0 {
+        w.val("w:consecutiveHyphenLimit", &s.consecutive_hyphen_limit.to_string());
+    }
     if s.even_odd_headers {
         w.empty("w:evenAndOddHeaders", &[]);
     }

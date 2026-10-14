@@ -249,6 +249,27 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Compiled optimized release binaries `wordcraft.exe` (13.6 MB) and `wordcraft-cli.exe` (9.3 MB).
       - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.5 MB).
       - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.3 MB).
+  - **Modal Dialog Depth (M14.1 / Gap #7)**:
+    - **Insert Caption Dialog (`Dialog::Caption`)**:
+      - Provides label selector (`Figure`, `Table`, `Equation`), caption text input, position dropdown (`Above selected item` / `Below selected item`), and `Exclude label from caption` checkbox.
+      - Automatically detects context at caret (tables vs. paragraphs), auto-increments SEQ numbering, and inserts caption paragraph with SEQ field above or below the target block.
+      - Wired `references.caption` engine command and UI ribbon / input dialog routing.
+    - **Line Numbers Dialog (`Dialog::LineNumbers`)**:
+      - Configures section line numbering with "Add line numbering" toggle, start number (`start`), step count (`count_by`), distance from text (`distance`), and restart mode (`Restart each page`, `Restart each section`, `Continuous`).
+      - Updates section page setup properties directly.
+    - **Hyphenation Options Dialog (`Dialog::Hyphenation`)**:
+      - Controls document-level hyphenation settings: "Automatically hyphenate document" (`auto`), "Hyphenate words in CAPS" (`caps`), hyphenation zone in pt (`zone`), and consecutive hyphen limit (`limit`).
+      - Added `hyphenate_caps`, `hyphenation_zone`, and `consecutive_hyphen_limit` to `Settings` in `crates/doc`.
+      - Full DOCX OOXML roundtrip support for `w:doNotHyphenateCaps`, `w:hyphenationZone`, and `w:consecutiveHyphenLimit`.
+      - Updated layout engine line breaker to respect `hyphenate_caps` and environment cache hashing.
+    - **Test Coverage & Verification**:
+      - UI dialog unit tests: `caption_dialog_opens_and_inserts_caption`, `line_numbers_dialog_opens_and_sets_options`, `hyphenation_dialog_opens_and_sets_options`.
+      - Engine test: `caption_command_supports_above_below_and_exclude_label`.
+      - All 6 CI quality gates verified passing: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+      - Compiled release binaries `wordcraft.exe` (13.6 MB) and `wordcraft-cli.exe` (9.3 MB).
+      - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.6 MB).
+      - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.3 MB).
+
 
 
 

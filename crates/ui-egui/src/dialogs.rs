@@ -399,6 +399,29 @@ pub enum Dialog {
         no_proof: bool,
         detect_auto: bool,
     },
+    /// References › Captions › Insert Caption.
+    Caption {
+        label: String,
+        text: String,
+        position: String,
+        exclude_label: bool,
+        number: u32,
+    },
+    /// Layout › Page Setup › Line Numbers.
+    LineNumbers {
+        enabled: bool,
+        start: u32,
+        distance: f32,
+        count_by: u32,
+        restart: String,
+    },
+    /// Layout › Page Setup › Hyphenation.
+    Hyphenation {
+        auto: bool,
+        caps: bool,
+        zone: f32,
+        limit: u32,
+    },
 }
 
 /// Standard world languages matching Microsoft Word proofing language list (name, BCP-47 tag).
@@ -881,6 +904,9 @@ impl Dialog {
             Dialog::DefineList { .. } => "defineList",
             Dialog::TrackOptions { .. } => "trackChangesOptions",
             Dialog::Language { .. } => "language",
+            Dialog::Caption { .. } => "caption",
+            Dialog::LineNumbers { .. } => "lineNumbers",
+            Dialog::Hyphenation { .. } => "hyphenation",
         }
     }
 
@@ -1123,6 +1149,48 @@ impl Dialog {
                     .unwrap_or_else(|| ("en-US".into(), false));
                 Dialog::Language { lang, no_proof, detect_auto: true }
             }
+            "caption" => {
+                let s = &app.session;
+                let in_table = s.sel.focus.path.depth() > 0 || s.doc.table(s.sel.focus.story, &s.sel.focus.path).is_some();
+                let label = if in_table { "Table".to_string() } else { "Figure".to_string() };
+                let position = if in_table { "above".to_string() } else { "below".to_string() };
+                let caret = s.sel.focus.clone();
+                let number = (s
+                    .doc
+                    .para_paths(wordcraft_doc::StoryRef::Body)
+                    .into_iter()
+                    .filter(|q| *q < caret.path)
+                    .filter(|q| {
+                        s.doc
+                            .para(wordcraft_doc::StoryRef::Body, q)
+                            .is_some_and(|p| p.props.style.as_deref() == Some("Caption") && p.text.starts_with(&label))
+                    })
+                    .count()
+                    + 1) as u32;
+                Dialog::Caption { label, text: String::new(), position, exclude_label: false, number }
+            }
+            "lineNumbers" => {
+                let sp = wordcraft_engine::cmd::page::sect(&app.session);
+                if let Some(ln) = sp.line_numbers {
+                    let restart = match ln.restart {
+                        wordcraft_doc::section::LineNumberRestart::Page => "restartPage",
+                        wordcraft_doc::section::LineNumberRestart::Section => "restartSection",
+                        wordcraft_doc::section::LineNumberRestart::Continuous => "continuous",
+                    };
+                    Dialog::LineNumbers { enabled: true, start: ln.start, distance: ln.distance, count_by: ln.count_by, restart: restart.to_string() }
+                } else {
+                    Dialog::LineNumbers { enabled: false, start: 1, distance: 0.0, count_by: 1, restart: "continuous".to_string() }
+                }
+            }
+            "hyphenation" => {
+                let st = &app.session.doc.settings;
+                Dialog::Hyphenation {
+                    auto: st.auto_hyphenation,
+                    caps: st.hyphenate_caps,
+                    zone: st.hyphenation_zone,
+                    limit: st.consecutive_hyphen_limit,
+                }
+            }
             _ => return None,
         })
     }
@@ -1256,6 +1324,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::DefineList { .. } => "Define New Multilevel List",
         Dialog::TrackOptions { .. } => "Track Changes Options",
         Dialog::Language { .. } => "Language",
+        Dialog::Caption { .. } => "Caption",
+        Dialog::LineNumbers { .. } => "Line Numbers",
+        Dialog::Hyphenation { .. } => "Hyphenation",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -2816,6 +2887,163 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let (ok, cancel) = buttons(ui, tl!("Close"));
             ok || cancel
         }
+        Dialog::Caption { label, text, position, exclude_label, number } => {
+            ui.label(egui::RichText::new(tl!("Caption:")).font(semibold(12.5)));
+            let preview = format!(
+                "{}{}{}",
+                if *exclude_label { String::new() } else { format!("{label} ") },
+                number,
+                if text.is_empty() { String::new() } else { format!(": {text}") }
+            );
+            ui.label(egui::RichText::new(&preview).strong());
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(tl!("Text:"));
+                ui.text_edit_singleline(text);
+            });
+            ui.add_space(4.0);
+            egui::Grid::new("caption_fields").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Label:"));
+                let prev_label = label.clone();
+                egui::ComboBox::from_id_salt("caption_label").selected_text(&*label).show_ui(ui, |ui| {
+                    for l in ["Figure", "Table", "Equation"] {
+                        ui.selectable_value(label, l.to_string(), tl!(l));
+                    }
+                });
+                if *label != prev_label {
+                    let caret = app.session.sel.focus.clone();
+                    *number = (app
+                        .session
+                        .doc
+                        .para_paths(wordcraft_doc::StoryRef::Body)
+                        .into_iter()
+                        .filter(|q| *q < caret.path)
+                        .filter(|q| {
+                            app.session
+                                .doc
+                                .para(wordcraft_doc::StoryRef::Body, q)
+                                .is_some_and(|p| p.props.style.as_deref() == Some("Caption") && p.text.starts_with(&*label))
+                        })
+                        .count()
+                        + 1) as u32;
+                    if *label == "Table" {
+                        *position = "above".to_string();
+                    } else if *label == "Figure" || *label == "Equation" {
+                        *position = "below".to_string();
+                    }
+                }
+                ui.end_row();
+
+                ui.label(tl!("Position:"));
+                let pos_label = if position == "above" { tl!("Above selected item") } else { tl!("Below selected item") };
+                egui::ComboBox::from_id_salt("caption_pos").selected_text(pos_label).show_ui(ui, |ui| {
+                    ui.selectable_value(position, "below".to_string(), tl!("Below selected item"));
+                    ui.selectable_value(position, "above".to_string(), tl!("Above selected item"));
+                });
+                ui.end_row();
+            });
+            ui.add_space(4.0);
+            ui.checkbox(exclude_label, tl!("Exclude label from caption"));
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let _ = app.run(
+                    "references.caption",
+                    json!({
+                        "label": label,
+                        "text": text,
+                        "position": position,
+                        "excludeLabel": exclude_label,
+                    }),
+                );
+            }
+            ok || cancel
+        }
+        Dialog::LineNumbers { enabled, start, distance, count_by, restart } => {
+            ui.checkbox(enabled, tl!("Add line numbering"));
+            ui.add_space(6.0);
+            ui.add_enabled_ui(*enabled, |ui| {
+                egui::Grid::new("ln_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                    ui.label(tl!("Start at:"));
+                    ui.add(egui::DragValue::new(start).range(1..=100_000));
+                    ui.end_row();
+
+                    ui.label(tl!("From text:"));
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::DragValue::new(distance).speed(0.5).range(0.0..=144.0).suffix(" pt")).changed() && *distance < 0.1 {
+                            *distance = 0.0;
+                        }
+                        if *distance <= 0.0 {
+                            ui.label(format!("({})", tl!("Auto")));
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label(tl!("Count by:"));
+                    ui.add(egui::DragValue::new(count_by).range(1..=1000));
+                    ui.end_row();
+                });
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new(tl!("Numbering")).font(semibold(12.5)));
+                ui.vertical(|ui| {
+                    ui.radio_value(restart, "restartPage".into(), tl!("Restart each page"));
+                    ui.radio_value(restart, "restartSection".into(), tl!("Restart each section"));
+                    ui.radio_value(restart, "continuous".into(), tl!("Continuous"));
+                });
+            });
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                if *enabled {
+                    let _ = app.run(
+                        "layout.lineNumbers",
+                        json!({
+                            "enabled": true,
+                            "value": restart,
+                            "start": *start,
+                            "countBy": *count_by,
+                            "distance": *distance,
+                        }),
+                    );
+                } else {
+                    let _ = app.run("layout.lineNumbers", json!({"value": "none"}));
+                }
+            }
+            ok || cancel
+        }
+        Dialog::Hyphenation { auto, caps, zone, limit } => {
+            ui.checkbox(auto, tl!("Automatically hyphenate document"));
+            ui.add_space(4.0);
+            ui.add_enabled_ui(*auto, |ui| {
+                ui.checkbox(caps, tl!("Hyphenate words in CAPS"));
+                ui.add_space(6.0);
+                egui::Grid::new("hy_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                    ui.label(tl!("Hyphenation zone:"));
+                    ui.add(egui::DragValue::new(zone).speed(0.5).range(0.0..=144.0).suffix(" pt"));
+                    ui.end_row();
+
+                    ui.label(tl!("Limit consecutive hyphens to:"));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(limit).range(0..=10));
+                        if *limit == 0 {
+                            ui.label(format!("({})", tl!("No limit")));
+                        }
+                    });
+                    ui.end_row();
+                });
+            });
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let _ = app.run(
+                    "layout.hyphenation",
+                    json!({
+                        "auto": *auto,
+                        "caps": *caps,
+                        "zone": *zone,
+                        "limit": *limit,
+                    }),
+                );
+            }
+            ok || cancel
+        }
     }
 }
 
@@ -3281,5 +3509,121 @@ mod tests {
         assert!(kern_enabled);
         assert_eq!(kern_min, 14.0);
         assert!(small_caps);
+    }
+
+    #[test]
+    fn caption_dialog_opens_and_inserts_caption() {
+        let mut app = app_with("A diagram about architecture.");
+        // Opening via references.caption with empty params should open dialog
+        let res = app.run("references.caption", json!({})).unwrap();
+        assert_eq!(res.get("pending").and_then(Value::as_str), Some("caption"));
+        let Some(Dialog::Caption { label, text, position, exclude_label, number }) = app.dialog.take() else {
+            panic!("no caption dialog");
+        };
+        assert_eq!(label, "Figure");
+        assert_eq!(number, 1);
+        assert_eq!(position, "below");
+        assert!(!exclude_label);
+        assert!(text.is_empty());
+
+        // Now run command with params (like dialog OK button does)
+        let _ = app.run(
+            "references.caption",
+            json!({
+                "label": "Figure",
+                "text": "System Architecture",
+                "position": "below",
+                "excludeLabel": false,
+            }),
+        );
+        let plain = app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(plain.contains("Figure 1: System Architecture"));
+    }
+
+    #[test]
+    fn line_numbers_dialog_opens_and_sets_options() {
+        let mut app = app_with("");
+        let d = Dialog::open("lineNumbers", &mut app).expect("lineNumbers dialog");
+        let Dialog::LineNumbers { enabled, start, distance, count_by, restart } = d else {
+            panic!("not line numbers dialog");
+        };
+        assert!(!enabled);
+        assert_eq!(start, 1);
+        assert_eq!(distance, 0.0);
+        assert_eq!(count_by, 1);
+        assert_eq!(restart, "continuous");
+
+        // Apply line numbering options
+        let _ = app.run(
+            "layout.lineNumbers",
+            json!({
+                "enabled": true,
+                "value": "restartPage",
+                "start": 5,
+                "countBy": 2,
+                "distance": 18.0,
+            }),
+        );
+        let sp = wordcraft_engine::cmd::page::sect(&app.session);
+        let ln = sp.line_numbers.expect("line numbers set");
+        assert_eq!(ln.start, 5);
+        assert_eq!(ln.count_by, 2);
+        assert_eq!(ln.distance, 18.0);
+        assert_eq!(ln.restart, wordcraft_doc::section::LineNumberRestart::Page);
+
+        // Reopen dialog: should reflect newly set state
+        let d2 = Dialog::open("lineNumbers", &mut app).expect("lineNumbers dialog reopened");
+        let Dialog::LineNumbers { enabled: e2, start: s2, distance: dist2, count_by: cb2, restart: r2 } = d2 else {
+            panic!("not line numbers dialog");
+        };
+        assert!(e2);
+        assert_eq!(s2, 5);
+        assert_eq!(dist2, 18.0);
+        assert_eq!(cb2, 2);
+        assert_eq!(r2, "restartPage");
+    }
+
+    #[test]
+    fn hyphenation_dialog_opens_and_sets_options() {
+        let mut app = app_with("");
+        let d = Dialog::open("hyphenation", &mut app).expect("hyphenation dialog");
+        let Dialog::Hyphenation { auto, caps, zone, limit } = d else {
+            panic!("not hyphenation dialog");
+        };
+        assert!(!auto);
+        assert!(caps);
+        assert_eq!(zone, 18.0);
+        assert_eq!(limit, 0);
+
+        // Apply hyphenation options
+        let res = app
+            .run(
+                "layout.hyphenation",
+                json!({
+                    "auto": true,
+                    "caps": false,
+                    "zone": 24.0,
+                    "limit": 3,
+                }),
+            )
+            .unwrap();
+        assert_eq!(res.get("auto").and_then(Value::as_bool), Some(true));
+        assert_eq!(res.get("caps").and_then(Value::as_bool), Some(false));
+        assert_eq!(res.get("zone").and_then(Value::as_f64), Some(24.0));
+        assert_eq!(res.get("limit").and_then(Value::as_u64), Some(3));
+        assert!(app.session.doc.settings.auto_hyphenation);
+        assert!(!app.session.doc.settings.hyphenate_caps);
+        assert_eq!(app.session.doc.settings.hyphenation_zone, 24.0);
+        assert_eq!(app.session.doc.settings.consecutive_hyphen_limit, 3);
+
+        // Reopen dialog: should reflect updated settings
+        let d2 = Dialog::open("hyphenation", &mut app).expect("hyphenation dialog reopened");
+        let Dialog::Hyphenation { auto: a2, caps: c2, zone: z2, limit: l2 } = d2 else {
+            panic!("not hyphenation dialog");
+        };
+        assert!(a2);
+        assert!(!c2);
+        assert_eq!(z2, 24.0);
+        assert_eq!(l2, 3);
     }
 }

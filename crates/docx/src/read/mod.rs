@@ -823,6 +823,17 @@ impl Reader<'_> {
                 "m:mathPr" => s.math = Some(math::read_math_pr(k)),
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
+                "w:doNotHyphenateCaps" => s.hyphenate_caps = !on_off(k),
+                "w:hyphenationZone" => {
+                    if let Some(v) = tw(k, "w:val") {
+                        s.hyphenation_zone = v.max(0.0);
+                    }
+                }
+                "w:consecutiveHyphenLimit" => {
+                    if let Some(v) = k.attr("w:val").and_then(|v| v.parse::<u32>().ok()) {
+                        s.consecutive_hyphen_limit = v;
+                    }
+                }
                 "w:footnotePr" => {
                     if let Some(f) = k.child_val("w:numFmt") {
                         s.footnote_format = NumFormat::from_ooxml(f);
