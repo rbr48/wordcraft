@@ -35,6 +35,7 @@ static BUNDLED: &[&[u8]] = &[
     include_bytes!("../../../assets/fonts/Inter-Medium.ttf"),
     include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"),
     include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/Kalpurush.ttf"),
 ];
 
 #[derive(Clone)]
@@ -1178,5 +1179,21 @@ mod tests {
         let b = db.face("Inter Medium", "Medium {wght:520}");
         assert_eq!(a.id(), b.id());
         assert_eq!(a.legacy_family, "Inter Medium");
+    }
+
+    #[test]
+    fn kalpurush_is_bundled_and_covers_bengali_characters() {
+        let db = FontDb::with_font_dirs(vec![]);
+        assert!(db.has_family("Kalpurush"), "Kalpurush must be bundled");
+        let face = db.face("Kalpurush", "Regular");
+        assert_eq!(face.family, "Kalpurush");
+        assert!(face.covers('ক'), "Kalpurush must cover Bengali Ka");
+        assert!(face.covers('\u{0964}'), "Kalpurush must cover Bengali Dari");
+        assert!(face.covers('অ'), "Kalpurush must cover Bengali O");
+        // Fallback for Bengali character from Latin face:
+        let latin = db.face("Source Sans 3", "Regular");
+        let fallback = db.fallback_for('ক', latin.id());
+        assert!(fallback.is_some(), "Must find fallback for Bengali Ka");
+        assert_eq!(fallback.map(|f| f.family.clone()), Some("Kalpurush".into()));
     }
 }
