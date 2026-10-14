@@ -375,4 +375,18 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Updated Mailings tab Create group buttons in `crates/ui-egui/src/ribbon.rs` to open `"envelopes"` and `"labels"`.
       - Added integration test `envelopes_and_labels_dialog_opens_and_executes` in `crates/ui-egui/src/dialogs.rs`.
       - Verified all 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **M18.1: Multi-column Balancing at Section Breaks & Document End (Gap #4 Pagination & Layout Parity)**:
+    - **Algorithmic Parity (`crates/layout/src/lib.rs`)**:
+      - Replaced raw target-height division with Word-matching line distribution: surplus lines distribute strictly to earlier columns (`target_count = (lines_left + cols_left - 1) / cols_left`), enforcing `col0 >= col1 >= col2` with maximum line difference `<= 1`.
+      - Fixed multi-page section balancing: sections spanning multiple pages now properly calculate `start_item` from `pb.page_items_start` on the final page rather than prematurely aborting against `sect_start_item` from page 0.
+      - Respected manual column breaks: explicit `ColumnBreak` (`\u{000E}`) preserves the user's manual column breaks without being clobbered by automatic balancing.
+      - Integrated `push_para`: balanced column runs automatically regenerate paragraph shading fills (`Placed::Fill`) and border rules (`Placed::Rule`) at exact column coordinates and column widths, with proper paragraph spacing between runs.
+      - Bounded vertical column separators: column separator lines now extend only to the bottom of the balanced text (`max_col_bottom`) rather than cutting through continuous following sections to the bottom page margin.
+    - **Test Coverage & Verification**:
+      - Added `multi_column_balancing_earlier_columns_are_larger_or_equal`.
+      - Added `multi_column_section_spans_multiple_pages_and_balances_final_page`.
+      - Added `continuous_section_breaks_with_balanced_columns_and_separators`.
+      - Added `manual_column_break_is_respected_and_not_rebalanced`.
+      - Verified all 161 layout unit tests passing with zero regressions.
+      - All 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
 
