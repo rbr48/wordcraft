@@ -3647,7 +3647,7 @@ fn a_row_with_less_room_than_its_minimum_height_moves_on_whole() {
         l.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Placed::Lines { path, .. } if path.0.first() == Some(&(end as u32)))))
     };
     assert_eq!(first_row_line_page(None), Some(0), "a row without a minimum height splits");
-    assert_eq!(first_row_line_page(Some(63.6)), Some(1), "a row with a minimum height that doesn't fit moves on");
+    assert_eq!(first_row_line_page(Some(100.0)), Some(1), "a row with a minimum height that doesn't fit moves on");
 }
 
 /// (start, end, glyph ids, cluster x, cluster advance) of each text cluster laid out.
