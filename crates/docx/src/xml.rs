@@ -50,6 +50,8 @@ const OTHER_NAMESPACES: &[(&str, &str)] = &[
     ("ep", "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"),
     ("op", "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"),
     ("vt", "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"),
+    ("b", "http://schemas.openxmlformats.org/officeDocument/2006/bibliography"),
+    ("ds", "http://schemas.openxmlformats.org/officeDocument/2006/customXml"),
 ];
 
 /// ISO/IEC 29500 Strict namespaces map onto the transitional prefixes.

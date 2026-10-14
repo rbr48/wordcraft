@@ -174,6 +174,34 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
     {
         r.doc.custom_props = crate::custom::read(&x);
     }
+    // Bibliography sources from customXml parts.
+    for rel in rels.list.iter().filter(|x| !x.external && rel_is(&x.kind, rt::CUSTOM_XML)) {
+        if let Ok(Some(x)) = r.xml(&rel.target)
+            && (x.local() == "Sources" || x.name == "b:Sources")
+        {
+            for s in crate::bibliography::read(&x) {
+                if !r.doc.sources.iter().any(|existing| existing.tag == s.tag) {
+                    r.doc.sources.push(s);
+                }
+            }
+        }
+    }
+    if r.doc.sources.is_empty() {
+        for name in pkg.part_names() {
+            if name.starts_with("customXml/item")
+                && name.ends_with(".xml")
+                && !name.contains("Props")
+                && let Ok(Some(x)) = r.xml(name)
+                && (x.local() == "Sources" || x.name == "b:Sources")
+            {
+                for s in crate::bibliography::read(&x) {
+                    if !r.doc.sources.iter().any(|existing| existing.tag == s.tag) {
+                        r.doc.sources.push(s);
+                    }
+                }
+            }
+        }
+    }
     // A macro project and every part it relates to (VBA data, signatures…) ride along as opaque
     // bytes, never parsed or run, so a .docm/.dotm saved again carries exactly what the file had.
     // Only the relationships and content types are read.
@@ -316,6 +344,8 @@ impl Reader<'_> {
             RevisionKind::Insert => 0,
             RevisionKind::Delete => 1,
             RevisionKind::Format => 2,
+            RevisionKind::MoveTo => 3,
+            RevisionKind::MoveFrom => 4,
         };
         let key = (k, author.clone(), date.clone());
         if let Some(i) = self.revs.get(&key) {

@@ -375,6 +375,22 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         }
     }
 
+    // Bibliography sources in customXml/item1.xml.
+    if !doc.sources.is_empty() {
+        let mut item_rels = PartRels::default();
+        item_rels.add(rt::CUSTOM_XML_PROPS, "itemProps1.xml", false);
+        push_part(&mut entries, &mut overrides, "customXml/item1.xml", crate::bibliography::write(&doc.sources), "application/xml", item_rels);
+        push_part(
+            &mut entries,
+            &mut overrides,
+            "customXml/itemProps1.xml",
+            crate::bibliography::write_props(),
+            "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+            PartRels::default(),
+        );
+        rels.add(rt::CUSTOM_XML, "../customXml/item1.xml", false);
+    }
+
     // Main part goes first in the zip after content types.
     entries.insert(0, ("word/document.xml".into(), body));
     overrides.insert(0, ("/word/document.xml".into(), flavor.main_content_type().into()));

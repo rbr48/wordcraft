@@ -783,6 +783,76 @@ fn tracked_paragraph_marks_round_trip() {
 }
 
 #[test]
+fn tracked_move_revisions_round_trip() {
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::MoveTo, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
+    d.revisions.push(Revision { kind: RevisionKind::MoveFrom, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
+    d.settings.track_changes = true;
+    let to = CharProps { ins: Some(0), ..Default::default() };
+    let from = CharProps { del: Some(1), ..Default::default() };
+    let mut p = para_runs(&[("original ", CharProps::default()), ("moved away", from), (" and ", CharProps::default()), ("moved here", to)]);
+    p.mark.ins = Some(0);
+    d.body = vec![para_block(p.clone())];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:moveFrom w:id="#), "{xml}");
+    assert!(xml.contains(r#"<w:moveTo w:id="#), "{xml}");
+    assert!(xml.contains(r#"<w:rPr><w:moveTo w:id="#), "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    assert_eq!(r.revisions, d.revisions);
+    let got = paras(&r)[0];
+    assert_eq!(got.text, p.text);
+    let rev = |i: Option<u32>| i.and_then(|i| r.revisions.get(i as usize)).map(|v| (v.kind, v.author.as_str(), v.date.as_str()));
+    assert_eq!(rev(got.mark.ins), Some((RevisionKind::MoveTo, "Alice", "2026-05-01T10:00:00Z")));
+}
+
+#[test]
+fn content_controls_sdt_round_trip() {
+    let mut p = Paragraph::with_text("Before inside after", CharProps::default());
+    let sdt_start = InlineObject::SdtStart {
+        id: 12345,
+        tag: "EmployeeName".into(),
+        alias: "Employee Name".into(),
+        lock: Some("sdtLocked".into()),
+        props_xml: "<w:placeholder><w:docPart w:val=\"DefaultPlaceholder\"/></w:placeholder>".into(),
+    };
+    let sdt_end = InlineObject::SdtEnd { id: 12345 };
+    p.insert_object(7, sdt_start, &CharProps::default()).unwrap();
+    p.insert_object(16, sdt_end, &CharProps::default()).unwrap();
+
+    let d = doc_with(vec![p]);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:sdt><w:sdtPr>"#), "{xml}");
+    assert!(xml.contains(r#"<w:alias w:val="Employee Name"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:tag w:val="EmployeeName"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:id w:val="12345"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:lock w:val="sdtLocked"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:placeholder><w:docPart w:val="DefaultPlaceholder"/></w:placeholder>"#), "{xml}");
+    assert!(xml.contains(r#"</w:sdtPr><w:sdtContent>"#), "{xml}");
+    assert!(xml.contains(r#"</w:sdtContent></w:sdt>"#), "{xml}");
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r)[0];
+    assert_eq!(got.objects.len(), 2);
+    match (&got.objects[0], &got.objects[1]) {
+        (InlineObject::SdtStart { id, tag, alias, lock, props_xml }, InlineObject::SdtEnd { id: id_end }) => {
+            assert_eq!(*id, 12345);
+            assert_eq!(tag, "EmployeeName");
+            assert_eq!(alias, "Employee Name");
+            assert_eq!(lock.as_deref(), Some("sdtLocked"));
+            assert!(props_xml.contains("DefaultPlaceholder"));
+            assert_eq!(*id_end, 12345);
+        }
+        o => panic!("{o:?}"),
+    }
+}
+
+#[test]
 fn fields_and_special_chars_round_trip() {
     let mut p = Paragraph::with_text("a\tb\nc\u{000C}d\u{000E}e\u{2011}f\u{00AD}g  spaced  ", CharProps::default());
     let fields = [

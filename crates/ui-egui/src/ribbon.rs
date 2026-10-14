@@ -1628,6 +1628,8 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Size", None, app, |ui, app| {
+        let is_crop = app.canvas.crop_active;
+        big(ui, app, "crop", "Crop", "ui.cropToggle", json!({}), is_crop);
         let (media, off, w0, h0, crop0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
             Some((pos, wordcraft_doc::para::InlineObject::Image { media, w, h, alt, crop, .. })) => (media, pos.off, w, h, crop, alt),
             _ => (String::new(), 0, 0.0, 0.0, [0.0; 4], String::new()),

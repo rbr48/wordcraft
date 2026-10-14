@@ -215,3 +215,64 @@ fn programmatic_range_field_writes_as_word_field() {
     assert_eq!(para_text(&d2, 0), "ab");
     assert_eq!(d2.custom_prop("ZOTERO_PREF_1"), Some("<data/>"));
 }
+
+#[test]
+fn bibliography_sources_round_trip() {
+    use wordcraft_doc::Source;
+
+    let mut d = Document::from_text("Citing Rivera and Okafor.");
+    let s1 = Source {
+        tag: "Riv21".into(),
+        kind: "book".into(),
+        author: "Rivera, Alex; Chen, Mei".into(),
+        title: "Shared Spaces".into(),
+        year: "2021".into(),
+        publisher: "Harbor Books".into(),
+        city: "Portland".into(),
+        journal: String::new(),
+        volume: String::new(),
+        pages: String::new(),
+        url: "https://example.com/shared-spaces".into(),
+    };
+    let s2 = Source {
+        tag: "Oka19".into(),
+        kind: "article".into(),
+        author: "Okafor, Ngozi".into(),
+        title: "Kilns and Clay".into(),
+        year: "2019".into(),
+        publisher: String::new(),
+        city: String::new(),
+        journal: "Studio Quarterly".into(),
+        volume: "4".into(),
+        pages: "10-20".into(),
+        url: String::new(),
+    };
+    d.sources.push(s1);
+    d.sources.push(s2);
+
+    let bytes = write(&d).unwrap();
+    let d2 = read(&bytes).unwrap();
+    assert_eq!(d2.sources.len(), 2);
+    assert_eq!(d2.sources[0].tag, "Riv21");
+    assert_eq!(d2.sources[0].kind, "book");
+    assert_eq!(d2.sources[0].author, "Rivera, Alex; Chen, Mei");
+    assert_eq!(d2.sources[0].title, "Shared Spaces");
+    assert_eq!(d2.sources[0].year, "2021");
+    assert_eq!(d2.sources[0].publisher, "Harbor Books");
+    assert_eq!(d2.sources[0].city, "Portland");
+    assert_eq!(d2.sources[0].url, "https://example.com/shared-spaces");
+
+    assert_eq!(d2.sources[1].tag, "Oka19");
+    assert_eq!(d2.sources[1].kind, "article");
+    assert_eq!(d2.sources[1].author, "Okafor, Ngozi");
+    assert_eq!(d2.sources[1].title, "Kilns and Clay");
+    assert_eq!(d2.sources[1].year, "2019");
+    assert_eq!(d2.sources[1].journal, "Studio Quarterly");
+    assert_eq!(d2.sources[1].volume, "4");
+    assert_eq!(d2.sources[1].pages, "10-20");
+
+    // Second generation round-trip
+    let bytes2 = write(&d2).unwrap();
+    let d3 = read(&bytes2).unwrap();
+    assert_eq!(d3.sources, d2.sources);
+}

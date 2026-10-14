@@ -84,13 +84,15 @@ pub enum Grab {
     Resize(Handle),
     /// The rotation handle.
     Rotate,
+    /// Crop handle for pictures.
+    Crop(Handle),
 }
 
 impl Grab {
     pub fn cursor(self) -> CursorIcon {
         match self {
             Grab::Move => CursorIcon::Move,
-            Grab::Resize(h) => h.cursor(),
+            Grab::Resize(h) | Grab::Crop(h) => h.cursor(),
             Grab::Rotate => CursorIcon::Crosshair,
         }
     }
@@ -166,6 +168,58 @@ pub fn paint_turning(painter: &Painter, t: &Tokens, f: egui::Rect, deg: f32) {
     painter.text(rotate_handle(f, deg) + vec2(HANDLE_R + 6.0, 0.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(11.0), t.accent);
 }
 
+/// Paint picture crop tool: thick black corner brackets and edge bar handles, plus faint rule-of-thirds grid.
+pub fn paint_crop(painter: &Painter, t: &Tokens, f: egui::Rect) {
+    let stroke = Stroke::new(1.5, t.text);
+    painter.rect_stroke(f, 0.0, stroke, egui::StrokeKind::Outside);
+
+    // Rule of thirds faint guidelines
+    let third_w = f.width() / 3.0;
+    let third_h = f.height() / 3.0;
+    let guide_stroke = Stroke::new(1.0, t.text.gamma_multiply(0.2));
+    if f.width() >= 60.0 && f.height() >= 60.0 {
+        painter.line_segment([pos2(f.min.x + third_w, f.min.y), pos2(f.min.x + third_w, f.max.y)], guide_stroke);
+        painter.line_segment([pos2(f.min.x + third_w * 2.0, f.min.y), pos2(f.min.x + third_w * 2.0, f.max.y)], guide_stroke);
+        painter.line_segment([pos2(f.min.x, f.min.y + third_h), pos2(f.max.x, f.min.y + third_h)], guide_stroke);
+        painter.line_segment([pos2(f.min.x, f.min.y + third_h * 2.0), pos2(f.max.x, f.min.y + third_h * 2.0)], guide_stroke);
+    }
+
+    let arm = 12.0f32.min(f.width() * 0.35).min(f.height() * 0.35);
+    let bar_len = 14.0f32.min(f.width() * 0.4).min(f.height() * 0.4);
+    let thick_stroke = Stroke::new(3.5, t.text);
+
+    // 4 Corner brackets (L-shapes):
+    // Top-Left
+    painter.line_segment([pos2(f.min.x - 1.0, f.min.y), pos2(f.min.x + arm, f.min.y)], thick_stroke);
+    painter.line_segment([pos2(f.min.x, f.min.y - 1.0), pos2(f.min.x, f.min.y + arm)], thick_stroke);
+
+    // Top-Right
+    painter.line_segment([pos2(f.max.x - arm, f.min.y), pos2(f.max.x + 1.0, f.min.y)], thick_stroke);
+    painter.line_segment([pos2(f.max.x, f.min.y - 1.0), pos2(f.max.x, f.min.y + arm)], thick_stroke);
+
+    // Bottom-Left
+    painter.line_segment([pos2(f.min.x - 1.0, f.max.y), pos2(f.min.x + arm, f.max.y)], thick_stroke);
+    painter.line_segment([pos2(f.min.x, f.max.y - arm), pos2(f.min.x, f.max.y + 1.0)], thick_stroke);
+
+    // Bottom-Right
+    painter.line_segment([pos2(f.max.x - arm, f.max.y), pos2(f.max.x + 1.0, f.max.y)], thick_stroke);
+    painter.line_segment([pos2(f.max.x, f.max.y - arm), pos2(f.max.x, f.max.y + 1.0)], thick_stroke);
+
+    // 4 Edge bars:
+    if f.width() >= EDGE_HANDLES_FROM {
+        let cx = f.center().x;
+        let half = bar_len / 2.0;
+        painter.line_segment([pos2(cx - half, f.min.y), pos2(cx + half, f.min.y)], thick_stroke);
+        painter.line_segment([pos2(cx - half, f.max.y), pos2(cx + half, f.max.y)], thick_stroke);
+    }
+    if f.height() >= EDGE_HANDLES_FROM {
+        let cy = f.center().y;
+        let half = bar_len / 2.0;
+        painter.line_segment([pos2(f.min.x, cy - half), pos2(f.min.x, cy + half)], thick_stroke);
+        painter.line_segment([pos2(f.max.x, cy - half), pos2(f.max.x, cy + half)], thick_stroke);
+    }
+}
+
 /// A drag of a frame in progress.
 #[derive(Clone, Debug)]
 pub struct Drag {
@@ -174,7 +228,7 @@ pub struct Drag {
     pub page: usize,
     pub start: Rect,
     /// The press, screen.
-    press: Pos2,
+    pub press: Pos2,
     /// Where it would land: page and rect (points).
     pub to_page: usize,
     pub rect: Rect,
@@ -233,7 +287,7 @@ impl Drag {
                 self.to_page = self.page;
                 self.rect = resized_turned(self.start, self.deg, h, d.x, d.y, min, keep_aspect);
             }
-            Grab::Rotate => {}
+            Grab::Rotate | Grab::Crop(_) => {}
         }
     }
 }

@@ -98,7 +98,16 @@ impl Writer<'_> {
         // A tracked paragraph mark: `w:ins` / `w:del` first in the mark's `w:rPr` (CT_ParaRPr).
         let mark_revs: Vec<(u32, &str)> = [(p.mark.ins, "w:ins"), (p.mark.del, "w:del")]
             .into_iter()
-            .filter_map(|(idx, tag)| idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| (i, tag)))
+            .filter_map(|(idx, default_tag)| {
+                idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| {
+                    let tag = match self.rev_kind(Some(i)) {
+                        Some(RevisionKind::MoveTo) => "w:moveTo",
+                        Some(RevisionKind::MoveFrom) => "w:moveFrom",
+                        _ => default_tag,
+                    };
+                    (i, tag)
+                })
+            })
             .collect();
         let has_mark = super::props::has_rpr(&p.mark) || !mark_revs.is_empty() || p.mark.fmt_change.is_some();
         if !pp.is_empty() || has_mark || section.is_some() {
@@ -311,11 +320,17 @@ impl Writer<'_> {
     }
 
     fn rev_open(&mut self, w: &mut W, props: &CharProps) {
-        for (idx, tag) in [(props.ins, "w:ins"), (props.del, "w:del")] {
+        for (idx, default_tag) in [(props.ins, "w:ins"), (props.del, "w:del")] {
             let Some(idx) = idx else { continue };
-            if self.rev_kind(Some(idx)) == Some(RevisionKind::Format) {
+            let kind = self.rev_kind(Some(idx));
+            if kind == Some(RevisionKind::Format) {
                 continue;
             }
+            let tag = match kind {
+                Some(RevisionKind::MoveTo) => "w:moveTo",
+                Some(RevisionKind::MoveFrom) => "w:moveFrom",
+                _ => default_tag,
+            };
             let (id, author, date) = self.rev_attrs(idx);
             if date.is_empty() {
                 w.open(tag, &[("w:id", &id), ("w:author", &author)]);
@@ -326,10 +341,18 @@ impl Writer<'_> {
     }
 
     fn rev_close(&mut self, w: &mut W, props: &CharProps) {
-        for (idx, tag) in [(props.del, "w:del"), (props.ins, "w:ins")] {
-            if idx.is_some() && self.rev_kind(idx) != Some(RevisionKind::Format) {
-                w.close(tag);
+        for (idx, default_tag) in [(props.del, "w:del"), (props.ins, "w:ins")] {
+            let Some(idx) = idx else { continue };
+            let kind = self.rev_kind(Some(idx));
+            if kind == Some(RevisionKind::Format) {
+                continue;
             }
+            let tag = match kind {
+                Some(RevisionKind::MoveTo) => "w:moveTo",
+                Some(RevisionKind::MoveFrom) => "w:moveFrom",
+                _ => default_tag,
+            };
+            w.close(tag);
         }
     }
 
@@ -552,6 +575,28 @@ impl Writer<'_> {
                     w.close("w:r");
                     self.rev_close(w, props);
                 }
+            }
+            InlineObject::SdtStart { id, tag, alias, lock, props_xml } => {
+                w.raw("<w:sdt><w:sdtPr>");
+                if !alias.is_empty() {
+                    w.empty("w:alias", &[("w:val", alias)]);
+                }
+                if !tag.is_empty() {
+                    w.empty("w:tag", &[("w:val", tag)]);
+                }
+                if *id != 0 {
+                    w.empty("w:id", &[("w:val", &id.to_string())]);
+                }
+                if let Some(l) = lock.as_deref().filter(|s| !s.is_empty()) {
+                    w.empty("w:lock", &[("w:val", l)]);
+                }
+                if !props_xml.is_empty() {
+                    w.raw(props_xml);
+                }
+                w.raw("</w:sdtPr><w:sdtContent>");
+            }
+            InlineObject::SdtEnd { .. } => {
+                w.raw("</w:sdtContent></w:sdt>");
             }
         }
     }

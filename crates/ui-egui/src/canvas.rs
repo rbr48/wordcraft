@@ -46,6 +46,8 @@ pub struct CanvasState {
     pub mini_anchor: Option<Rect>,
     /// A picture, shape or text box being dragged by its frame.
     pub(crate) obj_drag: Option<crate::objects::ObjectDrag>,
+    /// Whether on-canvas picture crop mode is active.
+    pub crop_active: bool,
     /// An ink stroke being drawn with a pen (Draw tab).
     pub(crate) ink: Option<crate::ink::InkDrag>,
     /// The eraser is down: whether it has erased anything in this drag yet.
@@ -115,6 +117,7 @@ impl Default for CanvasState {
             context_issue: None,
             context_synonyms: None,
             obj_drag: None,
+            crop_active: false,
             ink: None,
             erasing: None,
             context_menu_open: false,
@@ -2090,6 +2093,11 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item_wrap(ui, app, "In Front of Text", "inFrontOfText", cur_wrap == wordcraft_doc::para::Wrap::InFrontOfText);
         });
         if crate::ribbon::has_picture_selected(&app.session) {
+            let label = if app.canvas.crop_active { tl!("Exit Crop") } else { tl!("Crop") };
+            if ui.button(label).clicked() {
+                app.canvas.crop_active = !app.canvas.crop_active;
+                ui.close();
+            }
             item(ui, app, "Change Picture…", "ui.changePicture", json!({}));
             item(ui, app, "Reset Picture", "picture.reset", json!({}));
             item(ui, app, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));

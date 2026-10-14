@@ -120,6 +120,7 @@ fn special_menu(ui: &mut Ui, extra: &FindExtra) -> Option<&'static str> {
 #[serde(tag = "dialog", rename_all = "camelCase")]
 pub enum Dialog {
     Font {
+        tab: u8,
         font: String,
         size: String,
         bold: bool,
@@ -133,8 +134,15 @@ pub enum Dialog {
         caps: bool,
         hidden: bool,
         color: String,
+        scale: f32,
         spacing: f32,
         position: f32,
+        kern_enabled: bool,
+        kern_min: f32,
+        ligatures: String,
+        number_spacing: String,
+        number_forms: String,
+        stylistic_set: u8,
     },
     Paragraph {
         /// Right-to-left reading order (Direction in Word's Paragraph dialog).
@@ -842,23 +850,34 @@ impl Dialog {
         let s = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         let b = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
         Some(match name {
-            "font" => Dialog::Font {
-                font: s("font"),
-                size: st.get("size").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default(),
-                bold: b("bold"),
-                italic: b("italic"),
-                underline_style: if b("underline") { "single".into() } else { "none".into() },
-                strike: b("strike"),
-                double_strike: b("doubleStrike"),
-                sup: b("superscript"),
-                sub: b("subscript"),
-                small_caps: false,
-                caps: false,
-                hidden: false,
-                color: s("color"),
-                spacing: 0.0,
-                position: 0.0,
-            },
+            "font" => {
+                let kern_val = st.get("kern").and_then(Value::as_f64).map(|v| v as f32).unwrap_or(0.0);
+                Dialog::Font {
+                    tab: 0,
+                    font: s("font"),
+                    size: st.get("size").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default(),
+                    bold: b("bold"),
+                    italic: b("italic"),
+                    underline_style: if b("underline") { "single".into() } else { "none".into() },
+                    strike: b("strike"),
+                    double_strike: b("doubleStrike"),
+                    sup: b("superscript"),
+                    sub: b("subscript"),
+                    small_caps: b("smallCaps"),
+                    caps: b("caps"),
+                    hidden: b("hidden"),
+                    color: s("color"),
+                    scale: st.get("scale").and_then(Value::as_f64).map(|v| v as f32).unwrap_or(100.0),
+                    spacing: st.get("spacing").and_then(Value::as_f64).map(|v| v as f32).unwrap_or(0.0),
+                    position: st.get("position").and_then(Value::as_f64).map(|v| v as f32).unwrap_or(0.0),
+                    kern_enabled: kern_val > 0.0,
+                    kern_min: if kern_val > 0.0 { kern_val } else { 12.0 },
+                    ligatures: "Standard Only".into(),
+                    number_spacing: "Default".into(),
+                    number_forms: "Default".into(),
+                    stylistic_set: 0,
+                }
+            }
             "paragraph" | "asianTypography" => {
                 let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
                 let rp = rp?;
@@ -1201,6 +1220,7 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     match d {
         Dialog::Font {
+            tab,
             font,
             size,
             bold,
@@ -1214,8 +1234,15 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             caps,
             hidden,
             color,
+            scale,
             spacing,
             position,
+            kern_enabled,
+            kern_min,
+            ligatures,
+            number_spacing,
+            number_forms,
+            stylistic_set,
         } => {
             // Build the sample text format for the preview pane below.
             let preview_size = size.trim().parse::<f32>().unwrap_or(12.0).clamp(6.0, 72.0);
@@ -1237,48 +1264,205 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             if *strike || *double_strike {
                 fmt.strikethrough = egui::Stroke::new(1.0, preview_color);
             }
-            egui::Grid::new("fontdlg").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-                ui.label(tl!("Font:"));
-                ui.text_edit_singleline(font);
-                ui.end_row();
-                ui.label(tl!("Size:"));
-                ui.text_edit_singleline(size);
-                ui.end_row();
-                ui.label(tl!("Font color:"));
-                ui.text_edit_singleline(color);
-                ui.end_row();
-                ui.label(tl!("Underline style:"));
-                egui::ComboBox::from_id_salt("u_style").selected_text(underline_style.as_str()).show_ui(ui, |ui| {
-                    for u in ["none", "single", "double", "thick", "dotted", "dash", "wave"] {
-                        ui.selectable_value(underline_style, u.to_string(), u);
+
+            ui.horizontal(|ui| {
+                for (k, name) in ["Font", "Advanced"].into_iter().enumerate() {
+                    if ui.selectable_label(*tab as usize == k, tl!(name)).clicked() {
+                        *tab = k as u8;
                     }
-                });
-                ui.end_row();
-                ui.label(tl!("Spacing (pt):"));
-                ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0));
-                ui.end_row();
-                ui.label(tl!("Position (pt):"));
-                ui.add(egui::DragValue::new(position).speed(0.1).range(-100.0..=100.0));
-                ui.end_row();
+                }
             });
             ui.separator();
-            ui.label(egui::RichText::new(tl!("Effects")).font(semibold(12.5)));
-            egui::Grid::new("fx").num_columns(2).show(ui, |ui| {
-                ui.checkbox(bold, tl!("Bold"));
-                ui.checkbox(italic, tl!("Italic"));
-                ui.end_row();
-                ui.checkbox(strike, tl!("Strikethrough"));
-                ui.checkbox(double_strike, tl!("Double strikethrough"));
-                ui.end_row();
-                ui.checkbox(sup, tl!("Superscript"));
-                ui.checkbox(sub, tl!("Subscript"));
-                ui.end_row();
-                ui.checkbox(small_caps, tl!("Small caps"));
-                ui.checkbox(caps, tl!("All caps"));
-                ui.end_row();
-                ui.checkbox(hidden, tl!("Hidden"));
-                ui.end_row();
-            });
+
+            match *tab {
+                0 => {
+                    egui::Grid::new("fontdlg").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                        ui.label(tl!("Font:"));
+                        ui.text_edit_singleline(font);
+                        ui.end_row();
+                        ui.label(tl!("Size:"));
+                        ui.text_edit_singleline(size);
+                        ui.end_row();
+                        ui.label(tl!("Font color:"));
+                        ui.text_edit_singleline(color);
+                        ui.end_row();
+                        ui.label(tl!("Underline style:"));
+                        egui::ComboBox::from_id_salt("u_style").selected_text(underline_style.as_str()).show_ui(ui, |ui| {
+                            for u in ["none", "single", "double", "thick", "dotted", "dash", "wave"] {
+                                ui.selectable_value(underline_style, u.to_string(), u);
+                            }
+                        });
+                        ui.end_row();
+                    });
+                    ui.separator();
+                    ui.label(egui::RichText::new(tl!("Effects")).font(semibold(12.5)));
+                    egui::Grid::new("fx").num_columns(2).show(ui, |ui| {
+                        ui.checkbox(bold, tl!("Bold"));
+                        ui.checkbox(italic, tl!("Italic"));
+                        ui.end_row();
+                        ui.checkbox(strike, tl!("Strikethrough"));
+                        ui.checkbox(double_strike, tl!("Double strikethrough"));
+                        ui.end_row();
+                        if ui.checkbox(sup, tl!("Superscript")).changed() && *sup {
+                            *sub = false;
+                        }
+                        if ui.checkbox(sub, tl!("Subscript")).changed() && *sub {
+                            *sup = false;
+                        }
+                        ui.end_row();
+                        if ui.checkbox(small_caps, tl!("Small caps")).changed() && *small_caps {
+                            *caps = false;
+                        }
+                        if ui.checkbox(caps, tl!("All caps")).changed() && *caps {
+                            *small_caps = false;
+                        }
+                        ui.end_row();
+                        ui.checkbox(hidden, tl!("Hidden"));
+                        ui.end_row();
+                    });
+                }
+                _ => {
+                    ui.label(egui::RichText::new(tl!("Character Spacing")).font(semibold(12.5)));
+                    egui::Grid::new("adv_spacing").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                        ui.label(tl!("Scale:"));
+                        ui.horizontal(|ui| {
+                            let cur_scale_str = format!("{:.0}%", *scale);
+                            egui::ComboBox::from_id_salt("font_scale").selected_text(&cur_scale_str).show_ui(ui, |ui| {
+                                for s in [200.0, 150.0, 100.0, 90.0, 80.0, 66.0, 50.0, 33.0] {
+                                    if ui.selectable_label((*scale - s).abs() < 0.1, format!("{s:.0}%")).clicked() {
+                                        *scale = s;
+                                    }
+                                }
+                            });
+                            ui.add(egui::DragValue::new(scale).speed(1.0).range(1.0..=600.0).suffix("%"));
+                        });
+                        ui.end_row();
+
+                        ui.label(tl!("Spacing:"));
+                        ui.horizontal(|ui| {
+                            let mut mode = if *spacing > 0.05 {
+                                "Expanded"
+                            } else if *spacing < -0.05 {
+                                "Condensed"
+                            } else {
+                                "Normal"
+                            };
+                            let prev_mode = mode;
+                            egui::ComboBox::from_id_salt("font_spacing_mode").selected_text(tl!(mode)).show_ui(ui, |ui| {
+                                for m in ["Normal", "Expanded", "Condensed"] {
+                                    if ui.selectable_label(mode == m, tl!(m)).clicked() {
+                                        mode = m;
+                                    }
+                                }
+                            });
+                            if mode != prev_mode {
+                                match mode {
+                                    "Normal" => *spacing = 0.0,
+                                    "Expanded" => *spacing = if *spacing > 0.0 { *spacing } else { 1.0 },
+                                    "Condensed" => *spacing = if *spacing < 0.0 { *spacing } else { -1.0 },
+                                    _ => {}
+                                }
+                            }
+                            if mode != "Normal" {
+                                ui.label(tl!("By:"));
+                                let mut abs_val = spacing.abs();
+                                if ui.add(egui::DragValue::new(&mut abs_val).speed(0.1).range(0.1..=50.0).suffix(" pt")).changed() {
+                                    *spacing = if mode == "Condensed" { -abs_val } else { abs_val };
+                                }
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(tl!("Position:"));
+                        ui.horizontal(|ui| {
+                            let mut mode = if *position > 0.05 {
+                                "Raised"
+                            } else if *position < -0.05 {
+                                "Lowered"
+                            } else {
+                                "Normal"
+                            };
+                            let prev_mode = mode;
+                            egui::ComboBox::from_id_salt("font_pos_mode").selected_text(tl!(mode)).show_ui(ui, |ui| {
+                                for m in ["Normal", "Raised", "Lowered"] {
+                                    if ui.selectable_label(mode == m, tl!(m)).clicked() {
+                                        mode = m;
+                                    }
+                                }
+                            });
+                            if mode != prev_mode {
+                                match mode {
+                                    "Normal" => *position = 0.0,
+                                    "Raised" => *position = if *position > 0.0 { *position } else { 3.0 },
+                                    "Lowered" => *position = if *position < 0.0 { *position } else { -3.0 },
+                                    _ => {}
+                                }
+                            }
+                            if mode != "Normal" {
+                                ui.label(tl!("By:"));
+                                let mut abs_val = position.abs();
+                                if ui.add(egui::DragValue::new(&mut abs_val).speed(0.1).range(0.1..=100.0).suffix(" pt")).changed() {
+                                    *position = if mode == "Lowered" { -abs_val } else { abs_val };
+                                }
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(tl!("Kerning for fonts:"));
+                        ui.horizontal(|ui| {
+                            ui.checkbox(kern_enabled, "");
+                            if *kern_enabled {
+                                ui.label(tl!("Points and above:"));
+                                ui.add(egui::DragValue::new(kern_min).speed(0.5).range(1.0..=72.0).suffix(" pt"));
+                            }
+                        });
+                        ui.end_row();
+                    });
+
+                    ui.separator();
+                    ui.label(egui::RichText::new(tl!("OpenType Features")).font(semibold(12.5)));
+                    egui::Grid::new("adv_opentype").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                        ui.label(tl!("Ligatures:"));
+                        egui::ComboBox::from_id_salt("ot_ligatures").selected_text(tl!(ligatures.as_str())).show_ui(ui, |ui| {
+                            for lig in ["None", "Standard Only", "Standard and Contextual", "Historical and Discretionary", "All"] {
+                                ui.selectable_value(ligatures, lig.to_string(), tl!(lig));
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(tl!("Number spacing:"));
+                        egui::ComboBox::from_id_salt("ot_num_spacing").selected_text(tl!(number_spacing.as_str())).show_ui(ui, |ui| {
+                            for ns in ["Default", "Proportional", "Tabular"] {
+                                ui.selectable_value(number_spacing, ns.to_string(), tl!(ns));
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(tl!("Number forms:"));
+                        egui::ComboBox::from_id_salt("ot_num_forms").selected_text(tl!(number_forms.as_str())).show_ui(ui, |ui| {
+                            for nf in ["Default", "Lining", "Oldstyle"] {
+                                ui.selectable_value(number_forms, nf.to_string(), tl!(nf));
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(tl!("Stylistic set:"));
+                        let set_label = if *stylistic_set == 0 { tl!("Default").to_string() } else { stylistic_set.to_string() };
+                        egui::ComboBox::from_id_salt("ot_stylistic_set").selected_text(set_label).show_ui(ui, |ui| {
+                            if ui.selectable_label(*stylistic_set == 0, tl!("Default")).clicked() {
+                                *stylistic_set = 0;
+                            }
+                            for s in 1..=20 {
+                                if ui.selectable_label(*stylistic_set == s, s.to_string()).clicked() {
+                                    *stylistic_set = s;
+                                }
+                            }
+                        });
+                        ui.end_row();
+                    });
+                }
+            }
+
             // Live preview of the chosen font/size/colour/effects.
             ui.separator();
             ui.label(egui::RichText::new(tl!("Preview")).small().weak());
@@ -1293,7 +1477,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     "underline": underline_style.as_str(),
                     "vertAlign": if *sup { "superscript" } else if *sub { "subscript" } else { "baseline" },
                     "smallCaps": *small_caps, "caps": *caps, "hidden": *hidden,
-                    "spacing": *spacing, "position": *position,
+                    "scale": *scale, "spacing": *spacing, "position": *position,
+                    "kern": if *kern_enabled { *kern_min } else { 0.0 },
                 });
                 if !font.trim().is_empty() {
                     props["font"] = json!(font.trim());
@@ -2935,5 +3120,36 @@ mod tests {
         assert_eq!(p.bidi, Some(true));
         assert_eq!(p.align, Some(Align::Left), "right on the page is the start edge");
         assert_eq!(p.indent_left, Some(72.0), "the right indent is the start indent");
+    }
+
+    #[test]
+    fn font_dialog_opens_and_reads_advanced_typography() {
+        let mut app = app_with("Typography Test");
+        let _ = app.run("select.all", json!({}));
+        let _ = app.run(
+            "format.set",
+            json!({
+                "props": {
+                    "bold": true,
+                    "scale": 150.0,
+                    "spacing": 2.5,
+                    "position": -3.0,
+                    "kern": 14.0,
+                    "smallCaps": true,
+                }
+            }),
+        );
+        let Some(Dialog::Font { tab, bold, scale, spacing, position, kern_enabled, kern_min, small_caps, .. }) = Dialog::open("font", &mut app)
+        else {
+            panic!("no font dialog")
+        };
+        assert_eq!(tab, 0);
+        assert!(bold);
+        assert_eq!(scale, 150.0);
+        assert_eq!(spacing, 2.5);
+        assert_eq!(position, -3.0);
+        assert!(kern_enabled);
+        assert_eq!(kern_min, 14.0);
+        assert!(small_caps);
     }
 }

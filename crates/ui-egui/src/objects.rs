@@ -33,6 +33,7 @@ pub struct ObjectDrag {
     /// Smallest size it can be resized to, points.
     min: f32,
     picture: bool,
+    initial_crop: Option<[f32; 4]>,
 }
 
 /// The selected object: the selection is exactly one picture, shape or text box in the body.
@@ -84,7 +85,26 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         }
         if ui.input(|i| i.pointer.primary_down()) {
             let shift = ui.input(|i| i.modifiers.shift);
-            if d.drag.grab == Grab::Rotate {
+            if let (Grab::Crop(h), Some(c0)) = (d.drag.grab, d.initial_crop) {
+                let dx = (at.x - d.drag.press.x) / scale.max(0.01);
+                let dy = (at.y - d.drag.press.y) / scale.max(0.01);
+                let w = d.object.rect.w.max(1.0);
+                let h_size = d.object.rect.h.max(1.0);
+                let mut c = c0;
+                if h.x < 0 {
+                    c[0] = (c0[0] + dx / w).clamp(0.0, 0.45);
+                } else if h.x > 0 {
+                    c[2] = (c0[2] - dx / w).clamp(0.0, 0.45);
+                }
+                if h.y < 0 {
+                    c[1] = (c0[1] + dy / h_size).clamp(0.0, 0.45);
+                } else if h.y > 0 {
+                    c[3] = (c0[3] - dy / h_size).clamp(0.0, 0.45);
+                }
+                app.session.join_next_undo();
+                let _ = app.run("picture.crop", json!({"left": c[0], "top": c[1], "right": c[2], "bottom": c[3]}));
+                d.drag.moved = true;
+            } else if d.drag.grab == Grab::Rotate {
                 d.drag.turn_to(at, pages, scale, shift);
             } else {
                 // Pictures keep their proportions from a corner unless Shift; shapes only with Shift.
@@ -112,13 +132,29 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let pos = object.pos();
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
         let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
-        let (min, picture) = match selected(app) {
-            Some((_, o)) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
+        let (min, picture, crop) = match selected(app) {
+            Some((_, InlineObject::Image { crop, .. })) => {
+                let m = wordcraft_engine::cmd::objects::min_size(selected(app).map(|x| x.1).unwrap_or(&InlineObject::Image {
+                    media: String::new(),
+                    w: 10.0,
+                    h: 10.0,
+                    alt: String::new(),
+                    float: Default::default(),
+                    crop: [0.0; 4],
+                    ole: None,
+                }));
+                (m, true, Some(*crop))
+            }
+            Some((_, o)) => (wordcraft_engine::cmd::objects::min_size(o), false, None),
             None => return true,
         };
         // Objects in table cells can be selected and resized, not moved; charts neither.
-        if !fixed(app, &object) && (grab != Grab::Move || movable(&object)) {
-            app.canvas.obj_drag = Some(ObjectDrag { drag: Drag::new(grab, object.page, object.rect, object.spin.deg, at), object, min, picture });
+        if matches!(grab, Grab::Crop(_)) {
+            app.canvas.obj_drag =
+                Some(ObjectDrag { drag: Drag::new(grab, object.page, object.rect, object.spin.deg, at), object, min, picture, initial_crop: crop });
+        } else if !fixed(app, &object) && (grab != Grab::Move || movable(&object)) {
+            app.canvas.obj_drag =
+                Some(ObjectDrag { drag: Drag::new(grab, object.page, object.rect, object.spin.deg, at), object, min, picture, initial_crop: None });
         }
     }
     true
@@ -126,6 +162,17 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
 
 /// What a press at `at` would grab: a handle of the shown frame, else an object.
 fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<(ObjectHit, Grab)> {
+    if app.canvas.crop_active
+        && let Some((o, _)) = active(app, layout)
+    {
+        let pos = o.pos();
+        if matches!(app.session.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)), Some(InlineObject::Image { .. }))
+            && let Some(f) = screen(pages, scale, o.page, o.rect)
+            && let Some(h) = frame::handle_at(f, o.spin.deg, at)
+        {
+            return Some((o, Grab::Crop(h)));
+        }
+    }
     let handle = active(app, layout).filter(|(o, _)| o.story == StoryRef::Body && !fixed(app, o)).and_then(|(o, _)| {
         let f = screen(pages, scale, o.page, o.rect)?;
         if frame::rotate_handle_at(f, o.spin.deg, at) {
@@ -147,7 +194,7 @@ fn movable(o: &ObjectHit) -> bool {
 
 /// Commit a finished drag as one command.
 fn drop(app: &mut WordApp, d: &ObjectDrag) {
-    if !d.drag.moved {
+    if !d.drag.moved || matches!(d.drag.grab, Grab::Crop(_)) {
         return;
     }
     let r = d.drag.rect;
@@ -160,6 +207,7 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
         // An inline object stays in the text; a floating one keeps its far edges put.
         Grab::Resize(_) if d.object.floating() && movable(&d.object) => json!({"width": r.w, "height": r.h, "page": d.drag.page, "x": r.x, "y": r.y}),
         Grab::Resize(_) => json!({"width": r.w, "height": r.h}),
+        Grab::Crop(_) => return,
     };
     let _ = app.run("arrange.bounds", params);
 }
@@ -168,6 +216,10 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
 pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
     if let Some(d) = app.canvas.obj_drag.as_ref().filter(|d| d.drag.moved) {
         let Some(to) = screen(pages, scale, d.drag.to_page, d.drag.rect) else { return };
+        if matches!(d.drag.grab, Grab::Crop(_)) {
+            frame::paint_crop(painter, t, to);
+            return;
+        }
         if d.drag.grab == Grab::Rotate {
             frame::paint_turning(painter, t, to, d.drag.deg);
             return;
@@ -203,10 +255,14 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
     if let Some((o, editing)) = active(app, layout)
         && let Some(f) = screen(pages, scale, o.page, o.rect)
     {
-        // Handles where it can be resized and turned (body objects, not charts): else a plain
-        // frame.
-        let handles = o.story == StoryRef::Body && !fixed(app, &o);
-        frame::paint(painter, t, f, o.spin.deg, editing, handles, handles);
+        let pos = o.pos();
+        let is_pic = matches!(app.session.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)), Some(InlineObject::Image { .. }));
+        if app.canvas.crop_active && is_pic {
+            frame::paint_crop(painter, t, f);
+        } else {
+            let handles = o.story == StoryRef::Body && !fixed(app, &o);
+            frame::paint(painter, t, f, o.spin.deg, editing, handles, handles);
+        }
     }
 }
 
@@ -284,5 +340,26 @@ mod tests {
         };
         let (app, hit) = app_with(shape);
         assert!(!fixed(&app, &hit));
+    }
+
+    #[test]
+    fn picture_crop_toggle_and_handles() {
+        let pic =
+            InlineObject::Image { media: "test".into(), w: 100.0, h: 80.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        let (mut app, _hit) = app_with(pic);
+        // Select the picture
+        let pos = Pos::body(0, 0);
+        let end = Pos::body(0, OBJ.len_utf8());
+        app.run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
+
+        // Toggle crop mode ON
+        let res = app.run("ui.cropToggle", json!({})).unwrap();
+        assert_eq!(res["cropActive"], true);
+        assert!(app.canvas.crop_active);
+
+        // Toggle crop mode OFF
+        let res2 = app.run("ui.cropToggle", json!({})).unwrap();
+        assert_eq!(res2["cropActive"], false);
+        assert!(!app.canvas.crop_active);
     }
 }

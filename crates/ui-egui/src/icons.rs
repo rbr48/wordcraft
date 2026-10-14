@@ -321,6 +321,12 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fill(&[(9.5, 14.5), (13.0, 10.0), (16.0, 14.5)], green);
             pen.fcircle(13.5, 7.0, 1.5, yellow);
         }
+        "crop" => {
+            pen.line(&[(6.0, 3.0), (6.0, 14.0), (17.0, 14.0)]);
+            pen.line(&[(14.0, 17.0), (14.0, 6.0), (3.0, 6.0)]);
+            pen.fcircle(6.0, 14.0, 1.2, a);
+            pen.fcircle(14.0, 6.0, 1.2, a);
+        }
         "onlinePicture" => {
             paint(p, Rect::from_min_size(r.min, r.size() * 0.8), "picture", c, accent);
             pen.circle(15.0, 15.0, 3.5, a);

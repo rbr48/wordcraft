@@ -252,6 +252,8 @@ pub enum RevisionKind {
     Insert,
     Delete,
     Format,
+    MoveTo,
+    MoveFrom,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]

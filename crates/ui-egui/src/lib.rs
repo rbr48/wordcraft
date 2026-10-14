@@ -828,6 +828,13 @@ impl WordApp {
             // page; this is the button on it, and the one programmatic call that opens system UI
             // here, like `ui.openFileDialog` — only when the host can print.
             "ui.print" => return Some(self.print_to_system()),
+            "ui.cropToggle" => {
+                if !crate::ribbon::has_picture_selected(&self.session) {
+                    return Some(Err("no picture selected".into()));
+                }
+                self.canvas.crop_active = !self.canvas.crop_active;
+                json!({"cropActive": self.canvas.crop_active})
+            }
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
