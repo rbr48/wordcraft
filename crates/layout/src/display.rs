@@ -548,6 +548,51 @@ fn lines(
                 effects: Default::default(),
             });
         }
+        // Kashida elongations for justified Arabic text.
+        for kd in &line.kashidas {
+            if let Some(st) = pl.styles.get(kd.style as usize) {
+                let kx = x + line.cl_left(kd.cluster).unwrap_or(0.0);
+                let kw = kd.width;
+                if kw > 0.0 {
+                    let col = text_color(&st.rc.color, None);
+                    let tatweel_gid = wordcraft_fonts::first_glyph(&st.face, &['\u{0640}']);
+                    if tatweel_gid != 0 {
+                        let step = (st.size * 0.4).max(1.0);
+                        let count = (kw / step).ceil().max(1.0) as usize;
+                        let mut t_glyphs = Vec::with_capacity(count);
+                        for s in 0..count {
+                            let gx = kx + s as f32 * (kw / count as f32);
+                            t_glyphs.push((tatweel_gid, gx, base - st.shift));
+                        }
+                        out.push(Draw::Glyphs {
+                            face: st.face,
+                            size: st.size,
+                            glyphs: t_glyphs,
+                            color: col,
+                            alpha,
+                            synth_bold: st.synth_bold,
+                            synth_italic: st.synth_italic,
+                            text: "ـ".repeat(count),
+                            link: None,
+                            ranges: Vec::new(),
+                            // The elongation is part of the run's letters, so it takes the run's outline and shadow.
+                            effects: st.rc.text_effects,
+                        });
+                    }
+                    let thick = (st.size * 0.06).clamp(0.5, 4.0);
+                    out.push(Draw::Line {
+                        x0: kx,
+                        y0: base - st.shift,
+                        x1: kx + kw,
+                        y1: base - st.shift,
+                        width: thick,
+                        color: col,
+                        stroke: Stroke::Solid,
+                        alpha,
+                    });
+                }
+            }
+        }
         // Glyph runs grouped by style.
         let mut k = line.c0;
         while k < line.c1 {
@@ -567,6 +612,7 @@ fn lines(
                     break;
                 }
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
+                let kd_offset = line.kashidas.iter().find(|kd| kd.cluster == k).map(|kd| kd.width).unwrap_or(0.0);
                 if matches!(c.kind, ClKind::Text | ClKind::Space) {
                     let a = text.len();
                     // An object's cluster (a field, a note number) stands for the text it shows.
@@ -598,7 +644,7 @@ fn lines(
                                     from..to
                                 }
                             };
-                            glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
+                            glyphs.push((g.gid, cx + kd_offset + g.dx, base - st.shift - g.dy));
                             ranges.push(r.start..r.end.max(r.start));
                         }
                         k += 1;
@@ -613,7 +659,7 @@ fn lines(
                         }
                     }
                     for g in cg {
-                        glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
+                        glyphs.push((g.gid, cx + kd_offset + g.dx, base - st.shift - g.dy));
                         ranges.push(a..b);
                     }
                 }

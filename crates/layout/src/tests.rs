@@ -1029,7 +1029,95 @@ fn multi_column_section_balances_columns_on_last_page() {
     assert!(col0_lines > 0, "col 0 has lines");
     assert!(col1_lines > 0, "col 1 has lines");
     let diff = (col0_lines as isize - col1_lines as isize).abs();
-    assert!(diff <= 3, "columns are balanced: col0={col0_lines}, col1={col1_lines}");
+    assert!(diff <= 1, "columns are balanced: col0={col0_lines}, col1={col1_lines}");
+    assert!(col0_lines >= col1_lines, "earlier column is larger or equal");
+}
+
+#[test]
+fn multi_column_balancing_earlier_columns_are_larger_or_equal() {
+    let text = "Line one\nLine two\nLine three\nLine four\nLine five";
+    let mut d = Document::from_text(text);
+    d.last_section.columns = wordcraft_doc::section::Columns { count: 2, space: 18.0, separator: false, widths: Vec::new() };
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+    let p = &l.pages[0];
+    let col0_lines = p.items.iter().filter(|it| matches!(it, Placed::Lines { x, .. } if *x < 250.0)).count();
+    let col1_lines = p.items.iter().filter(|it| matches!(it, Placed::Lines { x, .. } if *x > 250.0)).count();
+    assert_eq!(col0_lines, 3, "Col 0 gets 3 lines");
+    assert_eq!(col1_lines, 2, "Col 1 gets 2 lines");
+    assert!(col0_lines >= col1_lines, "Earlier column is >= later column");
+}
+
+#[test]
+fn multi_column_section_spans_multiple_pages_and_balances_final_page() {
+    let mut d = Document::from_text(&"Multi-column article line test for multi-page balancing.\n".repeat(80));
+    d.last_section.columns = wordcraft_doc::section::Columns { count: 2, space: 18.0, separator: false, widths: Vec::new() };
+    let l = lay(&d);
+    assert!(l.pages.len() >= 2, "Spans multiple pages");
+    let last_p = l.pages.last().unwrap();
+    let col0_lines = last_p.items.iter().filter(|it| matches!(it, Placed::Lines { x, .. } if *x < 250.0)).count();
+    let col1_lines = last_p.items.iter().filter(|it| matches!(it, Placed::Lines { x, .. } if *x > 250.0)).count();
+    assert!(col0_lines > 0, "Last page column 0 has lines");
+    assert!(col1_lines > 0, "Last page column 1 has lines");
+    assert!((col0_lines as isize - col1_lines as isize).abs() <= 1, "Last page columns are balanced: col0={col0_lines}, col1={col1_lines}");
+    assert!(col0_lines >= col1_lines, "Col 0 is >= Col 1 on last page");
+}
+
+#[test]
+fn continuous_section_breaks_with_balanced_columns_and_separators() {
+    use wordcraft_doc::section::{Columns, SectionProps, SectionStart};
+    let mut d = Document::from_text(
+        "Document Headline\nArticle paragraph one\nArticle paragraph two\nArticle paragraph three\nArticle paragraph four\nConclusion paragraph text",
+    );
+
+    let s0 = SectionProps { columns: Columns { count: 1, space: 18.0, separator: false, widths: Vec::new() }, ..Default::default() };
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(s0));
+
+    let s1 = SectionProps {
+        start: SectionStart::Continuous,
+        columns: Columns { count: 2, space: 18.0, separator: true, widths: Vec::new() },
+        ..Default::default()
+    };
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(4)).unwrap().section = Some(Box::new(s1));
+
+    d.last_section.start = SectionStart::Continuous;
+    d.last_section.columns = Columns { count: 1, space: 18.0, separator: false, widths: Vec::new() };
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1, "All 3 continuous sections fit on 1 page");
+    let p = &l.pages[0];
+
+    let col0_lines = p
+        .items
+        .iter()
+        .filter(|it| matches!(it, Placed::Lines { x, path, .. } if *x < 250.0 && path.0.first().is_some_and(|&idx| (1..=4).contains(&idx))))
+        .count();
+    let col1_lines = p
+        .items
+        .iter()
+        .filter(|it| matches!(it, Placed::Lines { x, path, .. } if *x > 250.0 && path.0.first().is_some_and(|&idx| (1..=4).contains(&idx))))
+        .count();
+    assert_eq!(col0_lines, 2);
+    assert_eq!(col1_lines, 2);
+
+    let sep = p.items.iter().find(|it| matches!(it, Placed::Rule { border, .. } if border.width == 0.5));
+    assert!(sep.is_some(), "Column separator rule placed for section 1");
+    if let Some(Placed::Rule { y1, .. }) = sep {
+        assert!(*y1 < d.last_section.page_h - d.last_section.margin_bottom - 50.0, "Separator ends at balanced columns, not page bottom: {y1}");
+    }
+}
+
+#[test]
+fn manual_column_break_is_respected_and_not_rebalanced() {
+    let mut d = Document::from_text("Col 0 Line 0\u{000E}Col 1 Line 1\nCol 1 Line 2\nCol 1 Line 3");
+    d.last_section.columns = wordcraft_doc::section::Columns { count: 2, space: 18.0, separator: false, widths: Vec::new() };
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+    let p = &l.pages[0];
+    let col0_lines = p.items.iter().filter(|it| matches!(it, Placed::Lines { x, .. } if *x < 250.0)).count();
+    let col1_lines = p.items.iter().filter(|it| matches!(it, Placed::Lines { x, .. } if *x > 250.0)).count();
+    assert_eq!(col0_lines, 1, "Col 0 kept manual break with 1 line");
+    assert_eq!(col1_lines, 3, "Col 1 kept manual break with 3 lines");
 }
 
 #[test]
@@ -3395,4 +3483,70 @@ fn text_effects_reach_the_glyph_draw_item() {
         .iter()
         .find_map(|i| if let display::Draw::Glyphs { text, effects, .. } = i { text.contains("Effect").then_some(*effects) } else { None });
     assert_eq!(got, Some(fx));
+}
+
+/// M18.3 (Gap #10 & #17): A text box turned Down (rotate90) or Up (rotate270)
+/// places its paragraphs with `turn: TextDirection::Down` or `TextDirection::Up`.
+#[test]
+fn turned_text_box_layout_produces_rotated_lines() {
+    use wordcraft_doc::props::TextDirection;
+    let mut d = Document::new();
+    let s_down = d.add_part(
+        wordcraft_doc::PartKind::TextBox,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Down text", CharProps::default()))],
+    );
+    let s_up = d.add_part(
+        wordcraft_doc::PartKind::TextBox,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Up text", CharProps::default()))],
+    );
+
+    let tb_down = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 120.0,
+        h: 200.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Float { text_direction: TextDirection::Down, ..Default::default() },
+        story: Some(s_down),
+        freeform: None,
+        effects: Default::default(),
+    };
+
+    let tb_up = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 120.0,
+        h: 200.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Float { text_direction: TextDirection::Up, ..Default::default() },
+        story: Some(s_up),
+        freeform: None,
+        effects: Default::default(),
+    };
+
+    let mut p = wordcraft_doc::Paragraph::with_text("Body text", CharProps::default());
+    let end = p.len();
+    p.insert_object(end, tb_down, &CharProps::default()).unwrap();
+    let end = p.len();
+    p.insert_object(end, tb_up, &CharProps::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+
+    let l = lay(&d);
+    let mut found_down = false;
+    let mut found_up = false;
+    for item in &l.pages[0].items {
+        if let Placed::Lines { story: StoryRef::Part(s), turn, .. } = item {
+            if *s == s_down {
+                assert_eq!(*turn, TextDirection::Down);
+                found_down = true;
+            } else if *s == s_up {
+                assert_eq!(*turn, TextDirection::Up);
+                found_up = true;
+            }
+        }
+    }
+    assert!(found_down, "must find Placed::Lines with Down turn");
+    assert!(found_up, "must find Placed::Lines with Up turn");
 }

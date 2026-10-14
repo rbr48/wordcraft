@@ -625,6 +625,22 @@ impl Document {
         None
     }
 
+    /// The position of the shape that owns text box story `part`.
+    pub fn find_shape_with_story(&self, part: u32) -> Option<Pos> {
+        let stories = std::iter::once(StoryRef::Body).chain(self.parts.keys().filter(|k| **k != part).map(|k| StoryRef::Part(*k)));
+        for story in stories {
+            for path in self.para_paths(story) {
+                let Some(p) = self.para(story, &path) else { continue };
+                for off in p.object_offsets() {
+                    if p.object_at(off).is_some_and(|o| o.text_boxes().contains(&part)) {
+                        return Some(Pos { story, path, off });
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// The next / previous paragraph path in document order.
     pub fn next_para(&self, s: StoryRef, path: &Path) -> Option<Path> {
         let all = self.para_paths(s);

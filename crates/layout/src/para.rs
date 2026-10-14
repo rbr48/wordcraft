@@ -13,6 +13,7 @@ use wordcraft_doc::{Document, Paragraph};
 use wordcraft_fonts::FaceRef;
 
 use crate::fields::{FieldCtx, field_text};
+use crate::kashida::{self, Kashida};
 
 /// A face at a size with the formatting needed to draw it.
 #[derive(Clone, Debug)]
@@ -118,6 +119,8 @@ pub struct Line {
     pub vis: Vec<VisCl>,
     /// The paragraph reads right to left (its start edge is on the right).
     pub rtl: bool,
+    /// Kashida elongation points for justified Arabic text.
+    pub kashidas: Vec<Kashida>,
 }
 
 /// Where a cluster of a bidirectional line is drawn.
@@ -1057,7 +1060,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             c.break_after = true;
         }
     }
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    break_lines(&mut pl, env, &p.text, mark_style, env.label.as_ref().map(|(_, l)| l));
     pl
 }
 
@@ -1078,23 +1081,23 @@ fn next_tab(x: f32, tabs: &[TabStop], default_tab: f32, hanging_at: Option<f32>)
     })
 }
 
-fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Option<&Level>) {
+fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, para_text: &str, mark_style: u16, level: Option<&Level>) {
     let suffix = level.map(|l| l.suffix);
     let rp = pl.rp.clone();
     let width = env.width.max(12.0);
     let base_right = (width - rp.indent_right).max(1.0);
     let default_tab = env.doc.settings.default_tab;
     let first_left = rp.indent_left + rp.indent_first;
-    // Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
-    // spaces, up to MAX_SPACE_SHRINK of their width; never on lines with tabs.
-    let shrink_spaces = rp.align == Align::Justify && env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
-    let hanging_at = if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None };
     let n = pl.clusters.len();
     // A right-to-left paragraph is laid out from its start edge, as if mirrored: indents, tabs,
     // the list label and alignment are measured from the right. Lines are mirrored back (and
     // bidirectional text reordered) once broken; floating objects are mirrored in.
     let rtl_para = rp.bidi;
     let bidi = rtl_para || !pl.bidi_levels.is_empty();
+    // Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
+    // spaces, up to MAX_SPACE_SHRINK of their width; never on lines with tabs or RTL Arabic paragraphs (which use kashida).
+    let shrink_spaces = !rtl_para && rp.align == Align::Justify && env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
+    let hanging_at = if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None };
     let mirrored: Vec<Exclusion>;
     let exclusions: &[Exclusion] = if rtl_para {
         mirrored = env
@@ -1468,41 +1471,71 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
             }
         }
         let justify = display.is_none() && ((rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute);
-        // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && shrink_spaces && slack < 0.0 && last_tab.is_none();
+        let mut line_kashidas: Vec<Kashida> = Vec::new();
         if shrink {
             shrink_line_spaces(pl, &mut xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            // Spaces inside the content (after the last tab).
-            let spaces: Vec<usize> = (align_from..c1)
-                .filter(|k| {
-                    pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space) && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01
-                })
-                .collect();
-            if rp.align == Align::Distribute || spaces.is_empty() {
-                let cnt = (c1 - align_from).saturating_sub(1).max(1) as f32;
-                if rp.align == Align::Distribute {
-                    let per = slack / cnt;
-                    for (q, v) in xs.iter_mut().enumerate().skip(align_from - c0) {
-                        let k = (q + c0 - align_from) as f32;
-                        *v += per * k.min(cnt);
-                    }
-                }
+            // Check for Arabic cursive joining points (kashidas) when justifying RTL / Arabic text.
+            let kashida_pts = if (rtl_para || bidi) && rp.align == Align::Justify {
+                kashida::find_kashida_points(pl, para_text, align_from, c1)
             } else {
-                let per = slack / spaces.len() as f32;
+                Vec::new()
+            };
+            if !kashida_pts.is_empty() {
+                // Arabic Kashida justification: distribute slack across valid cursive joining points
+                // instead of unnaturally stretching inter-word whitespace.
+                let per = slack / kashida_pts.len() as f32;
                 let mut add = 0.0;
-                let mut si = 0;
+                let mut ki = 0;
                 for k in align_from..c1 {
                     if let Some(v) = xs.get_mut(k - c0) {
                         *v += add;
                     }
-                    if spaces.get(si) == Some(&k) {
+                    if kashida_pts.get(ki) == Some(&k) {
                         add += per;
-                        si += 1;
+                        if let Some(c) = pl.clusters.get(k) {
+                            line_kashidas.push(Kashida { cluster: k, style: c.style, width: per });
+                        }
+                        ki += 1;
                     }
                 }
                 if let Some(v) = xs.last_mut() {
                     *v += add;
+                }
+            } else {
+                // Spaces inside the content (after the last tab).
+                let spaces: Vec<usize> = (align_from..c1)
+                    .filter(|k| {
+                        pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space)
+                            && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01
+                    })
+                    .collect();
+                if rp.align == Align::Distribute || spaces.is_empty() {
+                    let cnt = (c1 - align_from).saturating_sub(1).max(1) as f32;
+                    if rp.align == Align::Distribute {
+                        let per = slack / cnt;
+                        for (q, v) in xs.iter_mut().enumerate().skip(align_from - c0) {
+                            let k = (q + c0 - align_from) as f32;
+                            *v += per * k.min(cnt);
+                        }
+                    }
+                } else {
+                    let per = slack / spaces.len() as f32;
+                    let mut add = 0.0;
+                    let mut si = 0;
+                    for k in align_from..c1 {
+                        if let Some(v) = xs.get_mut(k - c0) {
+                            *v += add;
+                        }
+                        if spaces.get(si) == Some(&k) {
+                            add += per;
+                            si += 1;
+                        }
+                    }
+                    if let Some(v) = xs.last_mut() {
+                        *v += add;
+                    }
                 }
             }
         }
@@ -1528,6 +1561,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
             beside,
             vis: Vec::new(),
             rtl: rtl_para,
+            kashidas: line_kashidas,
         };
         if bidi {
             reorder_line(pl, &mut line, width);
@@ -1578,6 +1612,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
                     beside: false,
                     vis: Vec::new(),
                     rtl: rtl_para,
+                    kashidas: Vec::new(),
                 });
                 top += h;
             }

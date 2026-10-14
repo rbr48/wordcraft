@@ -799,8 +799,27 @@ impl TextDirection {
             TextDirection::Up => TextDirection::Horizontal,
         }
     }
-    pub fn is_turned(self) -> bool {
-        self != TextDirection::Horizontal
+    pub fn is_turned(&self) -> bool {
+        *self != TextDirection::Horizontal
+    }
+    pub fn is_horizontal(&self) -> bool {
+        *self == TextDirection::Horizontal
+    }
+    /// The direction a DrawingML ST_TextVerticalType names (`a:bodyPr/@vert` or `wps:bodyPr/@vert`).
+    pub fn from_drawingml(v: &str) -> TextDirection {
+        match v {
+            "vert" | "eaVert" | "mongolianVert" | "wordArtVert" => TextDirection::Down,
+            "vert270" => TextDirection::Up,
+            _ => TextDirection::Horizontal,
+        }
+    }
+    /// The DrawingML ST_TextVerticalType attribute value.
+    pub fn drawingml(self) -> &'static str {
+        match self {
+            TextDirection::Horizontal => "horz",
+            TextDirection::Down => "vert",
+            TextDirection::Up => "vert270",
+        }
     }
 }
 

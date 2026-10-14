@@ -312,6 +312,14 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
             if encrypted && ui.button(egui::RichText::new(tl!("Remove Password")).font(medium(13.5))).clicked() {
                 let _ = app.run("file.encrypt", json!({"password": null}));
             }
+            let prot_label = if app.session.doc.settings.protection.is_some() {
+                tl!("Modify Protection…")
+            } else {
+                tl!("Restrict Editing…")
+            };
+            if ui.button(egui::RichText::new(prot_label).font(medium(13.5))).clicked() {
+                let _ = app.run("ui.dialog", json!({"name": "restrict"}));
+            }
         });
         let ui = &mut cols[1];
         ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));

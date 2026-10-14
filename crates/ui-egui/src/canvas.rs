@@ -2103,6 +2103,23 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
         }
     }
+    if let Some((_, obj)) = wordcraft_engine::cmd::objects::target_shape(&app.session) {
+        ui.separator();
+        ui.menu_button(tl!("Text Direction"), |ui| {
+            let cur_dir = obj.text_direction();
+            let item_dir = |ui: &mut Ui, app: &mut WordApp, label: &str, dir: &str, checked: bool| {
+                let mark = egui::RichText::new("✓");
+                let mark = if checked { mark } else { mark.color(egui::Color32::TRANSPARENT) };
+                if ui.button((mark, tl!(label))).clicked() {
+                    let _ = app.run("shape.textDirection", json!({"direction": dir}));
+                    ui.close();
+                }
+            };
+            item_dir(ui, app, "Horizontal", "horizontal", cur_dir == wordcraft_doc::props::TextDirection::Horizontal);
+            item_dir(ui, app, "Rotate all text 90°", "rotate90", cur_dir == wordcraft_doc::props::TextDirection::Down);
+            item_dir(ui, app, "Rotate all text 270°", "rotate270", cur_dir == wordcraft_doc::props::TextDirection::Up);
+        });
+    }
     if app.session.sel.focus.path.cell().is_some() {
         ui.separator();
         ui.menu_button(tl!("Insert"), |ui| {

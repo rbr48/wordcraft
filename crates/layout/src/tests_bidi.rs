@@ -449,3 +449,75 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
     assert!(placed.iter().any(|r| (r.x - a).abs() < 0.5), "placed {placed:?} vs {a}");
     assert!(a < 540.0 - 20.0, "after the first word, so left of the right margin");
 }
+
+#[test]
+fn arabic_kashida_justification_elongates_connected_letters_instead_of_spaces() {
+    let s = "سلام بر همه دوستان و همکاران گرامی در سراسر جهان که برای ساختن آینده‌ای بسیار روشن‌تر و زیباتر با یکدیگر همکاری می‌کنند. این متن آزمایشی طولانی است که چندین خط را در صفحه اشغال می‌کند و تراز خطوط را با استفاده از کشیده‌های متصل نشان می‌دهد تا خطوط کاملاً تراز گردند.";
+    let mut d = doc_of(&[(s, true)]);
+    let at = Pos::body(0, 0);
+    d.format_paragraphs(&at, &at, &|p: &mut ParaProps| {
+        p.bidi = Some(true);
+        p.align = Some(Align::Justify);
+    })
+    .unwrap();
+    let l = lay(&d);
+    let (pl, _) = first_line(&l, 0);
+    // Paragraph wraps into multiple lines.
+    assert!(pl.lines.len() >= 2, "paragraph should wrap into at least 2 lines");
+    let wrapped_line = &pl.lines[0];
+    assert_eq!(wrapped_line.end, LineEnd::Wrap);
+    // The wrapped line must contain kashida elongation points.
+    assert!(!wrapped_line.kashidas.is_empty(), "wrapped Arabic line must have kashidas");
+    let total_kashida_w: f32 = wrapped_line.kashidas.iter().map(|kd| kd.width).sum();
+    assert!(total_kashida_w > 0.0, "total kashida width must be positive: {total_kashida_w}");
+    for kd in &wrapped_line.kashidas {
+        assert!(kd.width > 0.0, "each kashida must have positive width: {:?}", kd);
+    }
+
+    // Verify display draw output contains kashida renderings (connecting rules / tatweels)
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let has_kashida_draw = draws.iter().any(|it| match it {
+        display::Draw::Line { width, stroke, .. } => *stroke == display::Stroke::Solid && *width > 0.4,
+        display::Draw::Glyphs { text, .. } => text.contains('ـ'),
+        _ => false,
+    });
+    assert!(has_kashida_draw, "display items must include kashida lines or tatweels");
+
+    // LTR English paragraph with Align::Justify does not generate kashidas
+    let eng = "This is a standard English paragraph that wraps across lines and is justified without Arabic text.";
+    let mut d_eng = doc_of(&[(eng, false)]);
+    let at_eng = Pos::body(0, 0);
+    d_eng
+        .format_paragraphs(&at_eng, &at_eng, &|p: &mut ParaProps| {
+            p.bidi = Some(false);
+            p.align = Some(Align::Justify);
+        })
+        .unwrap();
+    let l_eng = lay(&d_eng);
+    let (pl_eng, _) = first_line(&l_eng, 0);
+    for line in &pl_eng.lines {
+        assert!(line.kashidas.is_empty(), "English lines must not have kashidas");
+    }
+}
+
+#[test]
+fn arabic_kashida_hit_test_and_caret_traversal() {
+    let s = "سلام بر همه دوستان و همکاران گرامی در سراسر جهان که برای ساختن آینده‌ای بسیار روشن‌تر و زیباتر با یکدیگر همکاری می‌کنند.";
+    let mut d = doc_of(&[(s, true)]);
+    let at = Pos::body(0, 0);
+    d.format_paragraphs(&at, &at, &|p: &mut ParaProps| {
+        p.bidi = Some(true);
+        p.align = Some(Align::Justify);
+    })
+    .unwrap();
+    let l = lay(&d);
+    let (pl, _) = first_line(&l, 0);
+    let offs = pl.line_offsets(0);
+    assert!(offs.len() > 10, "line offsets should be present");
+    for off in offs {
+        let c = l.caret(&Pos::body(0, off)).unwrap();
+        let back = l.hit(c.page, c.x, c.top + c.height / 2.0, StoryRef::Body).unwrap();
+        let bx = l.caret(&back).unwrap().x;
+        assert!((bx - c.x).abs() < 0.05, "offset {off} caret x {cx} matched back caret x {bx}", cx = c.x);
+    }
+}

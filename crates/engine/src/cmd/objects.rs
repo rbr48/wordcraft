@@ -47,11 +47,22 @@ fn has_group(s: &Session) -> Option<&'static str> {
 fn can_group(s: &Session) -> Option<&'static str> {
     if picked_objects(s).len() >= 2 { None } else { Some("select two or more pictures or shapes first (Shift+click)") }
 }
-fn has_shape(s: &Session) -> Option<&'static str> {
-    match selected(s) {
-        Some((_, InlineObject::Shape { .. })) => None,
-        _ => Some("select a shape first"),
+pub fn target_shape(s: &Session) -> Option<(Pos, InlineObject)> {
+    if let Some((pos, o @ InlineObject::Shape { .. })) = selected(s) {
+        return Some((pos, o));
     }
+    if let StoryRef::Part(id) = s.sel.focus.story
+        && let Some(pos) = s.doc.find_shape_with_story(id)
+        && let Some(p) = s.doc.para(pos.story, &pos.path)
+        && let Some(o) = p.object_at(pos.off)
+    {
+        return Some((pos, o.clone()));
+    }
+    None
+}
+
+fn has_shape(s: &Session) -> Option<&'static str> {
+    if target_shape(s).is_some() { None } else { Some("select a shape or text box first") }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -363,11 +374,24 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"kind": string}"#)
         .when(has_shape),
         CommandSpec::new("shape.textDirection", "Text Direction", "Shape Format › Text", |s, v| {
-            let dir = p::str(v, "direction").unwrap_or("horizontal");
-            with_obj(s, |_| {})?;
-            Ok(json!({"textDirection": dir}))
+            let (pos, obj) = target_shape(s).ok_or_else(|| CmdError::Disabled("select a shape or text box first".into()))?;
+            let current = obj.text_direction();
+            let next_dir = match p::str(v, "direction").unwrap_or("next") {
+                "horizontal" | "lrTb" | "horz" => wordcraft_doc::props::TextDirection::Horizontal,
+                "rotate90" | "tbRl" | "vert" | "down" => wordcraft_doc::props::TextDirection::Down,
+                "rotate270" | "btLr" | "vert270" | "up" => wordcraft_doc::props::TextDirection::Up,
+                "next" => current.next(),
+                other => return Err(CmdError::Params(format!("unknown direction `{other}`: use horizontal, rotate90, rotate270 or next"))),
+            };
+            edit_obj(s, &pos, |o| o.set_text_direction(next_dir))?;
+            let dir_code = match next_dir {
+                wordcraft_doc::props::TextDirection::Horizontal => "horizontal",
+                wordcraft_doc::props::TextDirection::Down => "rotate90",
+                wordcraft_doc::props::TextDirection::Up => "rotate270",
+            };
+            Ok(json!({"textDirection": dir_code, "raw": next_dir.drawingml()}))
         })
-        .params(r#"{"direction"?: "horizontal|rotate90|rotate270"}"#)
+        .params(r#"{"direction"?: "horizontal|rotate90|rotate270|next"}"#)
         .when(has_shape),
         CommandSpec::new("shape.alignText", "Align Text", "Shape Format › Text", |s, v| {
             let a = p::str(v, "align").unwrap_or("top");
@@ -1538,5 +1562,48 @@ mod tests {
             },
             (ShapeKind::CurvedConnector, None, true)
         );
+    }
+
+    #[test]
+    fn shape_text_direction_command_and_story_caret() {
+        use wordcraft_doc::props::TextDirection;
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.textBox", &json!({"width": 200, "height": 100})).unwrap();
+
+        // Right after insert.textBox, caret is inside the text box story: target_shape finds it
+        let (pos, o) = target_shape(&s).expect("target_shape must find enclosing shape when typing in text box");
+        assert_eq!(o.text_direction(), TextDirection::Horizontal);
+
+        // Turn text direction while typing inside text box
+        s.run("shape.textDirection", &json!({"direction": "rotate90"})).unwrap();
+        let (_, o2) = target_shape(&s).unwrap();
+        assert_eq!(o2.text_direction(), TextDirection::Down);
+
+        // Select the shape itself (U+FFFC is 3 bytes)
+        s.sel =
+            crate::Selection { anchor: pos.clone(), focus: wordcraft_doc::Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() } };
+        let (_, sel_obj) = selected(&s).expect("shape must be selected");
+        assert_eq!(sel_obj.text_direction(), TextDirection::Down);
+
+        // Cycle through text directions via 'next'
+        s.run("shape.textDirection", &json!({"direction": "next"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.text_direction(), TextDirection::Up);
+
+        s.run("shape.textDirection", &json!({"direction": "next"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.text_direction(), TextDirection::Horizontal);
+
+        s.run("shape.textDirection", &json!({"direction": "next"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.text_direction(), TextDirection::Down);
+
+        // Explicit directions
+        s.run("shape.textDirection", &json!({"direction": "rotate270"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.text_direction(), TextDirection::Up);
+
+        s.run("shape.textDirection", &json!({"direction": "horizontal"})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.text_direction(), TextDirection::Horizontal);
+
+        // Verify persisted on document
+        let actual = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).unwrap();
+        assert_eq!(actual.text_direction(), TextDirection::Horizontal);
     }
 }

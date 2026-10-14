@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::Password;
 
 use crate::WordApp;
-use crate::theme::{Tokens, semibold};
+use crate::theme::{Tokens, medium, semibold};
 
 /// The Find and Replace dialog's search options beyond the first row (#543).
 #[derive(Clone, Debug, Default, Serialize)]
@@ -483,6 +483,20 @@ pub enum Dialog {
         cols: u32,
         from_recipients: bool,
         label_preset: usize,
+    },
+    /// Review › Protect › Restrict Editing / File › Info › Protect Document
+    Protect {
+        formatting_restricted: bool,
+        editing_restricted: bool,
+        mode: String,
+        exceptions_everyone: bool,
+        #[serde(skip)]
+        password: String,
+        #[serde(skip)]
+        confirm_password: String,
+        currently_enforced: bool,
+        current_mode: Option<String>,
+        error_msg: String,
     },
 }
 
@@ -977,6 +991,7 @@ impl Dialog {
             Dialog::Enclose { .. } => "enclose",
             Dialog::WordArt { .. } => "wordArt",
             Dialog::EnvelopesLabels { .. } => "envelopesLabels",
+            Dialog::Protect { .. } => "protect",
         }
     }
 
@@ -1340,6 +1355,22 @@ impl Dialog {
                     label_preset: 0,
                 }
             }
+            "protect" | "restrict" | "restrictEditing" => {
+                let current_mode = app.session.doc.settings.protection.clone();
+                let currently_enforced = current_mode.is_some();
+                let mode = current_mode.clone().unwrap_or_else(|| "readOnly".to_string());
+                Dialog::Protect {
+                    formatting_restricted: false,
+                    editing_restricted: true,
+                    mode,
+                    exceptions_everyone: false,
+                    password: String::new(),
+                    confirm_password: String::new(),
+                    currently_enforced,
+                    current_mode,
+                    error_msg: String::new(),
+                }
+            }
             _ => return None,
         })
     }
@@ -1484,6 +1515,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Enclose { .. } => "Enclose Characters",
         Dialog::WordArt { .. } => "WordArt Gallery",
         Dialog::EnvelopesLabels { .. } => "Envelopes and Labels",
+        Dialog::Protect { .. } => "Restrict Editing",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -1494,6 +1526,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             if matches!(d, Dialog::EnvelopesLabels { .. }) {
                 ui.set_min_width(480.0);
+            } else if matches!(d, Dialog::Protect { .. }) {
+                ui.set_min_width(420.0);
             } else {
                 ui.set_min_width(340.0);
             }
@@ -3868,6 +3902,134 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ok || cancel
             }
         }
+        Dialog::Protect {
+            formatting_restricted,
+            editing_restricted,
+            mode,
+            exceptions_everyone,
+            password,
+            confirm_password,
+            currently_enforced,
+            current_mode,
+            error_msg,
+        } => {
+            let mut close = false;
+            if *currently_enforced {
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(tl!("Protection Status:")).font(semibold(13.0)));
+                        ui.colored_label(ui.visuals().hyperlink_color, tl!("Enforced"));
+                    });
+                    ui.add_space(4.0);
+                    let mode_desc = match current_mode.as_deref().unwrap_or("readOnly") {
+                        "readOnly" => tl!("No changes (Read only)"),
+                        "trackedChanges" => tl!("Tracked changes only"),
+                        "comments" => tl!("Comments only"),
+                        "forms" => tl!("Filling in forms only"),
+                        other => other,
+                    };
+                    ui.label(format!("{}: {}", tl!("Current restriction"), mode_desc));
+                    ui.add_space(4.0);
+                    ui.label(tl!("This document is protected from unintentional editing."));
+                });
+                ui.add_space(10.0);
+                if ui.button(egui::RichText::new(tl!("Stop Protection")).font(medium(13.0))).clicked() {
+                    let _ = app.run("review.restrict", json!({"mode": "none"}));
+                    *currently_enforced = false;
+                    *current_mode = None;
+                    *editing_restricted = false;
+                }
+                ui.add_space(10.0);
+                ui.separator();
+                let (_, cancel) = buttons(ui, "OK");
+                return cancel;
+            }
+
+            ui.label(egui::RichText::new(tl!("1. Formatting restrictions")).font(semibold(12.5)));
+            ui.add_space(2.0);
+            ui.checkbox(formatting_restricted, tl!("Limit formatting to a selection of styles"));
+            ui.label(
+                egui::RichText::new(tl!("Prevents direct formatting overrides outside permitted document styles."))
+                    .weak()
+                    .font(egui::FontId::proportional(11.0)),
+            );
+            ui.add_space(8.0);
+
+            ui.label(egui::RichText::new(tl!("2. Editing restrictions")).font(semibold(12.5)));
+            ui.add_space(2.0);
+            ui.checkbox(editing_restricted, tl!("Allow only this type of editing in the document:"));
+            ui.indent("editing_opts", |ui| {
+                ui.add_enabled_ui(*editing_restricted, |ui| {
+                    egui::ComboBox::from_id_salt("protect_mode_combo")
+                        .selected_text(match mode.as_str() {
+                            "readOnly" => tl!("No changes (Read only)"),
+                            "trackedChanges" => tl!("Tracked changes"),
+                            "comments" => tl!("Comments"),
+                            "forms" => tl!("Filling in forms"),
+                            _ => tl!("No changes (Read only)"),
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(mode, "readOnly".to_string(), tl!("No changes (Read only)"));
+                            ui.selectable_value(mode, "trackedChanges".to_string(), tl!("Tracked changes"));
+                            ui.selectable_value(mode, "comments".to_string(), tl!("Comments"));
+                            ui.selectable_value(mode, "forms".to_string(), tl!("Filling in forms"));
+                        });
+
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(tl!("Exceptions (optional):")).font(medium(11.5)));
+                    ui.checkbox(exceptions_everyone, tl!("Everyone"));
+                });
+            });
+            ui.add_space(8.0);
+
+            ui.label(egui::RichText::new(tl!("3. Start enforcement")).font(semibold(12.5)));
+            ui.add_space(2.0);
+            ui.label(tl!("Are you ready to apply these settings? (You can turn them off at any time)"));
+            ui.add_space(4.0);
+
+            egui::Grid::new("protect_pwd_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Password (optional):"));
+                ui.add(egui::TextEdit::singleline(password).password(true).desired_width(180.0));
+                ui.end_row();
+
+                ui.label(tl!("Confirm password:"));
+                ui.add(egui::TextEdit::singleline(confirm_password).password(true).desired_width(180.0));
+                ui.end_row();
+            });
+
+            if !error_msg.is_empty() {
+                ui.add_space(4.0);
+                ui.colored_label(egui::Color32::from_rgb(220, 50, 50), error_msg.as_str());
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            let mut apply = false;
+            let mut cancel = false;
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        cancel = true;
+                    }
+                    if ui.button(tl!("Yes, Start Enforcing Protection")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        apply = true;
+                    }
+                });
+            });
+
+            if apply {
+                if !password.is_empty() && password != confirm_password {
+                    *error_msg = tl!("Passwords do not match.").to_string();
+                } else {
+                    let chosen_mode = if *editing_restricted { mode.as_str() } else { "none" };
+                    let _ = app.run("review.restrict", json!({"mode": chosen_mode}));
+                    close = true;
+                }
+            }
+
+            close || cancel
+        }
     }
 }
 
@@ -4703,5 +4865,42 @@ mod tests {
             )
             .unwrap();
         assert_eq!(res2["labels"], 10);
+    }
+
+    #[test]
+    fn protect_document_dialog_opens_and_enforces() {
+        let mut app = app_with("Document content");
+        assert!(app.session.doc.settings.protection.is_none());
+
+        let d = Dialog::open("restrict", &mut app).expect("restrict dialog opens");
+        let Dialog::Protect { currently_enforced, mode, editing_restricted, .. } = d else {
+            panic!("not protect dialog");
+        };
+        assert!(!currently_enforced);
+        assert_eq!(mode, "readOnly");
+        assert!(editing_restricted);
+
+        // Enforce protection
+        app.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+        assert_eq!(app.session.doc.settings.protection.as_deref(), Some("readOnly"));
+
+        // Mutating command should fail while protected
+        let err = app.session.run("text.insert", &json!({"text": "Blocked"}));
+        assert!(err.is_err());
+
+        // Reopen dialog: should show currently_enforced = true and current_mode = "readOnly"
+        let d2 = Dialog::open("protect", &mut app).expect("protect dialog opens");
+        let Dialog::Protect { currently_enforced: enf2, current_mode: m2, .. } = d2 else {
+            panic!("not protect dialog");
+        };
+        assert!(enf2);
+        assert_eq!(m2.as_deref(), Some("readOnly"));
+
+        // Stop protection
+        app.run("review.restrict", json!({"mode": "none"})).unwrap();
+        assert!(app.session.doc.settings.protection.is_none());
+
+        // Mutating command should succeed now
+        app.session.run("text.insert", &json!({"text": "Allowed"})).unwrap();
     }
 }

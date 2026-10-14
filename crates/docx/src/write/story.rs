@@ -772,6 +772,7 @@ impl Writer<'_> {
     /// its own `wps:cNvPr` with drawing id `id`.
     fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
         let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform } = o else { return };
+        let text_direction = float.text_direction;
         let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
@@ -862,7 +863,11 @@ impl Writer<'_> {
             w.close("wps:txbx");
             self.boxes.leave();
         }
-        w.empty("wps:bodyPr", &[]);
+        if text_direction.is_turned() {
+            w.empty("wps:bodyPr", &[("vert", text_direction.drawingml())]);
+        } else {
+            w.empty("wps:bodyPr", &[]);
+        }
         w.close("wps:wsp");
     }
 

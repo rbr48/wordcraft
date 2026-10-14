@@ -11,6 +11,7 @@
 pub mod display;
 pub mod fields;
 pub mod hit;
+pub mod kashida;
 pub mod kinsoku;
 pub mod math;
 pub mod para;
@@ -29,6 +30,7 @@ use wordcraft_geom::{Point, Rect, Spin};
 
 pub use fields::FieldCtx;
 pub use hit::VisualStep;
+pub use kashida::Kashida;
 pub use para::{ContourKind, LineEnd, ParaLayout};
 pub use table::{autofit_widths, measure_table_columns};
 
@@ -1137,6 +1139,18 @@ impl PageBuilder<'_> {
         if pg.items.len() <= sect_start_item {
             return;
         }
+
+        // If the lines contain an explicit manual ColumnBreak, respect the user's manual column choice.
+        if pg.items.iter().skip(sect_start_item).any(|it| {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                (*l0..*l1).any(|li| para.lines.get(li).is_some_and(|l| l.end == LineEnd::ColumnBreak))
+            } else {
+                false
+            }
+        }) {
+            return;
+        }
+
         struct LineInfo {
             story: StoryRef,
             path: Path,
@@ -1156,6 +1170,9 @@ impl PageBuilder<'_> {
                         }
                     }
                 }
+                Placed::Fill { .. } | Placed::Rule { .. } => {
+                    // Paragraph shading fills and border rules are regenerated below by push_para for the balanced column runs.
+                }
                 other => non_line_items.push(other),
             }
         }
@@ -1166,19 +1183,26 @@ impl PageBuilder<'_> {
         }
 
         let num_cols = self.cols.len();
-        let total_h: f32 = lines.iter().map(|l| l.height).sum();
-        let target_h = (total_h / num_cols as f32).max(12.0);
-
         let mut col_idx = 0;
-        let mut col_lines: Vec<(usize, LineInfo)> = Vec::new();
+        let mut cur_col_lines = 0usize;
+        let mut col_lines: Vec<(usize, LineInfo)> = Vec::with_capacity(lines.len());
+        let col_max_h = (self.bottom - self.top).max(24.0);
         let mut cur_col_h = 0.0f32;
 
+        let total_lines = lines.len();
+        let base = total_lines / num_cols;
+        let rem = total_lines % num_cols;
+
         for line in lines {
+            let target_count = base + usize::from(col_idx < rem);
             let h = line.height;
-            if col_idx + 1 < num_cols && cur_col_h + h > target_h && cur_col_h > 0.0 {
+
+            if col_idx + 1 < num_cols && cur_col_lines > 0 && (cur_col_lines >= target_count || cur_col_h + h > col_max_h) {
                 col_idx += 1;
+                cur_col_lines = 0;
                 cur_col_h = 0.0;
             }
+            cur_col_lines += 1;
             cur_col_h += h;
             col_lines.push((col_idx, line));
         }
@@ -1211,24 +1235,25 @@ impl PageBuilder<'_> {
             let l0 = first_line.line_idx;
             let l1 = col_lines[j - 1].1.line_idx + 1;
             let para = &first_line.para;
-            let run_h: f32 = (i..j).map(|k| col_lines[k].1.height).sum();
 
             if i == 0 || col_lines[i - 1].0 != c {
                 col_y = self.top;
+            } else if l0 == 0 {
+                col_y += para.rp.space_before;
             }
 
-            pg.items.push(Placed::Lines {
-                story: first_line.story,
-                path: first_line.path.clone(),
-                para: para.clone(),
-                l0,
-                l1,
-                x: cx,
-                y: col_y,
-                turn: TextDirection::Horizontal,
-            });
+            let run_h = if let (Some(f), Some(l)) = (para.lines.get(l0), para.lines.get(l1.saturating_sub(1))) {
+                l.top + l.height - f.top
+            } else {
+                (i..j).map(|k| col_lines[k].1.height).sum()
+            };
+
+            push_para(&mut pg.items, first_line.story, &first_line.path.0, para, l0, l1, cx, col_y, col_box.1);
 
             col_y += run_h;
+            if l1 >= para.lines.len() {
+                col_y += para.rp.space_after;
+            }
             max_b = max_b.max(col_y);
             i = j;
         }
@@ -1237,6 +1262,31 @@ impl PageBuilder<'_> {
         self.max_col_bottom = self.max_col_bottom.max(max_b);
         self.y = col_y;
         self.col = col_idx;
+
+        // Bounded column separators: stop at the bottom of the balanced text.
+        if s.columns.separator && s.columns.count > 1 {
+            let cols = s.column_boxes();
+            let base_x = s.margin_left + s.gutter;
+            for w in cols.windows(2) {
+                if let [(ax, aw), (bx, _)] = w {
+                    let sep_x = base_x + (ax + aw + bx) / 2.0;
+                    let mut found = false;
+                    for it in &mut pg.items {
+                        if let Placed::Rule { x0, x1, y0, y1, .. } = it
+                            && (*x0 - sep_x).abs() < 1.0
+                            && (*x1 - sep_x).abs() < 1.0
+                        {
+                            *y0 = self.top;
+                            *y1 = max_b;
+                            found = true;
+                        }
+                    }
+                    if !found {
+                        pg.items.push(Placed::Rule { x0: sep_x, y0: self.top, x1: sep_x, y1: max_b, border: Border::single(0.5) });
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1351,6 +1401,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             pb.y = pb.top;
         }
         let last = (*end).min(doc.body.len().saturating_sub(1));
+        let sect_start_page = pb.pages.len();
         let sect_start_item = pb.page().map(|p| p.items.len()).unwrap_or(0);
         while block <= last {
             let Some(b) = doc.body.get(block) else { break };
@@ -1360,7 +1411,8 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             }
             block += 1;
         }
-        pb.balance_columns(sect_start_item);
+        let start_item = if pb.pages.len() == sect_start_page { sect_start_item } else { pb.page_items_start };
+        pb.balance_columns(start_item);
     }
     if pb.pages.is_empty() {
         pb.new_page(0, sect_ref.margin_top);
@@ -1797,23 +1849,29 @@ fn place_objects(
             // text itself stays upright), unless the box budget says no (a box inside itself,
             // too deep, too many).
             let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-            let boxes: Vec<(u32, Rect)> = match obj {
+            let boxes: Vec<(u32, Rect, TextDirection)> = match obj {
                 InlineObject::Group { .. } => group_members(obj, rect)
                     .into_iter()
                     .filter_map(|(r, c)| {
                         c.text_box()
                             .filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox))
-                            .map(|id| (id, carried(r, float.spin(), centre)))
+                            .map(|id| (id, carried(r, float.spin(), centre), c.text_direction()))
                     })
                     .collect(),
-                _ => text_box.map(|id| (id, rect)).into_iter().collect(),
+                InlineObject::Shape { .. } => text_box.map(|id| (id, rect, obj.text_direction())).into_iter().collect(),
+                _ => Vec::new(),
             };
-            for (id, rect) in boxes {
+            for (id, rect, dir) in boxes {
                 if !ctx.boxes.enter(id) {
                     continue;
                 }
                 let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
-                let inner = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None).items;
+                let (line_w, max_h) = if dir.is_turned() {
+                    ((rect.h - 2.0 * BOX_INSET_Y).max(12.0), (rect.w - 2.0 * BOX_INSET_X).max(12.0))
+                } else {
+                    ((rect.w - 2.0 * BOX_INSET_X).max(12.0), (rect.h - 2.0 * BOX_INSET_Y).max(12.0))
+                };
+                let inner = layout_box(ctx, StoryRef::Part(id), &blocks, &[], line_w, None, depth + 1, None).items;
                 ctx.boxes.leave();
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 // Also place an Object hit target for each child text box in a group so hit testing,
@@ -1831,8 +1889,13 @@ fn place_objects(
                     });
                 }
                 // Text that doesn't fit inside the margins is hidden, as in Word.
-                for mut it in fit_box(inner, rect.h - 2.0 * BOX_INSET_Y) {
-                    it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
+                let (ox, oy) = match dir {
+                    TextDirection::Down => (rect.x + rect.w - BOX_INSET_X, rect.y + BOX_INSET_Y),
+                    TextDirection::Up => (rect.x + BOX_INSET_X, rect.y + rect.h - BOX_INSET_Y),
+                    TextDirection::Horizontal => (rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y),
+                };
+                for mut it in fit_box(inner, max_h) {
+                    it.turn(dir, ox, oy);
                     layer.push(it);
                 }
             }

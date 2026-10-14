@@ -1395,7 +1395,7 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Protect", None, app, |ui, app| {
         big(ui, app, "blockAuthors", "Block\nAuthors", "review.blockAuthors", json!({}), false);
-        big(ui, app, "restrict", "Restrict\nEditing", "review.restrict", json!({}), false);
+        big(ui, app, "restrict", "Restrict\nEditing", "ui.dialog", json!({"name": "restrict"}), false);
     });
     group(ui, "Ink", None, app, |ui, app| {
         let hidden = app.session.view.hide_ink;
@@ -1523,6 +1523,22 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
             menu_button(ui, app, "shapeEffects", Some("Shape Effects"), "Shadow, glow and soft edges", false, |ui, app| {
                 shape_effects_menu(ui, app, &theme, glow_size)
             });
+        });
+    });
+    group(ui, "Text", None, app, |ui, app| {
+        let current_dir = wordcraft_engine::cmd::objects::target_shape(&app.session).map(|(_, o)| o.text_direction()).unwrap_or_default();
+        menu_button(ui, app, "textDirection", Some("Text Direction"), "Change text direction", false, |ui, app| {
+            let mut item = |label: &str, dir: &str, target_dir: wordcraft_doc::props::TextDirection| {
+                let active = current_dir == target_dir;
+                let text = if active { format!("✓ {}", tl!(label)) } else { format!("  {}", tl!(label)) };
+                if ui.button(text).clicked() {
+                    let _ = app.run("shape.textDirection", json!({"direction": dir}));
+                    ui.close();
+                }
+            };
+            item("Horizontal", "horizontal", wordcraft_doc::props::TextDirection::Horizontal);
+            item("Rotate all text 90°", "rotate90", wordcraft_doc::props::TextDirection::Down);
+            item("Rotate all text 270°", "rotate270", wordcraft_doc::props::TextDirection::Up);
         });
     });
     group(ui, "Arrange", None, app, |ui, app| {
