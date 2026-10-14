@@ -189,3 +189,19 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Compiled optimized release binaries: `wordcraft.exe` (13.6 MB), `wordcraft-cli.exe` (9.3 MB).
       - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.0 MB).
       - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.2 MB).
+  - **Prioritized Roadmap Sprint: Bibliography, Crop Tool, Typography & Move/SDT Tracking (Commit 6eaf0f2)**:
+    - **M10.4: DOCX Bibliography Sources Persistence (Gap #15 Closed)**: Full serialization/deserialization of `wordcraft_doc::Source` to/from `<b:Sources>` in `customXml/item1.xml` (ECMA-376 Part 4 / ISO 29500 §7.3). Unit tested via `bibliography_sources_round_trip` in `crates/docx/tests/citations.rs`.
+    - **M11.1: Interactive Canvas Picture Crop Tool**: Added procedural vector `"crop"` icon in `crates/ui-egui/src/icons.rs`, `Grab::Crop(Handle)` with 8 corner/edge handles and rule-of-thirds grid lines in `crates/ui-egui/src/frame.rs`, `crop_active: bool` canvas state toggle via ribbon "Crop" button, right-click context menu, and keyboard command `ui.cropToggle`. Verified with unit test `picture_crop_toggle_and_handles`.
+    - **M11.2: Advanced Typography Dialog**: Upgraded `Dialog::Font` with tabbed "Font" and "Advanced" views. Implemented Character Scale (33%..=200%), Spacing (Normal, Expanded, Condensed by pt), Position (Normal, Raised, Lowered by pt), Kerning threshold, and OpenType ligatures (`all`, `standard`, `historical`), number spacing (proportional/tabular), and number forms (lining/old-style). Verified with unit test `font_dialog_opens_and_reads_advanced_typography`.
+    - **M12.1: Move Tracking & Content Controls Roundtrip (Gap #5 Closed)**:
+      - Added `RevisionKind::MoveTo` and `RevisionKind::MoveFrom` to `wordcraft_doc::RevisionKind`.
+      - Mapped `w:moveTo` and `w:moveFrom` across text runs and paragraph marks with full author and timestamp fidelity. Verified with unit test `tracked_move_revisions_round_trip`.
+      - Added `InlineObject::SdtStart` and `InlineObject::SdtEnd` capturing SDT `id`, `tag`, `alias`, `lock`, and inner `props_xml` elements (dropdown, date, checkbox, placeholder). Verified with unit test `content_controls_sdt_round_trip`.
+    - **Documentation Updated**: Marked Gap #5 and Gap #15 closed in `docs/gaps.md`, updated DOCX table in `docs/file-format-parity.md`, updated feature areas in `docs/target-app-parity.md`, and updated `docs/ui-parity.md`.
+    - **All 6 CI Quality Gates Verified**: `fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, and `wasm` across all 17 crates and apps.
+    - **Pushed to GitHub**: Pushed commit `6eaf0f2` to `origin/main` (`https://github.com/rbr48/wordcraft.git`).
+    - **Distribution Artifacts Rebuilt**:
+      - Compiled optimized release binaries: `wordcraft.exe`, `wordcraft-cli.exe`.
+      - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe`.
+      - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip`.
+
