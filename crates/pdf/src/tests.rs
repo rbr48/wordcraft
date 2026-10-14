@@ -954,13 +954,35 @@ fn gradient_bounds_ignore_a_space() {
 }
 
 #[test]
-fn an_italic_runs_shadow_and_outline_lean_with_its_letters() {
-    // Synthetic italic shears the letters about the baseline. A capital I is a tall stem, so the sheared
-    // outline is wider than the upright one by about a fifth of its height, and its baseline stays put.
+fn an_italic_runs_shadow_and_outline_lean_like_its_letters() {
+    // Synthetic italic shears the letters about the baseline: a point moves left by 0.21 for each point it
+    // lies below the baseline and right by 0.21 for each point above it. A capital I is a rectangle, so its
+    // top-right corner moves right by exactly 0.21 of its height, and its bottom-left corner stays put.
     let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
     let at = [(face.glyph_for('I'), 20.0, 100.0)];
-    let upright = kurbo::Shape::bounding_box(&glyph_bez(&face, 40.0, &at, false));
-    let leaning = kurbo::Shape::bounding_box(&glyph_bez(&face, 40.0, &at, true));
-    assert!(leaning.width() > upright.width() + 2.0, "the stem leans: {leaning:?} against {upright:?}");
-    assert!((leaning.y1 - upright.y1).abs() < 1e-6, "the baseline does not move: {leaning:?} against {upright:?}");
+    let bounds = |shear: Option<f32>| kurbo::Shape::bounding_box(&glyph_bez(&face, 40.0, &at, shear));
+    let (upright, leaning) = (bounds(None), bounds(Some(100.0)));
+    assert!((leaning.x0 - upright.x0).abs() < 1e-6, "the bottom-left corner stays on the baseline: {leaning:?} against {upright:?}");
+    assert!(
+        (leaning.x1 - upright.x1 - 0.21 * upright.height()).abs() < 0.05,
+        "the top leans right by 0.21 of its height: {leaning:?} against {upright:?}"
+    );
+    assert!((leaning.y0 - upright.y0).abs() < 1e-6 && (leaning.y1 - upright.y1).abs() < 1e-6, "no vertical move");
+}
+
+#[test]
+fn an_italic_shadow_leans_about_the_run_baseline_not_its_own_pen() {
+    // `glyphs` shears a whole run about its first glyph's pen, so a glyph raised above that baseline must
+    // lean from the baseline: 0.21 of the distance from its pen to the baseline, to the right. Otherwise a
+    // shadow would drift off the letters it sits behind.
+    let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+    let raised = [(face.glyph_for('I'), 20.0, 90.0)];
+    let bounds = |shear: Option<f32>| kurbo::Shape::bounding_box(&glyph_bez(&face, 40.0, &raised, shear));
+    let about_its_pen = bounds(Some(90.0));
+    let about_the_run = bounds(Some(100.0));
+    let moved = 0.21 * (100.0 - 90.0);
+    assert!((about_the_run.x0 - about_its_pen.x0 - moved).abs() < 1e-6, "{about_the_run:?} against {about_its_pen:?}");
+    assert!((about_the_run.x1 - about_its_pen.x1 - moved).abs() < 1e-6, "{about_the_run:?} against {about_its_pen:?}");
+    assert_eq!(italic_baseline(&[(1, 0.0, 90.0), (2, 0.0, 100.0)], true), Some(90.0), "the first glyph sets the baseline");
+    assert_eq!(italic_baseline(&raised, false), None, "upright text is not sheared");
 }

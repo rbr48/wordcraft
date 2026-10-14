@@ -249,24 +249,30 @@ fn gradient_over(b: kurbo::Rect, g: &wordcraft_doc::text_effects::TextGradient, 
     Some(Fill { paint: lg.into(), opacity: norm(alpha), rule: FillRule::NonZero })
 }
 
-/// The outlines of `glyphs` (glyph id, pen position) at `size`, as one path in page coordinates.
-///
-/// Italic (`italic`) shears each glyph about its pen position, the same shear `glyphs` gives the text
-/// itself, so a synthetic italic run's shadow and outline lean with its letters.
-fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], italic: bool) -> Option<Path> {
-    bez_path(&glyph_bez(face, size, glyphs, italic))
+/// The outlines of `glyphs` (glyph id, pen position) at `size`, as one path in page coordinates. `shear`
+/// is the baseline of a synthetic italic run (see `italic_baseline`), or `None` for upright text.
+fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], shear: Option<f32>) -> Option<Path> {
+    bez_path(&glyph_bez(face, size, glyphs, shear))
 }
 
-/// The outlines of `glyphs` (glyph id, pen position) at `size`, as one kurbo path in page coordinates.
-fn glyph_bez(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], italic: bool) -> kurbo::BezPath {
+/// The baseline a synthetic italic run leans about: `glyphs` shears the whole run about its first
+/// glyph's pen, so a shadow or outline must lean about the same point to sit on its letters.
+fn italic_baseline(glyphs: &[(u32, f32, f32)], italic: bool) -> Option<f32> {
+    if italic { glyphs.first().map(|&(_, _, y)| y) } else { None }
+}
+
+/// The outlines of `glyphs` (glyph id, pen position) at `size`, as one kurbo path in page coordinates,
+/// sheared about `shear` (a baseline, as `italic_baseline` gives) when it is set.
+fn glyph_bez(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], shear: Option<f32>) -> kurbo::BezPath {
     let db = wordcraft_fonts::FontDb::global();
     let scale = f64::from(size) / face.upem.max(1.0);
-    let skew = if italic { kurbo::Affine::new([1.0, 0.0, -0.21, 1.0, 0.0, 0.0]) } else { kurbo::Affine::IDENTITY };
+    // The shear `glyphs` puts on the text: a point moves left by 0.21 for each point below the baseline, and right for each point above.
+    let run = shear.map_or(kurbo::Affine::IDENTITY, |y0| kurbo::Affine::new([1.0, 0.0, -0.21, 1.0, 0.21 * f64::from(y0), 0.0]));
     let mut out = kurbo::BezPath::new();
     for &(g, x, y) in glyphs {
-        // Outlines are in font units, y-down: scale to the size, shear, then move to the pen position.
+        // Outlines are in font units, y-down: scale to the size, move to the pen position, then shear.
         let mut outline = (*db.outline(face, g)).clone();
-        outline.apply_affine(kurbo::Affine::translate((f64::from(x), f64::from(y))) * skew * kurbo::Affine::scale(scale));
+        outline.apply_affine(run * kurbo::Affine::translate((f64::from(x), f64::from(y))) * kurbo::Affine::scale(scale));
         out.extend(outline.elements().iter().copied());
     }
     out
@@ -945,7 +951,7 @@ impl Exporter<'_> {
                         }
                         None => {
                             let moved: Vec<(u32, f32, f32)> = glyphs.iter().map(|&(g, x, y)| (g, x + sh.dx, y + sh.dy)).collect();
-                            glyph_outlines(face, *size, &moved, *synth_italic)
+                            glyph_outlines(face, *size, &moved, italic_baseline(&moved, *synth_italic))
                         }
                     };
                     if let Some(p) = shadow {
@@ -979,7 +985,8 @@ impl Exporter<'_> {
                     self.link_rect(face, *size, glyphs, l);
                 }
                 if let Some(ol) = effects.active_outline() {
-                    let plain = if warped_path.is_none() { glyph_outlines(face, *size, glyphs, *synth_italic) } else { None };
+                    let plain =
+                        if warped_path.is_none() { glyph_outlines(face, *size, glyphs, italic_baseline(glyphs, *synth_italic)) } else { None };
                     if let Some(p) = warped_path.as_ref().or(plain.as_ref()) {
                         s.set_fill(None);
                         s.set_stroke(Some(Stroke {
@@ -1340,7 +1347,7 @@ impl Exporter<'_> {
             }
             None => {
                 // The italic shear is already on the transform stack here.
-                if let Some(path) = glyph_outlines(face, size, glyphs, false) {
+                if let Some(path) = glyph_outlines(face, size, glyphs, None) {
                     s.draw_path(&path);
                 }
             }
@@ -1545,7 +1552,7 @@ impl Exporter<'_> {
                     pen.push((g.gid, x + g.x_offset as f32 * k, -(g.y_offset as f32) * k));
                     x += g.x_advance as f32 * k;
                 }
-                if let Some(path) = glyph_outlines(&face, size, &pen, false) {
+                if let Some(path) = glyph_outlines(&face, size, &pen, None) {
                     s.draw_path(&path);
                 }
             }
