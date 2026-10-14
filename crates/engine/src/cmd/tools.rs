@@ -81,6 +81,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"run"?: name, "define"?: {"name": string, "steps": [{"command", "params"}]}, "delete"?: name}"#)
             .pure(),
         CommandSpec::new("tools.autocorrect", "AutoCorrect Options", "File › Options › Proofing", |s, v| {
+            if v.as_object().is_none_or(|m| m.is_empty()) {
+                s.ui_requests.push(json!({"open": "autocorrect"}));
+            }
             if let Some(b) = p::bool(v, "enabled") {
                 s.autocorrect_on = b;
             }
@@ -101,6 +104,9 @@ pub fn specs() -> Vec<CommandSpec> {
             {
                 s.autocorrect_user.retain(|(a, _)| a != f);
                 s.autocorrect_user.push((f.to_string(), t.to_string()));
+            }
+            if let Some(d) = p::str(v, "delete") {
+                s.autocorrect_user.retain(|(a, _)| a != d);
             }
             if let Some(w) = p::str(v, "addInitialCapsException") {
                 let w = w.trim();
@@ -125,7 +131,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "initialCapsExceptions": INITIAL_CAPS_EXCEPTIONS.iter().map(|e| e.to_string()).chain(s.autocorrect_initial_caps_exceptions.iter().cloned()).collect::<Vec<_>>(),
             }))
         })
-        .params(r#"{"enabled"?: bool, "twoInitialCaps"?: bool, "capsLock"?: bool, "capSentences"?: bool, "capCells"?: bool, "add"?: {"from": string, "to": string}, "addInitialCapsException"?: string, "deleteInitialCapsException"?: string}"#)
+        .params(r#"{"enabled"?: bool, "twoInitialCaps"?: bool, "capsLock"?: bool, "capSentences"?: bool, "capCells"?: bool, "add"?: {"from": string, "to": string}, "delete"?: string, "addInitialCapsException"?: string, "deleteInitialCapsException"?: string}"#)
         .pure(),
         CommandSpec::new("review.compare", "Compare", "Review › Compare", compare).params(r#"{"path"?: string, "text"?: string (revised version)}"#),
         CommandSpec::new("review.combine", "Combine", "Review › Compare", compare).params(r#"{"path"?: string}"#),

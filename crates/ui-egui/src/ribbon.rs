@@ -813,6 +813,8 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "Dropped (3 lines)", "insert.dropCap", json!({"lines": 3}));
                 mi(ui, app, "Dropped (4 lines)", "insert.dropCap", json!({"lines": 4}));
                 mi(ui, app, "Dropped (2 lines)", "insert.dropCap", json!({"lines": 2}));
+                ui.separator();
+                mi(ui, app, "Drop Cap Options…", "ui.dialog", json!({"name": "dropCap"}));
             });
         });
         stack(ui, |ui| {
@@ -1322,6 +1324,7 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "thesaurus", Some("Thesaurus"), "Thesaurus", "review.thesaurus", json!({}), false);
             small(ui, app, "wordCount", Some("Word Count"), "Word Count", "ui.dialog", json!({"name": "wordCount"}), false);
         });
+        small(ui, app, "autoCorrect", Some("AutoCorrect…"), "AutoCorrect Options", "tools.autocorrect", json!({}), false);
     });
     group(ui, "Speech", None, app, |ui, app| {
         big(ui, app, "readAloud", "Read\nAloud", "review.readAloud", json!({}), false);

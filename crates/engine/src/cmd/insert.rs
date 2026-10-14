@@ -92,6 +92,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"latex"?: string}"#),
         CommandSpec::new("insert.field", "Field", "Insert › Text › Quick Parts", field).key("Mod+F9").params(r#"{"instr": string, "result"?: string}"#),
         CommandSpec::new("insert.dropCap", "Drop Cap", "Insert › Text", |s, v| {
+            if v.as_object().is_none_or(|m| m.is_empty()) {
+                s.ui_requests.push(json!({"open": "dropCap"}));
+                let cur = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.drop_cap).unwrap_or(0);
+                return Ok(json!({"lines": cur}));
+            }
             let lines = p::u64(v, "lines").unwrap_or(3).min(10) as u8;
             super::para::fmt(s, &|p| p.drop_cap = if lines == 0 { None } else { Some(lines) })
         })

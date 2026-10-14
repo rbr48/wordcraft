@@ -269,7 +269,25 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Compiled release binaries `wordcraft.exe` (13.6 MB) and `wordcraft-cli.exe` (9.3 MB).
       - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.6 MB).
       - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.3 MB).
-
-
-
-
+  - **Modal Dialog Depth Expansion (M14.2 / Gap #7)**:
+    - **Drop Cap Dialog (`Dialog::DropCap`)**:
+      - Configures position (None, Dropped, In Margin) and lines to drop (1..=10).
+      - Intercepts `insert.dropCap` without arguments via `input_dialog` and dispatches cleanly.
+    - **Format Page Numbers Dialog (`Dialog::PageNumbers`)**:
+      - Number format selector (1, 2, 3... / a, b, c... / A, B, C... / i, ii, iii... / I, II, III...).
+      - Continuous numbering vs. Start at page number (1..=100,000) for the current section.
+      - Dispatches `layout.pageNumberFormat` with `"continue": true` or `"start": N`.
+    - **AutoCorrect Options Dialog (`Dialog::AutoCorrect`)**:
+      - 5 checkboxes for AutoCorrect behavioral rules (TWo INitial CApitals, capitalize first letter of sentences, capitalize first letter of table cells, capitalize names of days, correct accidental usage of cAPS LOCK key).
+      - Interactive search and filter table of built-in + user replacement entries.
+      - Replace and With inputs with live Add and Delete buttons dispatching `tools.autocorrect`.
+      - Ribbon button added to Review › Proofing, and "AutoCorrect Options…" added to File › Options › Proofing backstage.
+    - **Cross-reference Dialog (`Dialog::CrossReference`)**:
+      - Reference type selector: Heading, Bookmark, Figure, Table, Equation.
+      - Dynamic reference target enumeration using `wordcraft_engine::cmd::citations::ref_targets`.
+      - Insert reference to: Heading text / entire caption, Page number, Paragraph / label number, Above/below direction.
+      - Scrollable target list selection and insertion dispatching `insert.crossReference`.
+    - **Total Modal Dialog Count**: Expanded to 32 modal dialogs.
+    - **Test Coverage & Verification**:
+      - 4 dedicated unit tests in `crates/ui-egui/src/dialogs.rs`: `drop_cap_dialog_opens_and_sets_options`, `page_numbers_dialog_opens_and_sets_format`, `autocorrect_dialog_opens_and_manages_entries`, `cross_reference_dialog_opens_and_inserts_ref`.
+      - All 6 CI quality gates pass cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).

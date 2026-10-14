@@ -16,8 +16,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | Quick Access Toolbar | Undo, Redo, Repeat, AutoSave | customizable | 50% | 2–3 |
 | Customize Ribbon / Customize Keyboard | ❌ | ✅ | 0% | 6–10 |
 | Keyboard shortcuts | **101** bound in `CommandSpec::key` (measured) | ~250 default shortcuts | ~60% | 4–6 |
-| Modal dialogs | **22** (`Dialog` enum: Font, Paragraph, Tabs, Borders and Shading, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes; Columns, Symbol with Special Characters, Field (#321)) plus panes and menus for the rest | ~100 (Caption, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
-| Modal dialogs | **28** (`Dialog` enum: Font, Paragraph, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes, Columns, Symbol, Field, Language, Caption, Line Numbers, Hyphenation…) plus panes and menus for the rest | ~100 (Tabs, Borders and Shading, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~50% | 12–16 |
+| Modal dialogs | **32** (`Dialog` enum: Font, Paragraph, Tabs, Borders and Shading, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes, Columns, Symbol, Field, Language, Caption, Line Numbers, Hyphenation, Drop Cap, Format Page Numbers, AutoCorrect, Cross-reference…) plus panes and menus for the rest | ~100 (Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Envelopes, Labels, Mail Merge, Options panes…) | ~55% | 10–14 |
 | Task panes (Navigation, Styles, Comments, Reviewing, Format Picture/Shape, Thesaurus, Accessibility, Clipboard, Selection) | Navigation, Styles, Comments, Thesaurus, Accessibility, Read Aloud, Zotero; Style Inspector (#236); Clipboard pane (#264) open | all | 70% | 4–6 |
 | Context menus (right-click) | text, spelling suggestions; objects and tables partial | rich per context | 55% | 3–5 |
 | Backstage (Home, New, Open, Info, Save As, Print, Share, Export, Options) | Home and New separate (#254), Info properties kept (#268) | | 68% | 4–6 |
@@ -38,6 +37,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Modal dialog depth: Drop Cap (`Dialog::DropCap`), Format Page Numbers (`Dialog::PageNumbers`), AutoCorrect Options (`Dialog::AutoCorrect`), and Cross-reference (`Dialog::CrossReference`) with ribbon, backstage and command option binding |
 | 2026-10-14 | minor | Modal dialog depth: Insert Caption (`Dialog::Caption`), Line Numbers (`Dialog::LineNumbers`), and Hyphenation (`Dialog::Hyphenation`) with ribbon dropdown routing and full command option binding |
 | 2026-10-13 | trivial | Font dialog tabbed Advanced typography (Font vs Advanced tabs, Character Spacing Scale %, Spacing Expanded/Condensed, Position Raised/Lowered, Kerning threshold, and OpenType ligatures/number forms) |
 | 2026-10-13 | trivial | Interactive Canvas Picture Crop Tool: thick L-shaped corner brackets and edge bar handles with live drag on canvas, rule-of-thirds grid, ribbon toggle button, and context menu item |

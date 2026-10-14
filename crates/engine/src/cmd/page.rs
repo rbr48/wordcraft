@@ -103,8 +103,20 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         }),
         CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", |s, v| {
+            if v.as_object().is_none_or(|m| m.is_empty()) {
+                s.ui_requests.push(json!({"open": "pageNumbers"}));
+                return Ok(json!({
+                    "format": sect(s).page_num_format.ooxml(),
+                    "start": sect(s).page_num_start,
+                    "continue": sect(s).page_num_start.is_none(),
+                }));
+            }
             let fmt = p::str(v, "format").map(wordcraft_doc::section::NumFormat::from_ooxml);
-            let start = p::u64(v, "start").map(|x| x.min(100_000) as u32);
+            let start = if p::bool(v, "continue").unwrap_or(false) {
+                None
+            } else {
+                p::u64(v, "start").map(|x| x.min(100_000) as u32)
+            };
             with_sect(s, |x| {
                 if let Some(f) = fmt {
                     x.page_num_format = f;
@@ -112,7 +124,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 x.page_num_start = start;
             })
         })
-        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n}"#),
+        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n, "continue"?: bool}"#),
         CommandSpec::new("layout.section", "Section Properties", "Layout › Page Setup", |s, _| {
             Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
         })

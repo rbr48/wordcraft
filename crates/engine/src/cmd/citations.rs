@@ -855,6 +855,7 @@ fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let to = p::str(v, "to").unwrap_or("heading");
     let targets = ref_targets(s, to);
     let Some(target) = p::str(v, "target") else {
+        s.ui_requests.push(json!({"open": "crossReference", "to": to}));
         return Ok(Value::Array(targets.iter().map(|(t, _)| json!(t)).collect()));
     };
     let find = |ts: Vec<(String, Pos)>| ts.into_iter().find(|(t, _)| t == target || t.starts_with(target));
@@ -892,7 +893,7 @@ fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// Cross-reference targets of a kind: (shown text or bookmark name, position).
-fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
+pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
     let mut targets: Vec<(String, Pos)> = Vec::new();
     match to {
         "bookmark" => targets = s.doc.bookmarks(),
