@@ -48,7 +48,7 @@ font can't match Word's metrics.
 | Document grid (`w:docGrid`, lines per page, characters per line) | ❌ | East Asian documents paginate differently without it | 4–6 |
 | Vertical text (`tbRl`) in sections and text boxes; cell text direction | 🟡 | cell text direction landed (#245); page-level and text-box vertical text missing | 8–12 |
 | Ruby / phonetic guide, enclose characters, combined characters | ✅ | Phonetic Guide (`<w:ruby>`) and Enclose Characters (`format.enclose`) landed (2026-10-14) with ECMA-376 OOXML round-trip, layout elevation, vector rendering and modal dialogs | — |
-| Bidirectional paragraphs, mixed-direction lines | 🟡 | #207; right-to-left tables (`w:bidiVisual`: first column on the right, sides, indent and alignment mirrored) landed 2026-10-12; RTL sections missing | 4–6 |
+| Bidirectional paragraphs, mixed-direction lines, RTL sections | ✅ | #207; right-to-left tables (`w:bidiVisual`), Arabic Kashida elongation justification (2026-10-14), and RTL sections (`<w:bidi/>` with mirrored right gutter, RTL multi-column ordering, right-margin line numbering, and right-aligned footnote separators) landed (2026-10-14) | — |
 | Equations: display layout, numbering, wrapping long display equations | ✅ | #191; long display equations break at top-level operators (`m:brkBin`, `m:brkBinSub`), manual breaks and `m:alnAt`, continuation lines indented by `m:wrapIndent` or set right (`m:wrapRight`) (#326) | — |
 | Hidden text excluded from breaking and hyphenation | ✅ | #173 | — |
 | Fields: PAGE, NUMPAGES, SECTIONPAGES, TOC page numbers | ✅ | #52 | — |
@@ -68,6 +68,7 @@ font can't match Word's metrics.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | RTL sections (`<w:bidi/>`), mirrored right-hand gutter, right-to-left multi-column flow, right-margin line numbering, and right-aligned footnote separator rules landed |
 | 2026-10-14 | minor | Contour Text Wrap Polygon (`wrapPolygon`) landed with ECMA-376 DrawingML `<wp:wrapPolygon>` round-trip in DOCX, scanline polygon edge intersection rasterization in layout, and automated tight wrapping for non-rectangular shapes (stars, hearts, hexagons, octagons, freeforms) |
 | 2026-10-14 | minor | Phonetic Guide (`<w:ruby>`) and Enclose Characters (`format.enclose`) landed with ECMA-376 OOXML round-trip, elevated line layout, raised vector glyph rendering, Home ribbon tab buttons, and interactive modal dialogs (`Dialog::Phonetic`, `Dialog::Enclose`) |
 | 2026-10-13 | trivial | Space before at the top of a page like Word: after a page break the paragraph's mark stays with the break (no space at the top of the next page), a paragraph starting with a page break keeps its space before on the new page, and the previous space after comes off after a page break before or a section break (32 cases measured in Word for Windows) |

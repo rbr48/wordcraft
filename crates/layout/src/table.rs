@@ -170,6 +170,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Option
                 exclusions: &[],
                 eq_number: 0,
                 fit_objects: false,
+                sect_rtl: false,
             };
             let (mut min, mut max) = (EMPTY_TEXT, EMPTY_TEXT);
             if cell.props.vmerge != VMerge::Continue && !cell.props.text_direction.is_turned() {
@@ -380,7 +381,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     };
     // A right-to-left table is laid out as its mirror image: its indent and alignment count from
     // the right edge, and its first column is on the right.
-    let rtl = t.props.rtl;
+    let rtl = t.props.rtl || ctx.cur_sect_rtl;
     let x = if rtl { avail - outer - x } else { x };
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;

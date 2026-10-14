@@ -290,6 +290,7 @@ struct Key {
     excl: u64,
     eq: u32,
     fit: bool,
+    sect_rtl: bool,
 }
 
 /// Memoised paragraph layouts.
@@ -358,6 +359,8 @@ struct Ctx<'a> {
     eq_count: u32,
     /// Bounds laying out text boxes inside text boxes, for the whole layout.
     boxes: wordcraft_doc::BoxBudget,
+    /// Whether the current section has right-to-left direction (`<w:bidi/>`).
+    cur_sect_rtl: bool,
 }
 
 impl Ctx<'_> {
@@ -384,6 +387,7 @@ impl Ctx<'_> {
             exclusions: &[],
             eq_number: 0,
             fit_objects: false,
+            sect_rtl: false,
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
@@ -429,6 +433,7 @@ impl Ctx<'_> {
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
             eq: if eq_here > 0 { eq_number } else { 0 },
             fit: self.boxes.inside(),
+            sect_rtl: self.cur_sect_rtl,
         };
         self.cache.used.insert(key.clone());
         if let Some(pl) = self.cache.paras.get(&key) {
@@ -448,6 +453,7 @@ impl Ctx<'_> {
             exclusions,
             eq_number,
             fit_objects: self.boxes.inside(),
+            sect_rtl: self.cur_sect_rtl,
         };
         let pl = Arc::new(para::layout_para(p, &env));
         self.cache.paras.insert(key, pl.clone());
@@ -669,7 +675,7 @@ fn box_float_table_rect(
     let w = tl.width.clamp(1.0, 100_000.0);
     let page_x = |s: &SectionProps| match f.h_rel {
         Anchor::Page => Some((0.0, s.page_w)),
-        Anchor::Margin => Some((s.margin_left + s.gutter, s.text_width())),
+        Anchor::Margin => Some((s.text_left(), s.text_width())),
         _ => None,
     };
     let page_y = |s: &SectionProps| match f.v_rel {
@@ -990,7 +996,7 @@ impl PageBuilder<'_> {
             return;
         }
         let total = self.notes_h();
-        let x = self.sect.margin_left + self.sect.gutter;
+        let x = self.sect.text_left();
         // The note area starts below the text (a page of continued notes alone: at its top).
         let area = self.bottom.max(self.body_floor());
         let fits = total <= self.orig_bottom - area + 0.01;
@@ -1028,7 +1034,8 @@ impl PageBuilder<'_> {
         if let Some(pg) = self.pages.last_mut() {
             let len = if cont { self.sect.text_width() } else { 144.0 };
             let sy = top + NOTE_SEP / 2.0;
-            pg.items.push(Placed::Rule { x0: x, y0: sy, x1: x + len, y1: sy, border: Border::single(0.5) });
+            let rx = if self.sect.rtl { self.sect.text_right() - len } else { x };
+            pg.items.push(Placed::Rule { x0: rx, y0: sy, x1: rx + len, y1: sy, border: Border::single(0.5) });
             for (n, ny) in placed {
                 for mut it in n.items {
                     it.translate(x, ny);
@@ -1066,7 +1073,7 @@ impl PageBuilder<'_> {
         let s = self.sect;
         self.number = self.number.saturating_add(1);
         let (w, h) = if self.web { (s.page_w, f32::MAX / 4.0) } else { (s.page_w, s.page_h) };
-        let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (s.page_h - s.margin_bottom - body_top).max(36.0));
+        let body = Rect::new(s.text_left(), body_top, s.text_width(), (s.page_h - s.margin_bottom - body_top).max(36.0));
         let mut decor = Vec::new();
         if !self.web {
             // Page borders, measured from the page edge (Word's default), so they surround the
@@ -1085,9 +1092,12 @@ impl PageBuilder<'_> {
             // Lines between columns.
             if s.columns.separator && s.columns.count > 1 {
                 let cols = s.column_boxes();
+                let base_x = s.text_left();
                 for w in cols.windows(2) {
-                    if let [(ax, aw), (bx, _)] = w {
-                        let x = s.margin_left + s.gutter + (ax + aw + bx) / 2.0;
+                    if let [(ax, aw), (bx, bw)] = w {
+                        let gap_left = ax.min(*bx) + if ax < bx { *aw } else { *bw };
+                        let gap_right = ax.max(*bx);
+                        let x = base_x + (gap_left + gap_right) / 2.0;
                         decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: s.page_h - s.margin_bottom, border: Border::single(0.5) });
                     }
                 }
@@ -1109,7 +1119,7 @@ impl PageBuilder<'_> {
         }
     }
     fn col_x(&self) -> f32 {
-        self.sect.margin_left + self.sect.gutter + self.cols.get(self.col).map(|c| c.0).unwrap_or(0.0)
+        self.sect.text_left() + self.cols.get(self.col).map(|c| c.0).unwrap_or(0.0)
     }
     fn col_w(&self) -> f32 {
         self.cols.get(self.col).map(|c| c.1).unwrap_or_else(|| self.sect.text_width())
@@ -1208,7 +1218,7 @@ impl PageBuilder<'_> {
         }
 
         let s = self.sect;
-        let base_x = s.margin_left + s.gutter;
+        let base_x = s.text_left();
         let mut col_y = self.top;
         let mut max_b = self.top;
 
@@ -1266,10 +1276,12 @@ impl PageBuilder<'_> {
         // Bounded column separators: stop at the bottom of the balanced text.
         if s.columns.separator && s.columns.count > 1 {
             let cols = s.column_boxes();
-            let base_x = s.margin_left + s.gutter;
+            let base_x = s.text_left();
             for w in cols.windows(2) {
-                if let [(ax, aw), (bx, _)] = w {
-                    let sep_x = base_x + (ax + aw + bx) / 2.0;
+                if let [(ax, aw), (bx, bw)] = w {
+                    let gap_left = ax.min(*bx) + if ax < bx { *aw } else { *bw };
+                    let gap_right = ax.max(*bx);
+                    let sep_x = base_x + (gap_left + gap_right) / 2.0;
                     let mut found = false;
                     for it in &mut pg.items {
                         if let Placed::Rule { x0, x1, y0, y1, .. } = it
@@ -1324,6 +1336,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         numbers: HashMap::new(),
         eq_count: 0,
         boxes: wordcraft_doc::BoxBudget::default(),
+        cur_sect_rtl: false,
     };
     let sections = doc.sections();
     let web = opts.view != ViewMode::Print;
@@ -1372,6 +1385,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         let sect: &SectionProps = if web { sect_ref } else { sect };
         pb.sect = sect;
         pb.sect_idx = si;
+        ctx.cur_sect_rtl = sect.rtl;
         let body_top = if web { sect.margin_top } else { body_top_for(&mut ctx, sect, sect.headers.default) };
         let first_top = if web || !sect.title_page { body_top } else { body_top_for(&mut ctx, sect, sect.headers.first) };
         let restart = sect.page_num_start;
@@ -1512,9 +1526,10 @@ fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Option<f32> {
 fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 {
     let Some(id) = header else { return sect.margin_top };
     let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
+    ctx.cur_sect_rtl = sect.rtl;
     let blocks = part.blocks.clone();
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
-    let frame = PageFrame { sect, origin: (sect.margin_left + sect.gutter, sect.header) };
+    let frame = PageFrame { sect, origin: (sect.text_left(), sect.header) };
     let h = layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), None, 0, Some(frame)).height;
     // Word starts the body right below a header that reaches past the top margin, no gap.
     sect.margin_top.max(sect.header + h)
@@ -1542,12 +1557,13 @@ fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: f32, h: f32
     let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
     // Each axis: the reference area's start and extent, in page coordinates.
     let page_x = |s: &SectionProps| {
-        let left = s.margin_left + s.gutter;
+        let left = s.text_left();
+        let right_m = if s.rtl { s.margin_right + s.gutter } else { s.margin_right };
         match float.h_rel {
             Anchor::Page => Some((0.0, s.page_w)),
             Anchor::Margin => Some((left, s.text_width())),
             Anchor::LeftMargin | Anchor::InsideMargin => Some((0.0, left)),
-            Anchor::RightMargin | Anchor::OutsideMargin => Some((s.page_w - s.margin_right, s.margin_right)),
+            Anchor::RightMargin | Anchor::OutsideMargin => Some((s.page_w - right_m, right_m)),
             _ => None,
         }
     };
@@ -2119,13 +2135,14 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
                 let w = num.lines.first().and_then(|l| l.xs.last().copied()).unwrap_or(10.0);
                 let dist = if ln.distance > 0.0 { ln.distance } else { 18.0 };
                 let ly = y + (line.top - first.top) + (line.baseline - line.top) - num.lines.first().map(|l| l.baseline).unwrap_or(10.0);
+                let x = if pb.sect.rtl { pb.sect.text_right() + dist } else { pb.sect.text_left() - dist - w };
                 items.push(Placed::Lines {
                     story: StoryRef::Part(u32::MAX),
                     path: Path(vec![]),
                     para: num.clone(),
                     l0: 0,
                     l1: 1,
-                    x: pb.sect.margin_left + pb.sect.gutter - dist - w,
+                    x,
                     y: ly,
                     turn: TextDirection::Horizontal,
                 });
@@ -2184,6 +2201,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
                 exclusions: &[],
                 eq_number: ctx.eq_count,
                 fit_objects: false,
+                sect_rtl: ctx.cur_sect_rtl,
             };
             let _ = rp;
             let pl = para::layout_para(p, &env);
@@ -2310,7 +2328,7 @@ fn float_table_h_area(pb: &PageBuilder, f: &TableFloat) -> (f32, f32) {
     let s = pb.sect;
     match f.h_rel {
         Anchor::Page => (0.0, s.page_w),
-        Anchor::Margin => (s.margin_left + s.gutter, s.text_width()),
+        Anchor::Margin => (s.text_left(), s.text_width()),
         _ => (pb.col_x(), pb.col_w()),
     }
 }
@@ -2356,6 +2374,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
     }
     for (i, page) in pages.iter_mut().enumerate() {
         let Some((_, sect)) = sections.get(page.section) else { continue };
+        ctx.cur_sect_rtl = sect.rtl;
         // Inherit header/footer references from earlier sections (Word's "link to previous").
         let pick = |get: &dyn Fn(&SectionProps) -> wordcraft_doc::section::HeaderSet| -> Option<u32> {
             let mut set = get(sect);
@@ -2386,7 +2405,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
         ctx.fields.section_pages = per_section.get(&page.section).copied().unwrap_or(1);
         ctx.fields.section = page.section as u32 + 1;
         let w = sect.text_width();
-        let x = sect.margin_left + sect.gutter;
+        let x = sect.text_left();
         if let Some(id) = hid
             && let Some(part) = ctx.doc.parts.get(&id)
         {

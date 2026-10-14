@@ -521,3 +521,76 @@ fn arabic_kashida_hit_test_and_caret_traversal() {
         assert!((bx - c.x).abs() < 0.05, "offset {off} caret x {cx} matched back caret x {bx}", cx = c.x);
     }
 }
+
+#[test]
+fn rtl_section_defaults_paragraphs_to_rtl() {
+    let s = "این یک متن آزمایشی است.";
+    let mut d = Document::from_text(s);
+    // The paragraph does NOT explicitly specify `bidi`.
+    assert_eq!(d.body[0].as_para().unwrap().props.bidi, None);
+
+    // With section rtl = true:
+    d.last_section.rtl = true;
+    let l = lay(&d);
+    let right = 612.0 - 72.0;
+    // Caret at start of paragraph is at the right margin because the section is RTL.
+    assert!((caret_x(&l, 0, 0) - right).abs() < 0.5, "caret in RTL section starts at right margin: {}", caret_x(&l, 0, 0));
+
+    // Glyphs flow from right to left.
+    let (pl, px) = first_line(&l, 0);
+    assert!(pl.rp.bidi, "paragraph resolved bidi = true from the RTL section");
+    assert!((px - 72.0).abs() < 0.5, "paragraph placed at body text left margin");
+}
+
+#[test]
+fn rtl_section_multi_column_flows_right_to_left() {
+    // In an RTL section, column 0 is the right column, column 1 is the left column.
+    let mut d = Document::from_text("Right column paragraph.\u{000E}Left column paragraph.");
+    d.last_section.rtl = true;
+    d.last_section.columns = wordcraft_doc::section::Columns { count: 2, space: 36.0, separator: true, widths: Vec::new() };
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+
+    let lines_x: Vec<f32> = l.pages[0].items.iter().filter_map(|it| if let Placed::Lines { x, .. } = it { Some(*x) } else { None }).collect();
+    assert_eq!(lines_x.len(), 2, "two column lines placed");
+
+    let x0 = lines_x[0];
+    let x1 = lines_x[1];
+
+    // In an RTL section with 2 columns:
+    // Text width = 612 - 72 - 72 = 468. Each column = (468 - 36) / 2 = 216.
+    // Col 0 is on the RIGHT: x = 72 + 252 = 324.
+    // Col 1 is on the LEFT: x = 72 + 0 = 72.
+    assert!((x0 - 324.0).abs() < 1.0, "Column 0 sits on the right: {x0}");
+    assert!((x1 - 72.0).abs() < 1.0, "Column 1 sits on the left: {x1}");
+    assert!(x0 > x1, "Column 0 is to the right of Column 1");
+}
+
+#[test]
+fn rtl_section_line_numbering_and_gutter() {
+    let mut d = Document::from_text("سطر اول\nسطر دوم\nسطر سوم");
+    d.last_section.rtl = true;
+    d.last_section.gutter = 18.0;
+    d.last_section.line_numbers = Some(wordcraft_doc::section::LineNumbering {
+        count_by: 1,
+        start: 1,
+        distance: 12.0,
+        restart: wordcraft_doc::section::LineNumberRestart::Page,
+    });
+    let l = lay(&d);
+    let p = &l.pages[0];
+
+    // Gutter is on the right, so text_right is 612 - 72 - 18 = 522.
+    assert_eq!(d.last_section.text_left(), 72.0);
+    assert_eq!(d.last_section.text_right(), 522.0);
+
+    // Find the line numbering items in page items:
+    let line_num_items: Vec<f32> =
+        p.items.iter().filter_map(|it| if let Placed::Lines { story: StoryRef::Part(u32::MAX), x, .. } = it { Some(*x) } else { None }).collect();
+
+    assert!(!line_num_items.is_empty(), "line numbers should be placed");
+    for x in line_num_items {
+        // Line numbers sit to the right of text_right (522 + distance 12 = 534).
+        assert!((x - 534.0).abs() < 1.0, "Line number x {x} sits in the right margin");
+    }
+}

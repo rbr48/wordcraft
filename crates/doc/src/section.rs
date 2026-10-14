@@ -332,6 +332,20 @@ impl Default for SectionProps {
 }
 
 impl SectionProps {
+    /// Left coordinate of the body text area, points.
+    /// In an LTR section, the gutter is on the left: `margin_left + gutter`.
+    /// In an RTL section, the binding/spine is on the right: `margin_left`.
+    pub fn text_left(&self) -> f32 {
+        if self.rtl { self.margin_left } else { self.margin_left + self.gutter }
+    }
+
+    /// Right coordinate of the body text area, points.
+    /// In an LTR section, `page_w - margin_right`.
+    /// In an RTL section, the gutter is on the right: `page_w - margin_right - gutter`.
+    pub fn text_right(&self) -> f32 {
+        if self.rtl { self.page_w - self.margin_right - self.gutter } else { self.page_w - self.margin_right }
+    }
+
     /// Width of the text area, points.
     pub fn text_width(&self) -> f32 {
         (self.page_w - self.margin_left - self.margin_right - self.gutter).max(18.0)
@@ -360,9 +374,32 @@ impl SectionProps {
         }
     }
     /// Column (x offset from the text area's left, width) for each column.
+    /// In an RTL section (`rtl = true`), columns are ordered right-to-left:
+    /// column 0 is the rightmost column, column 1 sits to its left, etc.
     pub fn column_boxes(&self) -> Vec<(f32, f32)> {
         let tw = self.text_width();
         let n = self.columns.count.clamp(1, 45) as usize;
+        if self.rtl {
+            if !self.columns.widths.is_empty() && self.columns.widths.len() == n {
+                let mut right = tw;
+                let mut boxes = Vec::with_capacity(n);
+                for &(w, sp) in &self.columns.widths {
+                    let w = w.max(18.0);
+                    let left = (right - w).max(0.0);
+                    boxes.push((left, w));
+                    right = (left - sp).max(0.0);
+                }
+                return boxes;
+            }
+            let space = self.columns.space.max(0.0);
+            let w = ((tw - space * (n as f32 - 1.0)) / n as f32).max(18.0);
+            return (0..n)
+                .map(|i| {
+                    let left = (tw - (i as f32 + 1.0) * w - i as f32 * space).max(0.0);
+                    (left, w)
+                })
+                .collect();
+        }
         if !self.columns.widths.is_empty() && self.columns.widths.len() == n {
             let mut x = 0.0;
             return self
@@ -420,5 +457,44 @@ mod tests {
         assert_eq!(b.len(), 2);
         assert_eq!(b[0], (0.0, 216.0));
         assert_eq!(b[1], (252.0, 216.0));
+    }
+
+    #[test]
+    fn rtl_section_geometry() {
+        // LTR section: gutter is on left.
+        let ltr = SectionProps {
+            page_w: 612.0,
+            margin_left: 72.0,
+            margin_right: 72.0,
+            gutter: 18.0,
+            rtl: false,
+            columns: Columns { count: 2, space: 36.0, ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(ltr.text_width(), 450.0);
+        assert_eq!(ltr.text_left(), 90.0);
+        assert_eq!(ltr.text_right(), 540.0);
+        let ltr_cols = ltr.column_boxes();
+        assert_eq!(ltr_cols[0], (0.0, 207.0));
+        assert_eq!(ltr_cols[1], (243.0, 207.0));
+
+        // RTL section: gutter is on right (spine/binding side).
+        let rtl = SectionProps {
+            page_w: 612.0,
+            margin_left: 72.0,
+            margin_right: 72.0,
+            gutter: 18.0,
+            rtl: true,
+            columns: Columns { count: 2, space: 36.0, ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(rtl.text_width(), 450.0);
+        assert_eq!(rtl.text_left(), 72.0);
+        assert_eq!(rtl.text_right(), 522.0);
+        let rtl_cols = rtl.column_boxes();
+        assert_eq!(rtl_cols.len(), 2);
+        // Column 0 is the rightmost column (offset 243 from text_left), Col 1 is to the left (offset 0).
+        assert_eq!(rtl_cols[0], (243.0, 207.0));
+        assert_eq!(rtl_cols[1], (0.0, 207.0));
     }
 }

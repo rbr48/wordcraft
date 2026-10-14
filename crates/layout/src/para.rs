@@ -307,6 +307,8 @@ pub struct ParaEnv<'a> {
     /// Shrink inline drawings wider than the line to fit it: in text boxes, which don't clip what
     /// runs past their sides. Elsewhere such a drawing keeps its size and the page edge clips it.
     pub fit_objects: bool,
+    /// Whether the surrounding section has right-to-left text direction (`<w:bidi/>`).
+    pub sect_rtl: bool,
 }
 
 /// An area text wraps around.
@@ -733,6 +735,9 @@ pub(crate) fn left_out(rc: &ResolvedChar, show_hidden: bool, hide_deleted: bool)
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let doc = env.doc;
     let mut rp = doc.styles.resolve_para_in(&p.props, env.table.map(|t| &t.para));
+    if p.props.bidi.is_none() && env.sect_rtl {
+        rp.bidi = true;
+    }
     // List level indents apply unless the paragraph sets its own.
     if let Some((_, lvl)) = &env.label {
         if p.props.indent_left.is_none() {

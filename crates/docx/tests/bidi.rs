@@ -139,3 +139,18 @@ fn hostile_bidi_markup_is_bounded() {
     assert_eq!(c.lang_bidi, None);
     assert!(c.size_cs.is_none_or(|s| (1.0..=1638.0).contains(&s)));
 }
+
+#[test]
+fn rtl_section_round_trips() {
+    let body = r#"<w:p><w:r><w:t>RTL Section Content</w:t></w:r></w:p><w:sectPr><w:bidi/><w:cols w:num="2" w:space="720"/></w:sectPr>"#;
+    let bytes = docx(body);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    assert!(d.last_section.rtl, "read w:bidi in sectPr as rtl = true");
+
+    let out = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&out);
+    assert!(xml.contains("<w:bidi/>"), "written sectPr contains <w:bidi/>");
+
+    let back = wordcraft_docx::read(&out).unwrap();
+    assert!(back.last_section.rtl, "round-tripped section keeps rtl = true");
+}
