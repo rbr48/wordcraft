@@ -466,6 +466,11 @@ pub enum Dialog {
         text: String,
         shape: String,
     },
+    /// Insert › Text › WordArt
+    WordArt {
+        text: String,
+        selected: usize,
+    },
 }
 
 /// Standard world languages matching Microsoft Word proofing language list (name, BCP-47 tag).
@@ -957,6 +962,7 @@ impl Dialog {
             Dialog::CrossReference { .. } => "crossReference",
             Dialog::Phonetic { .. } => "phonetic",
             Dialog::Enclose { .. } => "enclose",
+            Dialog::WordArt { .. } => "wordArt",
         }
     }
 
@@ -1289,6 +1295,11 @@ impl Dialog {
                 let sel = app.session.selected_text();
                 Dialog::Enclose { text: sel, shape: "circle".to_string() }
             }
+            "wordArt" => {
+                let sel = app.session.selected_text();
+                let text = if sel.is_empty() { "Your text here".to_string() } else { sel };
+                Dialog::WordArt { text, selected: 0 }
+            }
             _ => return None,
         })
     }
@@ -1431,6 +1442,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::CrossReference { .. } => "Cross-reference",
         Dialog::Phonetic { .. } => "Phonetic Guide",
         Dialog::Enclose { .. } => "Enclose Characters",
+        Dialog::WordArt { .. } => "WordArt Gallery",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -3522,6 +3534,108 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
+        Dialog::WordArt { text, selected } => {
+            ui.horizontal(|ui| {
+                ui.label(tl!("Text:"));
+                ui.add(egui::TextEdit::singleline(text).desired_width(260.0));
+            });
+            ui.add_space(8.0);
+            ui.label(tl!("Select a WordArt style:"));
+            ui.add_space(4.0);
+
+            egui::Grid::new("wordart_gallery_grid").spacing(vec2(8.0, 8.0)).show(ui, |ui| {
+                for (idx, style) in wordcraft_engine::cmd::wordart::WORDART_STYLES.iter().enumerate() {
+                    let is_sel = *selected == idx;
+                    let (r, g, b) = (style.color.0, style.color.1, style.color.2);
+                    let text_color = egui::Color32::from_rgb(r, g, b);
+                    let bg_color = if is_sel { egui::Color32::from_rgba_unmultiplied(r, g, b, 35) } else { ui.visuals().faint_bg_color };
+                    let stroke = if is_sel {
+                        egui::Stroke::new(2.0, text_color)
+                    } else {
+                        egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
+                    };
+
+                    let (rect, resp) = ui.allocate_exact_size(vec2(54.0, 48.0), Sense::click());
+                    if resp.clicked() {
+                        *selected = idx;
+                    }
+
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter();
+                        painter.rect_filled(rect, 4.0, bg_color);
+                        painter.rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Inside);
+
+                        let font_id = egui::FontId::proportional(24.0);
+                        let center = rect.center() - vec2(0.0, 4.0);
+
+                        if style.shadow_shape.is_some() || style.shadow_char {
+                            painter.text(
+                                center + vec2(1.5, 1.5),
+                                egui::Align2::CENTER_CENTER,
+                                "A",
+                                font_id.clone(),
+                                egui::Color32::from_rgba_unmultiplied(128, 128, 128, 110),
+                            );
+                        } else if let Some(glow) = &style.glow {
+                            let (gr, gg, gb) = (glow.color.0, glow.color.1, glow.color.2);
+                            painter.text(
+                                center,
+                                egui::Align2::CENTER_CENTER,
+                                "A",
+                                egui::FontId::proportional(26.0),
+                                egui::Color32::from_rgba_unmultiplied(gr, gg, gb, 90),
+                            );
+                        }
+
+                        painter.text(center, egui::Align2::CENTER_CENTER, "A", font_id, text_color);
+
+                        painter.text(
+                            rect.center_bottom() - vec2(0.0, 2.0),
+                            egui::Align2::CENTER_BOTTOM,
+                            format!("{}", idx + 1),
+                            egui::FontId::proportional(9.0),
+                            ui.visuals().text_color(),
+                        );
+                    }
+
+                    if (idx + 1) % 5 == 0 {
+                        ui.end_row();
+                    }
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                let cur_idx = (*selected).min(14);
+                let cur_style = &wordcraft_engine::cmd::wordart::WORDART_STYLES[cur_idx];
+                ui.label(format!("{}: {}", tl!("Preset"), tl!(cur_style.name)));
+                ui.vertical_centered(|ui| {
+                    let (r, g, b) = (cur_style.color.0, cur_style.color.1, cur_style.color.2);
+                    let preview_text = if text.trim().is_empty() { "Your text here" } else { text.as_str() };
+                    let mut rich = egui::RichText::new(preview_text).size(20.0).color(egui::Color32::from_rgb(r, g, b));
+                    if cur_style.bold {
+                        rich = rich.strong();
+                    }
+                    if cur_style.italic {
+                        rich = rich.italics();
+                    }
+                    ui.label(rich);
+                });
+            });
+
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                let _ = app.run(
+                    "insert.wordArt",
+                    json!({
+                        "text": text,
+                        "preset": *selected,
+                    }),
+                );
+            }
+            ok || cancel
+        }
     }
 }
 
@@ -4293,5 +4407,22 @@ mod tests {
             wordcraft_doc::para::InlineObject::Field { instr, result, .. } => instr.contains("EQ \\o\\ac") && result == "①",
             _ => false,
         }));
+    }
+
+    #[test]
+    fn wordart_dialog_opens_and_inserts() {
+        let mut app = app_with("Hero Heading");
+        app.run("select.all", json!({})).unwrap();
+
+        let d = Dialog::open("wordArt", &mut app).expect("wordArt dialog");
+        let Dialog::WordArt { text, selected } = d else {
+            panic!("not wordArt dialog");
+        };
+        assert_eq!(text, "Hero Heading");
+        assert_eq!(selected, 0);
+
+        let res = app.run("insert.wordArt", json!({"text": text, "preset": 1})).unwrap();
+        assert_eq!(res["text"], "Hero Heading");
+        assert_eq!(res["preset"], "style2");
     }
 }

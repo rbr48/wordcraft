@@ -809,7 +809,15 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
                 }
                 mi(ui, app, "Field…", "ui.dialog", json!({"name": "field"}));
             });
-            small(ui, app, "wordArt", Some("WordArt"), "WordArt", "insert.wordArt", json!({}), false);
+            menu_button(ui, app, "wordArt", Some("WordArt"), "WordArt", false, |ui, app| {
+                mi(ui, app, "Fill: Black; Shadow", "insert.wordArt", json!({"preset": 0}));
+                mi(ui, app, "Fill: Blue, Accent 1; Shadow", "insert.wordArt", json!({"preset": 1}));
+                mi(ui, app, "Fill: Orange, Accent 2; Outline", "insert.wordArt", json!({"preset": 2}));
+                mi(ui, app, "Fill: White; Outline: Blue", "insert.wordArt", json!({"preset": 3}));
+                mi(ui, app, "Fill: Gold, Accent 4; Shadow", "insert.wordArt", json!({"preset": 4}));
+                ui.separator();
+                mi(ui, app, "More WordArt Styles…", "ui.dialog", json!({"name": "wordArt"}));
+            });
             menu_button(ui, app, "dropCap", Some("Drop Cap"), "Drop Cap", false, |ui, app| {
                 mi(ui, app, "None", "insert.dropCap", json!({"lines": 0}));
                 mi(ui, app, "Dropped (3 lines)", "insert.dropCap", json!({"lines": 3}));

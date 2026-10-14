@@ -329,4 +329,20 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Added `phonetic_guide_dialog_opens_and_applies_ruby` and `enclose_characters_dialog_opens_and_encloses` in `crates/ui-egui/src/dialogs.rs`.
       - Survived hostile/garbage parameters without panics in `crates/engine/src/tests.rs::hostile_params_never_panic`.
       - All 6 CI quality gates verified passing: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **M17.1: WordArt Presets Gallery & Styled Typography Objects (Gap #10 Advancement)**:
+    - **Engine Architecture & Presets (`crates/engine/src/cmd/wordart.rs`, `crates/engine/src/cmd/insert.rs`)**:
+      - Implemented `WORDART_STYLES` containing 15 standard Microsoft Word Quick Style presets covering charcoal shadow, blue accent shadow, orange outline, white outline with blue shadow, gold bevel, teal glow, ruby red shadow, white with orange glow, purple glow, slate blue glow, black neon blue, navy reflection, amber sunrise, emerald shadow, and rose gold glow.
+      - Defined `WordArtStyle` with font, size, weight, slant, color, outline, shadow, and shape effects (`Shadow`, `Glow`).
+      - Created `insert_wordart` inserting a transparent borderless floating DrawingML text box (`ShapeKind::TextBox`) containing a styled paragraph and shape effects, supporting all 7 wrap modes (`square`, `tight`, `through`, `topAndBottom`, `inFront`, `behind`, `inline`).
+      - Defensively sanitized against hostile input (clamped 10,000 char cap, width/height bounds clamped to 20..2000pt).
+      - Replaced plain text insertion in `insert.wordArt` with full `insert_wordart` delegation.
+    - **UI Gallery Modal Dialog & Interactive Ribbon Dropdown (`crates/ui-egui`)**:
+      - Added `Dialog::WordArt { text: String, selected: usize }` as the 35th modal dialog in `crates/ui-egui/src/dialogs.rs`.
+      - Built interactive 5x3 visual grid gallery rendering styled "A" cards with active selection outlines, glow/shadow effects, color themes, live preset titles, and user text preview.
+      - Upgraded the WordArt button on the Insert ribbon tab (`crates/ui-egui/src/ribbon.rs`) to an interactive dropdown menu with quick presets and a `"More WordArt Styles…"` dialog launcher.
+    - **Test Coverage & Verification**:
+      - Added `wordart_styles_coverage`, `wordart_find_style`, and `wordart_insert_creates_shape_textbox` in `crates/engine/src/cmd/wordart.rs`.
+      - Added `wordart_dialog_opens_and_inserts` in `crates/ui-egui/src/dialogs.rs`.
+      - Verified passing hostile fuzzing in `crates/engine/src/tests.rs::hostile_params_never_panic`.
+      - All 6 CI quality gates verified passing: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
 
