@@ -1308,6 +1308,14 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
         // Insert Caption without text or label shows its dialog.
         "references.caption" if !has("text") && !has("label") => Some("caption"),
+        // Drop Cap without lines shows its dialog.
+        "insert.dropCap" if params.as_object().is_none_or(|m| m.is_empty()) => Some("dropCap"),
+        // Format Page Numbers without settings shows its dialog.
+        "layout.pageNumberFormat" if params.as_object().is_none_or(|m| m.is_empty()) => Some("pageNumbers"),
+        // AutoCorrect Options without settings shows its dialog.
+        "tools.autocorrect" if params.as_object().is_none_or(|m| m.is_empty()) => Some("autocorrect"),
+        // Cross-reference without target shows its dialog.
+        "insert.crossReference" if !has("target") => Some("crossReference"),
         _ => None,
     }
 }

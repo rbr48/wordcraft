@@ -422,6 +422,37 @@ pub enum Dialog {
         zone: f32,
         limit: u32,
     },
+    /// Insert › Text › Drop Cap › Drop Cap Options…
+    DropCap {
+        position: String,
+        lines: u32,
+    },
+    /// Insert › Header & Footer › Page Number › Format Page Numbers…
+    PageNumbers {
+        format: String,
+        continue_numbering: bool,
+        start: u32,
+    },
+    /// Tools › AutoCorrect Options…
+    AutoCorrect {
+        enabled: bool,
+        two_initial_caps: bool,
+        caps_lock: bool,
+        cap_sentences: bool,
+        cap_cells: bool,
+        replace_text: String,
+        with_text: String,
+        filter: String,
+        user_entries: Vec<(String, String)>,
+    },
+    /// Insert / References › Cross-reference
+    CrossReference {
+        ref_type: String,
+        insert_as: String,
+        as_hyperlink: bool,
+        selected_index: Option<usize>,
+        targets: Vec<String>,
+    },
 }
 
 /// Standard world languages matching Microsoft Word proofing language list (name, BCP-47 tag).
@@ -907,6 +938,10 @@ impl Dialog {
             Dialog::Caption { .. } => "caption",
             Dialog::LineNumbers { .. } => "lineNumbers",
             Dialog::Hyphenation { .. } => "hyphenation",
+            Dialog::DropCap { .. } => "dropCap",
+            Dialog::PageNumbers { .. } => "pageNumbers",
+            Dialog::AutoCorrect { .. } => "autocorrect",
+            Dialog::CrossReference { .. } => "crossReference",
         }
     }
 
@@ -1191,6 +1226,40 @@ impl Dialog {
                     limit: st.consecutive_hyphen_limit,
                 }
             }
+            "dropCap" => {
+                let p = app.session.doc.para_at(&app.session.sel.focus);
+                let lines = p.and_then(|p| p.props.drop_cap).unwrap_or(3).max(1) as u32;
+                let has_drop = p.and_then(|p| p.props.drop_cap).is_some();
+                Dialog::DropCap { position: if has_drop { "dropped".into() } else { "none".into() }, lines }
+            }
+            "pageNumbers" => {
+                let sp = wordcraft_engine::cmd::page::sect(&app.session);
+                let fmt = sp.page_num_format.ooxml().to_string();
+                let continue_numbering = sp.page_num_start.is_none();
+                let start = sp.page_num_start.unwrap_or(1);
+                Dialog::PageNumbers { format: fmt, continue_numbering, start }
+            }
+            "autocorrect" => {
+                let s = &app.session;
+                Dialog::AutoCorrect {
+                    enabled: s.autocorrect_on,
+                    two_initial_caps: s.autocorrect_two_initial_caps,
+                    caps_lock: s.autocorrect_caps_lock,
+                    cap_sentences: s.autocorrect_cap_sentences,
+                    cap_cells: s.autocorrect_cap_cells,
+                    replace_text: String::new(),
+                    with_text: String::new(),
+                    filter: String::new(),
+                    user_entries: s.autocorrect_user.clone(),
+                }
+            }
+            "crossReference" => {
+                let ref_type = "heading".to_string();
+                let targets: Vec<String> =
+                    wordcraft_engine::cmd::citations::ref_targets(&app.session, &ref_type).into_iter().map(|(t, _)| t).collect();
+                let selected_index = if targets.is_empty() { None } else { Some(0) };
+                Dialog::CrossReference { ref_type, insert_as: "text".to_string(), as_hyperlink: true, selected_index, targets }
+            }
             _ => return None,
         })
     }
@@ -1327,6 +1396,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Caption { .. } => "Caption",
         Dialog::LineNumbers { .. } => "Line Numbers",
         Dialog::Hyphenation { .. } => "Hyphenation",
+        Dialog::DropCap { .. } => "Drop Cap",
+        Dialog::PageNumbers { .. } => "Page Number Format",
+        Dialog::AutoCorrect { .. } => "AutoCorrect",
+        Dialog::CrossReference { .. } => "Cross-reference",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -3044,6 +3117,262 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
+        Dialog::DropCap { position, lines } => {
+            ui.label(egui::RichText::new(tl!("Position")).font(semibold(12.5)));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                for (val, label) in [("none", "None"), ("dropped", "Dropped"), ("margin", "In margin")] {
+                    let is_sel = position == val;
+                    if ui.selectable_label(is_sel, tl!(label)).clicked() {
+                        *position = val.to_string();
+                        if val == "none" {
+                            *lines = 0;
+                        } else if *lines == 0 {
+                            *lines = 3;
+                        }
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Options")).font(semibold(12.5)));
+            ui.add_space(4.0);
+            ui.add_enabled_ui(position != "none", |ui| {
+                egui::Grid::new("drop_cap_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                    ui.label(tl!("Lines to drop:"));
+                    let mut l = (*lines).max(1);
+                    if ui.add(egui::DragValue::new(&mut l).range(1..=10)).changed() {
+                        *lines = l;
+                    }
+                    ui.end_row();
+                });
+            });
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let target_lines = if position == "none" { 0 } else { *lines };
+                let _ = app.run("insert.dropCap", json!({"lines": target_lines}));
+            }
+            ok || cancel
+        }
+        Dialog::PageNumbers { format, continue_numbering, start } => {
+            egui::Grid::new("page_num_fmt_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Number format:"));
+                let fmt_label = match format.as_str() {
+                    "upperRoman" => "I, II, III, ...",
+                    "lowerRoman" => "i, ii, iii, ...",
+                    "upperLetter" => "A, B, C, ...",
+                    "lowerLetter" => "a, b, c, ...",
+                    _ => "1, 2, 3, ...",
+                };
+                egui::ComboBox::from_id_salt("page_num_fmt_combo").selected_text(fmt_label).width(160.0).show_ui(ui, |ui| {
+                    ui.selectable_value(format, "decimal".to_string(), "1, 2, 3, ...");
+                    ui.selectable_value(format, "lowerLetter".to_string(), "a, b, c, ...");
+                    ui.selectable_value(format, "upperLetter".to_string(), "A, B, C, ...");
+                    ui.selectable_value(format, "lowerRoman".to_string(), "i, ii, iii, ...");
+                    ui.selectable_value(format, "upperRoman".to_string(), "I, II, III, ...");
+                });
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Page numbering")).font(semibold(12.5)));
+            ui.add_space(4.0);
+            if ui.radio(*continue_numbering, tl!("Continue from previous section")).clicked() {
+                *continue_numbering = true;
+            }
+            ui.horizontal(|ui| {
+                if ui.radio(!*continue_numbering, tl!("Start at:")).clicked() {
+                    *continue_numbering = false;
+                }
+                ui.add_enabled_ui(!*continue_numbering, |ui| {
+                    ui.add(egui::DragValue::new(start).range(1..=100_000));
+                });
+            });
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let params =
+                    if *continue_numbering { json!({"format": format, "continue": true}) } else { json!({"format": format, "start": *start}) };
+                let _ = app.run("layout.pageNumberFormat", params);
+            }
+            ok || cancel
+        }
+        Dialog::AutoCorrect { enabled, two_initial_caps, caps_lock, cap_sentences, cap_cells, replace_text, with_text, filter, user_entries } => {
+            ui.checkbox(two_initial_caps, tl!("Correct TWo INitial CApitals"));
+            ui.checkbox(cap_sentences, tl!("Capitalize first letter of sentences"));
+            ui.checkbox(cap_cells, tl!("Capitalize first letter of table cells"));
+            ui.checkbox(caps_lock, tl!("Correct accidental usage of cAPS LOCK key"));
+            ui.checkbox(enabled, tl!("Replace text as you type"));
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
+            ui.add_enabled_ui(*enabled, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Filter:"));
+                    ui.add(egui::TextEdit::singleline(filter).hint_text(tl!("Search replacements...")));
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Replace:"));
+                    ui.add(egui::TextEdit::singleline(replace_text).desired_width(100.0));
+                    ui.label(tl!("With:"));
+                    ui.add(egui::TextEdit::singleline(with_text).desired_width(100.0));
+
+                    let can_add = !replace_text.trim().is_empty() && !with_text.trim().is_empty();
+                    if ui.add_enabled(can_add, egui::Button::new(tl!("Add"))).clicked() {
+                        let from = replace_text.trim().to_string();
+                        let to = with_text.trim().to_string();
+                        let _ = app.run("tools.autocorrect", json!({"add": {"from": &from, "to": &to}}));
+                        user_entries.retain(|(f, _)| f != &from);
+                        user_entries.push((from, to));
+                        replace_text.clear();
+                        with_text.clear();
+                    }
+                    let can_del = user_entries.iter().any(|(f, _)| f == replace_text.trim());
+                    if ui.add_enabled(can_del, egui::Button::new(tl!("Delete"))).clicked() {
+                        let from = replace_text.trim().to_string();
+                        let _ = app.run("tools.autocorrect", json!({"delete": &from}));
+                        user_entries.retain(|(f, _)| f != &from);
+                        replace_text.clear();
+                        with_text.clear();
+                    }
+                });
+                ui.add_space(6.0);
+                let q = filter.to_lowercase();
+                let builtin = wordcraft_engine::cmd::tools::AUTOCORRECT;
+                egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                    egui::Grid::new("autocorrect_table").num_columns(2).spacing(vec2(16.0, 4.0)).striped(true).show(ui, |ui| {
+                        for (f, t) in user_entries.iter() {
+                            if q.is_empty() || f.to_lowercase().contains(&q) || t.to_lowercase().contains(&q) {
+                                let sel = replace_text == f;
+                                if ui.selectable_label(sel, f).clicked() {
+                                    *replace_text = f.clone();
+                                    *with_text = t.clone();
+                                }
+                                ui.label(t);
+                                ui.end_row();
+                            }
+                        }
+                        for &(f, t) in builtin.iter() {
+                            if q.is_empty() || f.to_lowercase().contains(&q) || t.to_lowercase().contains(&q) {
+                                let sel = replace_text == f;
+                                if ui.selectable_label(sel, f).clicked() {
+                                    *replace_text = f.to_string();
+                                    *with_text = t.to_string();
+                                }
+                                ui.label(t);
+                                ui.end_row();
+                            }
+                        }
+                    });
+                });
+            });
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let _ = app.run(
+                    "tools.autocorrect",
+                    json!({
+                        "enabled": *enabled,
+                        "twoInitialCaps": *two_initial_caps,
+                        "capsLock": *caps_lock,
+                        "capSentences": *cap_sentences,
+                        "capCells": *cap_cells,
+                    }),
+                );
+            }
+            ok || cancel
+        }
+        Dialog::CrossReference { ref_type, insert_as, as_hyperlink: _, selected_index, targets } => {
+            egui::Grid::new("cross_ref_top_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Reference type:"));
+                let prev_type = ref_type.clone();
+                let type_label = match ref_type.as_str() {
+                    "bookmark" => "Bookmark",
+                    "figure" => "Figure",
+                    "table" => "Table",
+                    "equation" => "Equation",
+                    _ => "Heading",
+                };
+                egui::ComboBox::from_id_salt("cross_ref_type").selected_text(tl!(type_label)).width(160.0).show_ui(ui, |ui| {
+                    ui.selectable_value(ref_type, "heading".to_string(), tl!("Heading"));
+                    ui.selectable_value(ref_type, "bookmark".to_string(), tl!("Bookmark"));
+                    ui.selectable_value(ref_type, "figure".to_string(), tl!("Figure"));
+                    ui.selectable_value(ref_type, "table".to_string(), tl!("Table"));
+                    ui.selectable_value(ref_type, "equation".to_string(), tl!("Equation"));
+                });
+                if *ref_type != prev_type {
+                    *targets = wordcraft_engine::cmd::citations::ref_targets(&app.session, ref_type).into_iter().map(|(t, _)| t).collect();
+                    *selected_index = if targets.is_empty() { None } else { Some(0) };
+                }
+                ui.end_row();
+
+                ui.label(tl!("Insert reference to:"));
+                let as_label = match insert_as.as_str() {
+                    "page" => "Page number",
+                    "number" => "Paragraph/label number",
+                    "aboveBelow" => "Above/below",
+                    _ => "Entire caption / Heading text",
+                };
+                egui::ComboBox::from_id_salt("cross_ref_insert_as").selected_text(tl!(as_label)).width(160.0).show_ui(ui, |ui| {
+                    ui.selectable_value(insert_as, "text".to_string(), tl!("Entire caption / Heading text"));
+                    ui.selectable_value(insert_as, "page".to_string(), tl!("Page number"));
+                    ui.selectable_value(insert_as, "number".to_string(), tl!("Paragraph/label number"));
+                    ui.selectable_value(insert_as, "aboveBelow".to_string(), tl!("Above/below"));
+                });
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            let for_label = match ref_type.as_str() {
+                "bookmark" => tl!("For which bookmark:"),
+                "figure" => tl!("For which figure:"),
+                "table" => tl!("For which table:"),
+                "equation" => tl!("For which equation:"),
+                _ => tl!("For which heading:"),
+            };
+            ui.label(egui::RichText::new(for_label).font(semibold(12.5)));
+            ui.add_space(4.0);
+
+            egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
+                if targets.is_empty() {
+                    ui.label(egui::RichText::new(tl!("(None found in document)")).weak());
+                } else {
+                    for (i, t) in targets.iter().enumerate() {
+                        let is_sel = *selected_index == Some(i);
+                        if ui.selectable_label(is_sel, t).clicked() {
+                            *selected_index = Some(i);
+                        }
+                    }
+                }
+            });
+
+            let mut close = false;
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let can_insert = selected_index.is_some_and(|i| i < targets.len());
+                if ui
+                    .add_enabled(
+                        can_insert,
+                        egui::Button::new(egui::RichText::new(tl!("Insert")).color(egui::Color32::WHITE)).fill(crate::theme::APP_COLOR),
+                    )
+                    .clicked()
+                    && let Some(idx) = *selected_index
+                    && let Some(target) = targets.get(idx)
+                {
+                    let _ = app.run(
+                        "insert.crossReference",
+                        json!({
+                            "to": ref_type,
+                            "target": target,
+                            "show": insert_as,
+                        }),
+                    );
+                    close = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        close = true;
+                    }
+                });
+            });
+            close
+        }
     }
 }
 
@@ -3625,5 +3954,135 @@ mod tests {
         assert!(!c2);
         assert_eq!(z2, 24.0);
         assert_eq!(l2, 3);
+    }
+
+    #[test]
+    fn drop_cap_dialog_opens_and_sets_options() {
+        let mut app = app_with("Once upon a time in a faraway kingdom.");
+        let d = Dialog::open("dropCap", &mut app).expect("dropCap dialog");
+        let Dialog::DropCap { position, lines } = d else {
+            panic!("not drop cap dialog");
+        };
+        assert_eq!(position, "none");
+        assert_eq!(lines, 3);
+
+        // Apply drop cap
+        app.run("insert.dropCap", json!({"lines": 4})).unwrap();
+        let p = app.session.doc.para_at(&app.session.sel.focus).unwrap();
+        assert_eq!(p.props.drop_cap, Some(4));
+
+        // Reopen dialog: should show dropped with 4 lines
+        let d2 = Dialog::open("dropCap", &mut app).expect("dropCap dialog reopened");
+        let Dialog::DropCap { position: p2, lines: l2 } = d2 else {
+            panic!("not drop cap dialog");
+        };
+        assert_eq!(p2, "dropped");
+        assert_eq!(l2, 4);
+
+        // Clear drop cap
+        app.run("insert.dropCap", json!({"lines": 0})).unwrap();
+        let p = app.session.doc.para_at(&app.session.sel.focus).unwrap();
+        assert_eq!(p.props.drop_cap, None);
+    }
+
+    #[test]
+    fn page_numbers_dialog_opens_and_sets_format() {
+        let mut app = app_with("Section content");
+        let d = Dialog::open("pageNumbers", &mut app).expect("pageNumbers dialog");
+        let Dialog::PageNumbers { format, continue_numbering, start } = d else {
+            panic!("not page numbers dialog");
+        };
+        assert_eq!(format, "decimal");
+        assert!(continue_numbering);
+        assert_eq!(start, 1);
+
+        // Format page numbers to Roman starting at 5
+        app.run("layout.pageNumberFormat", json!({"format": "lowerRoman", "start": 5})).unwrap();
+        let sp = wordcraft_engine::cmd::page::sect(&app.session);
+        assert_eq!(sp.page_num_format, wordcraft_doc::section::NumFormat::LowerRoman);
+        assert_eq!(sp.page_num_start, Some(5));
+
+        // Reopen dialog
+        let d2 = Dialog::open("pageNumbers", &mut app).expect("pageNumbers dialog reopened");
+        let Dialog::PageNumbers { format: f2, continue_numbering: c2, start: s2 } = d2 else {
+            panic!("not page numbers dialog");
+        };
+        assert_eq!(f2, "lowerRoman");
+        assert!(!c2);
+        assert_eq!(s2, 5);
+    }
+
+    #[test]
+    fn autocorrect_dialog_opens_and_manages_entries() {
+        let mut app = app_with("");
+        let d = Dialog::open("autocorrect", &mut app).expect("autocorrect dialog");
+        let Dialog::AutoCorrect { enabled, two_initial_caps, caps_lock, cap_sentences, cap_cells, user_entries, .. } = d else {
+            panic!("not autocorrect dialog");
+        };
+        assert!(enabled);
+        assert!(two_initial_caps);
+        assert!(caps_lock);
+        assert!(cap_sentences);
+        assert!(cap_cells);
+        assert!(user_entries.is_empty());
+
+        // Add custom replacement and toggle options
+        app.run(
+            "tools.autocorrect",
+            json!({
+                "twoInitialCaps": false,
+                "add": {"from": "wcraft", "to": "WordCraft"}
+            }),
+        )
+        .unwrap();
+
+        assert!(!app.session.autocorrect_two_initial_caps);
+        assert_eq!(app.session.autocorrect_user, vec![("wcraft".to_string(), "WordCraft".to_string())]);
+
+        // Reopen dialog
+        let d2 = Dialog::open("autocorrect", &mut app).expect("autocorrect dialog reopened");
+        let Dialog::AutoCorrect { two_initial_caps: tic2, user_entries: ue2, .. } = d2 else {
+            panic!("not autocorrect dialog");
+        };
+        assert!(!tic2);
+        assert_eq!(ue2, vec![("wcraft".to_string(), "WordCraft".to_string())]);
+
+        // Delete user entry
+        app.run("tools.autocorrect", json!({"delete": "wcraft"})).unwrap();
+        assert!(app.session.autocorrect_user.is_empty());
+    }
+
+    #[test]
+    fn cross_reference_dialog_opens_and_inserts_ref() {
+        let mut app = app_with("Chapter One: Beginning\nThis is paragraph two.");
+        // Mark first paragraph as Heading 1
+        app.run("para.style", json!({"style": "Heading 1"})).unwrap();
+        app.run("insert.bookmark", json!({"name": "TargetMark"})).unwrap();
+
+        // Move caret to end of second paragraph
+        app.run("caret.docEnd", json!({})).unwrap();
+
+        // Open cross-reference dialog for headings
+        let d = Dialog::open("crossReference", &mut app).expect("crossReference dialog");
+        let Dialog::CrossReference { ref_type, targets, selected_index, .. } = d else {
+            panic!("not cross reference dialog");
+        };
+        assert_eq!(ref_type, "heading");
+        assert!(!targets.is_empty());
+        assert_eq!(selected_index, Some(0));
+
+        // Insert reference to heading
+        app.run(
+            "insert.crossReference",
+            json!({
+                "to": "heading",
+                "target": targets[0],
+                "show": "text"
+            }),
+        )
+        .unwrap();
+
+        let doc_text = app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(doc_text.contains("Chapter One"));
     }
 }
