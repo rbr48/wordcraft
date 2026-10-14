@@ -14,6 +14,7 @@
 [CmdletBinding()]
 param(
     [string]$VpsHost = "148.135.137.245",
+    [int]$VpsPort = 2222,
     [string]$VpsUser = "root"
 )
 
@@ -21,7 +22,7 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "===================================================================" -ForegroundColor Cyan
 Write-Host "  Izhaan Intellect Office Suite · Windows Remote Deployment" -ForegroundColor Cyan
-Write-Host "  Target VPS: $VpsUser@$VpsHost" -ForegroundColor Cyan
+Write-Host "  Target VPS: $VpsUser@$VpsHost (Port $VpsPort)" -ForegroundColor Cyan
 Write-Host "  Domain:     office.izhaanintellect.fun" -ForegroundColor Cyan
 Write-Host "===================================================================" -ForegroundColor Cyan
 
@@ -29,14 +30,14 @@ $DeployDir = "$PSScriptRoot"
 $RemoteDir = "/tmp/office-deploy"
 
 Write-Host "`n[1/3] Uploading deployment package to VPS ($RemoteDir)..." -ForegroundColor Yellow
-# Using scp to transfer the deploy directory
-scp -r "$DeployDir" "${VpsUser}@${VpsHost}:${RemoteDir}"
+# Using scp with legacy protocol (-O) and custom port
+scp -O -P $VpsPort -r "$DeployDir" "${VpsUser}@${VpsHost}:${RemoteDir}"
 
 Write-Host "`n[2/3] Setting permissions on VPS..." -ForegroundColor Yellow
-ssh "${VpsUser}@${VpsHost}" "chmod +x ${RemoteDir}/deploy-vps.sh"
+ssh -p $VpsPort "${VpsUser}@${VpsHost}" "chmod +x ${RemoteDir}/deploy-vps.sh"
 
 Write-Host "`n[3/3] Executing automated deployment on VPS..." -ForegroundColor Yellow
-ssh -t "${VpsUser}@${VpsHost}" "bash ${RemoteDir}/deploy-vps.sh"
+ssh -p $VpsPort -t "${VpsUser}@${VpsHost}" "bash ${RemoteDir}/deploy-vps.sh"
 
 Write-Host "`n===================================================================" -ForegroundColor Green
 Write-Host "  Deployment finished!" -ForegroundColor Green
