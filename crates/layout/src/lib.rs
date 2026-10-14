@@ -1536,17 +1536,89 @@ fn wrap_area(r: Rect, float: &Float) -> Option<(Rect, bool)> {
     Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom))
 }
 
+fn star_polygon() -> std::sync::Arc<[(f32, f32)]> {
+    use std::f32::consts::PI;
+    let mut pts = Vec::with_capacity(10);
+    for i in 0..10 {
+        let r = if i % 2 == 0 { 0.5 } else { 0.2 };
+        let angle = -PI / 2.0 + (i as f32) * PI / 5.0;
+        pts.push((0.5 + r * angle.cos(), 0.5 + r * angle.sin()));
+    }
+    pts.into()
+}
+
+fn heart_polygon() -> std::sync::Arc<[(f32, f32)]> {
+    use std::f32::consts::PI;
+    let mut raw_pts = Vec::with_capacity(20);
+    for i in 0..20 {
+        let t = (i as f32) * 2.0 * PI / 20.0;
+        let sin_t = t.sin();
+        let x = 16.0 * sin_t * sin_t * sin_t;
+        let y = -(13.0 * t.cos() - 5.0 * (2.0 * t).cos() - 2.0 * (3.0 * t).cos() - (4.0 * t).cos());
+        raw_pts.push((x, y));
+    }
+    let min_x = raw_pts.iter().map(|p| p.0).reduce(f32::min).unwrap_or(-16.0);
+    let max_x = raw_pts.iter().map(|p| p.0).reduce(f32::max).unwrap_or(16.0);
+    let min_y = raw_pts.iter().map(|p| p.1).reduce(f32::min).unwrap_or(-17.0);
+    let max_y = raw_pts.iter().map(|p| p.1).reduce(f32::max).unwrap_or(15.0);
+    let span_x = (max_x - min_x).max(1.0);
+    let span_y = (max_y - min_y).max(1.0);
+    let norm: Vec<(f32, f32)> = raw_pts.into_iter().map(|(x, y)| ((x - min_x) / span_x, (y - min_y) / span_y)).collect();
+    norm.into()
+}
+
+fn hexagon_polygon() -> std::sync::Arc<[(f32, f32)]> {
+    use std::f32::consts::PI;
+    let mut pts = Vec::with_capacity(6);
+    for i in 0..6 {
+        let angle = PI / 6.0 + (i as f32) * PI / 3.0;
+        pts.push((0.5 + 0.5 * angle.cos(), 0.5 + 0.5 * angle.sin()));
+    }
+    pts.into()
+}
+
+fn octagon_polygon() -> std::sync::Arc<[(f32, f32)]> {
+    use std::f32::consts::PI;
+    let mut pts = Vec::with_capacity(8);
+    for i in 0..8 {
+        let angle = PI / 8.0 + (i as f32) * PI / 4.0;
+        pts.push((0.5 + 0.5 * angle.cos(), 0.5 + 0.5 * angle.sin()));
+    }
+    pts.into()
+}
+
 fn contour_for(o: &InlineObject, wrap: Wrap) -> ContourKind {
     if !matches!(wrap, Wrap::Tight | Wrap::Through) {
         return ContourKind::Box;
     }
+    if let Some(f) = o.float()
+        && let Some(poly) = &f.wrap_polygon
+        && poly.len() >= 3
+    {
+        return ContourKind::Polygon(poly.clone());
+    }
     match o {
-        InlineObject::Shape { kind, .. } => match kind {
-            ShapeKind::Ellipse => ContourKind::Ellipse,
-            ShapeKind::Diamond => ContourKind::Diamond,
-            ShapeKind::Triangle | ShapeKind::RightTriangle => ContourKind::Triangle,
-            _ => ContourKind::Box,
-        },
+        InlineObject::Shape { kind, freeform, .. } => {
+            if let Some(ff) = freeform
+                && let Some(first_path) = ff.paths.first()
+                && first_path.pts.len() >= 3
+                && ff.w > 0.0
+                && ff.h > 0.0
+            {
+                let norm: Vec<(f32, f32)> = first_path.pts.iter().map(|p| (p[0] / ff.w, p[1] / ff.h)).collect();
+                return ContourKind::Polygon(norm.into());
+            }
+            match kind {
+                ShapeKind::Ellipse => ContourKind::Ellipse,
+                ShapeKind::Diamond => ContourKind::Diamond,
+                ShapeKind::Triangle | ShapeKind::RightTriangle => ContourKind::Triangle,
+                ShapeKind::Star => ContourKind::Polygon(star_polygon()),
+                ShapeKind::Heart => ContourKind::Polygon(heart_polygon()),
+                ShapeKind::Hexagon => ContourKind::Polygon(hexagon_polygon()),
+                ShapeKind::Octagon => ContourKind::Polygon(octagon_polygon()),
+                _ => ContourKind::Box,
+            }
+        }
         _ => ContourKind::Box,
     }
 }
@@ -1560,7 +1632,7 @@ fn rel_exclusions(excl: &[(Rect, bool, ContourKind)], x0: f32, y0: f32) -> Vec<p
             left: r.x - x0,
             right: r.right() - x0,
             top_bottom: *tb,
-            contour: *ck,
+            contour: ck.clone(),
         })
         .filter(|e| e.bottom > 0.0)
         .collect()

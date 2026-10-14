@@ -1,6 +1,6 @@
 # Layout and pagination parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Phonetic Guide ruby and Enclose Characters landed); previously trivial (space before at the top of a page like Word) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Contour Text Wrap Polygon <wp:wrapPolygon> for Tight and Through wrap landed); previously minor (Phonetic Guide ruby and Enclose Characters) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 A document only "opens correctly" if its pages break where Word breaks them: the same lines, the
 same page count, footnotes and pictures on the same pages. This checklist covers line breaking,
@@ -8,7 +8,7 @@ pagination and object placement in `crates/layout`. Typing behaviour is in
 [`typing-parity.md`](typing-parity.md); the reading and writing of the properties is in
 [`file-format-parity.md`](file-format-parity.md).
 
-**Dimension: ~55% (estimated), 90–145 h to full** (the sum of the rows below). The engine implements most of Word's layout
+**Dimension: ~58% (estimated), 84–135 h to full** (the sum of the rows below). The engine implements most of Word's layout
 rules, but nothing has been compared page-for-page with Word on real documents, and the default
 font can't match Word's metrics.
 
@@ -38,7 +38,7 @@ font can't match Word's metrics.
 | Nested tables | 🟡 | render; commands act on the innermost table; a table inserted in a cell, AutoFit and Convert Text to Table size to the cell (2026-10-12); remaining: Word's exact nested autofit widths unmeasured | 1–2 |
 | Floating pictures/shapes placement (relative to page/margin/column/paragraph/line/character) | ✅ | #136 | — |
 | Text wrap: square, top-and-bottom, behind, in front | ✅ | 2026-10-06 | — |
-| Text wrap: tight, through (contour, wrap polygon) | ❌ | laid out as square | 6–10 |
+| Text wrap: tight, through (contour, wrap polygon) | ✅ | DrawingML `<wp:wrapPolygon>` round-trip in DOCX; scanline polygon edge intersection rasterization in layout; automated contour generation for non-rectangular shapes (ellipses, diamonds, triangles, stars, hearts, hexagons, octagons, freeforms) | — |
 | Text boxes, overflow, linked text boxes | 🟡 | #46; linked text boxes missing | 3–5 |
 | Rotated objects and text | 🟡 | #332: pictures, shapes, charts and groups drawn turned and flipped about their centre (screen and PDF); square wrap and inline lines keep clear of the rotated bounds; hit testing on the turned shape. Text in a rotated text box stays upright | 2–3 |
 | Page borders (from page edge or text), page colour, watermark | ✅ | | — |
@@ -68,6 +68,7 @@ font can't match Word's metrics.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Contour Text Wrap Polygon (`wrapPolygon`) landed with ECMA-376 DrawingML `<wp:wrapPolygon>` round-trip in DOCX, scanline polygon edge intersection rasterization in layout, and automated tight wrapping for non-rectangular shapes (stars, hearts, hexagons, octagons, freeforms) |
 | 2026-10-14 | minor | Phonetic Guide (`<w:ruby>`) and Enclose Characters (`format.enclose`) landed with ECMA-376 OOXML round-trip, elevated line layout, raised vector glyph rendering, Home ribbon tab buttons, and interactive modal dialogs (`Dialog::Phonetic`, `Dialog::Enclose`) |
 | 2026-10-13 | trivial | Space before at the top of a page like Word: after a page break the paragraph's mark stays with the break (no space at the top of the next page), a paragraph starting with a page break keeps its space before on the new page, and the previous space after comes off after a page break before or a section break (32 cases measured in Word for Windows) |
 | 2026-10-11 | trivial | Group and Ungroup keep turned members' orientation and placement (#441, #443); Size resizes a group (#442); the eraser hits turned ink where it is drawn (#445) |

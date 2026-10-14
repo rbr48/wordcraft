@@ -1025,7 +1025,7 @@ fn group(s: &mut Session, _: &Value) -> CmdResult {
             GroupChild { x: x - x0, y: y - y0, obj }
         })
         .collect();
-    let mut float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| *f).unwrap_or_default();
+    let mut float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| f.clone()).unwrap_or_default();
     float.set_spin(Spin::default());
     let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, is_canvas: false };
     // Take the members out, last first so the earlier positions hold, and put the group where
@@ -1064,7 +1064,7 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     };
     let obj = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     let Some((w, h, float)) = obj.frame() else { return Err(CmdError::Failed("object vanished".into())) };
-    let float = *float;
+    let float = float.clone();
     // Each member where the group shows it: the group's turn moves its centre about the group's
     // centre and adds to its own turn.
     let members: Vec<InlineObject> = shown_members(&obj, [0.0, 0.0, w, h])
@@ -1076,8 +1076,11 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
             // Grown to its smallest size about its centre, so it stays centred where it was.
             let (x, y) = (x - (mw - cw) / 2.0, y - (mh - ch) / 2.0);
             if let Some(f) = c.float_mut() {
-                *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), ..float };
-                f.set_spin(spin);
+                let mut nf = float.clone();
+                nf.x = (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET);
+                nf.y = (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET);
+                nf.set_spin(spin);
+                *f = nf;
             }
             c
         })

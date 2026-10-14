@@ -501,7 +501,7 @@ impl Writer<'_> {
                 // Ink is told apart by its name (and its pen), which reading looks for.
                 let name = shape_name(*kind, freeform.as_deref(), &docpr);
                 // The effect extent leaves room for the shadow and glow.
-                let mut float = *float;
+                let mut float = float.clone();
                 for (e, fx) in float.effect.iter_mut().zip(effects.extent()) {
                     *e = wordcraft_geom::finite(*e).max(fx);
                 }
@@ -929,10 +929,25 @@ impl Writer<'_> {
             Wrap::Tight | Wrap::Through => {
                 let tag = if float.wrap == Wrap::Tight { "wp:wrapTight" } else { "wp:wrapThrough" };
                 w.open(tag, &[("wrapText", "bothSides")]);
-                w.open("wp:wrapPolygon", &[("edited", "0")]);
-                w.empty("wp:start", &[("x", "0"), ("y", "0")]);
-                for (x, y) in [("0", "21600"), ("21600", "21600"), ("21600", "0"), ("0", "0")] {
-                    w.empty("wp:lineTo", &[("x", x), ("y", y)]);
+                let edited = if float.wrap_polygon.is_some() { "1" } else { "0" };
+                w.open("wp:wrapPolygon", &[("edited", edited)]);
+                if let Some(poly) = &float.wrap_polygon
+                    && poly.len() >= 3
+                {
+                    let (sx, sy) = poly[0];
+                    let sx_str = format!("{}", (sx * 21600.0).round() as i32);
+                    let sy_str = format!("{}", (sy * 21600.0).round() as i32);
+                    w.empty("wp:start", &[("x", &sx_str), ("y", &sy_str)]);
+                    for &(px, py) in &poly[1..] {
+                        let px_str = format!("{}", (px * 21600.0).round() as i32);
+                        let py_str = format!("{}", (py * 21600.0).round() as i32);
+                        w.empty("wp:lineTo", &[("x", &px_str), ("y", &py_str)]);
+                    }
+                } else {
+                    w.empty("wp:start", &[("x", "0"), ("y", "0")]);
+                    for (x, y) in [("0", "21600"), ("21600", "21600"), ("21600", "0"), ("0", "0")] {
+                        w.empty("wp:lineTo", &[("x", x), ("y", y)]);
+                    }
                 }
                 w.close("wp:wrapPolygon");
                 w.close(tag);

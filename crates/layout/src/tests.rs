@@ -1193,6 +1193,41 @@ fn text_wraps_around_contour_tight_float() {
 }
 
 #[test]
+fn text_wraps_around_polygon_tight_float() {
+    let mut d = Document::from_text(&"Polygon tight text wrapping smoothly. ".repeat(30));
+    // Diamond polygon: (0.5, 0.0) -> (1.0, 0.5) -> (0.5, 1.0) -> (0.0, 0.5) -> (0.5, 0.0)
+    let poly_pts: Vec<(f32, f32)> = vec![(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5), (0.5, 0.0)];
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Tight,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 0.0,
+        wrap_polygon: Some(poly_pts.into()),
+        ..Default::default()
+    };
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 200.0,
+        h: 150.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let Placed::Lines { para, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).unwrap() else { panic!() };
+    let top_line = &para.lines[0];
+    let mid_line = para.lines.iter().find(|ln| (ln.top - 75.0).abs() < 15.0).unwrap();
+    assert!(top_line.left < mid_line.left, "polygon tight wrap: top line ({}) is narrower than equator line ({})", top_line.left, mid_line.left);
+}
+
+#[test]
 fn deleted_float_leaves_no_wrap_area_without_markup() {
     // A square-wrapped shape anchored at the start of the paragraph, its anchor track-deleted.
     let text = "Words flow around the picture here. ".repeat(30);
@@ -2082,7 +2117,7 @@ fn inline_picture_keeps_room_for_its_effects() {
     let mut d = Document::from_text("");
     let shadow = wordcraft_doc::para::Float { effect: [6.0, 12.0, 18.0, 27.0], ..Default::default() };
     if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
-        p.insert_object(0, picture(100.0, 50.0, shadow), &Default::default()).unwrap();
+        p.insert_object(0, picture(100.0, 50.0, shadow.clone()), &Default::default()).unwrap();
     }
     let l = lay(&d);
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };

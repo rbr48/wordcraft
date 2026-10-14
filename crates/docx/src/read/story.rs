@@ -1208,8 +1208,33 @@ fn anchor_float(c: &El) -> Float {
     for k in c.els() {
         match k.name.as_str() {
             "wp:wrapSquare" => f.wrap = Wrap::Square,
-            "wp:wrapTight" => f.wrap = Wrap::Tight,
-            "wp:wrapThrough" => f.wrap = Wrap::Through,
+            "wp:wrapTight" | "wp:wrapThrough" => {
+                f.wrap = if k.name == "wp:wrapTight" { Wrap::Tight } else { Wrap::Through };
+                if let Some(poly) = k.child("wp:wrapPolygon") {
+                    let mut pts = Vec::new();
+                    if let Some(start) = poly.child("wp:start")
+                        && let (Some(x), Some(y)) = (start.attr("x"), start.attr("y"))
+                        && let (Ok(x_val), Ok(y_val)) = (x.parse::<f32>(), y.parse::<f32>())
+                    {
+                        pts.push((x_val / 21600.0, y_val / 21600.0));
+                    }
+                    for line_to in poly.children("wp:lineTo") {
+                        if let (Some(x), Some(y)) = (line_to.attr("x"), line_to.attr("y"))
+                            && let (Ok(x_val), Ok(y_val)) = (x.parse::<f32>(), y.parse::<f32>())
+                        {
+                            pts.push((x_val / 21600.0, y_val / 21600.0));
+                        }
+                    }
+                    if pts.len() >= 3 && pts.len() <= 256 {
+                        let clamped: Vec<(f32, f32)> = pts.into_iter().map(|(px, py)| (px.clamp(-0.5, 1.5), py.clamp(-0.5, 1.5))).collect();
+                        let is_default_box = (clamped.len() == 4 || clamped.len() == 5)
+                            && clamped.iter().all(|&(x, y)| (x.abs() < 1e-3 || (x - 1.0).abs() < 1e-3) && (y.abs() < 1e-3 || (y - 1.0).abs() < 1e-3));
+                        if !is_default_box {
+                            f.wrap_polygon = Some(clamped.into());
+                        }
+                    }
+                }
+            }
             "wp:wrapTopAndBottom" => f.wrap = Wrap::TopAndBottom,
             "wp:wrapNone" => f.wrap = if behind { Wrap::BehindText } else { Wrap::InFrontOfText },
             "wp:positionH" | "wp:positionV" => {

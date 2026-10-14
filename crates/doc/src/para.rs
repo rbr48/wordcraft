@@ -126,7 +126,7 @@ impl FloatAlign {
 }
 
 /// Floating placement (ignored when `wrap` is `Inline`).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Float {
     pub wrap: Wrap,
@@ -158,6 +158,10 @@ pub struct Float {
     pub flip_h: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub flip_v: bool,
+    /// Custom contour wrap polygon for Tight and Through text wrapping (`wp:wrapPolygon`),
+    /// normalised coordinates 0.0..1.0 relative to object bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap_polygon: Option<std::sync::Arc<[(f32, f32)]>>,
 }
 
 fn is_zero(v: &f32) -> bool {
@@ -432,6 +436,10 @@ impl InlineObject {
             | InlineObject::Group { w, h, float, .. } => Some((*w, *h, float)),
             _ => None,
         }
+    }
+    /// A drawing's placement.
+    pub fn float(&self) -> Option<&Float> {
+        self.frame().map(|(_, _, f)| f)
     }
     /// A drawing's placement, to change.
     pub fn float_mut(&mut self) -> Option<&mut Float> {

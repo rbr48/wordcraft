@@ -345,4 +345,21 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Added `wordart_dialog_opens_and_inserts` in `crates/ui-egui/src/dialogs.rs`.
       - Verified passing hostile fuzzing in `crates/engine/src/tests.rs::hostile_params_never_panic`.
       - All 6 CI quality gates verified passing: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **M17.2: Contour Text Wrap Polygon (`wrapPolygon` for Tight and Through wrap around arbitrary shapes, freeforms & pictures) (Gap #10 Advancement)**:
+    - **Data Model (`crates/doc/src/para.rs`)**:
+      - Converted `Float` from `Copy` to `Clone` to support complex geometric contours.
+      - Added `pub wrap_polygon: Option<std::sync::Arc<[(f32, f32)]>>` to `Float` storing normalized (0.0..1.0) polygon vertices relative to the object's bounding box.
+      - Added `pub fn float(&self) -> Option<&Float>` convenience accessor on `InlineObject`.
+    - **OOXML DrawingML Roundtrip (`crates/docx`)**:
+      - `crates/docx/src/write/story.rs`: Emits ECMA-376 compliant `<wp:wrapPolygon edited="1">` (or `edited="0"`) with `<wp:start>` and `<wp:lineTo>` elements scaled to the 21600x21600 relative coordinate frame for `Wrap::Tight` and `Wrap::Through`.
+      - `crates/docx/src/read/story.rs`: Parses `<wp:wrapPolygon>` `<wp:start>` and `<wp:lineTo>` points normalized by 21600.0, filtering out the trivial 4-corner bounding box to restore `None` cleanly on unedited shapes.
+    - **Layout Engine Polygon Scanline Rasterization (`crates/layout`)**:
+      - Added `ContourKind::Polygon(std::sync::Arc<[(f32, f32)]>)` to layout contours.
+      - Implemented mathematically exact scanline polygon edge intersection in `Exclusion::bounds_at` for arbitrary convex and concave 2D polygons: finds all segment intersections with the line slice `y` and takes the min/max X span.
+      - Added automated polygon contour generation in `contour_for` for non-rectangular geometric shapes (`Star`, `Heart`, `Hexagon`, `Octagon`), Freeform paths, and any object carrying `float.wrap_polygon`.
+    - **Test Coverage & Verification**:
+      - Added `wrap_polygon_tight_round_trip` in `crates/docx/tests/roundtrip.rs`.
+      - Added `text_wraps_around_polygon_tight_float` in `crates/layout/src/tests.rs`.
+      - Verified all 156 layout tests and 149 docx tests passing without regressions.
+      - All 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
 

@@ -1042,7 +1042,7 @@ fn groups_round_trip() {
     let group = InlineObject::Group {
         w: 240.0,
         h: 120.0,
-        float,
+        float: float.clone(),
         ch_w: 200.0,
         ch_h: 100.0,
         children: vec![
@@ -1501,8 +1501,8 @@ fn rotation_and_flips_round_trip() {
         effects: Default::default(),
     };
     let square = Float { wrap: Wrap::Square, ..Default::default() };
-    let tri = shape(ShapeKind::Triangle, Float { rot: 90.0, flip_h: true, ..square });
-    let flipped = shape(ShapeKind::Rectangle, Float { rot: 315.5, flip_v: true, ..square });
+    let tri = shape(ShapeKind::Triangle, Float { rot: 90.0, flip_h: true, ..square.clone() });
+    let flipped = shape(ShapeKind::Rectangle, Float { rot: 315.5, flip_v: true, ..square.clone() });
     let group = InlineObject::Group {
         w: 120.0,
         h: 60.0,
@@ -1696,4 +1696,58 @@ fn ruby_phonetic_guide_round_trip() {
     assert_eq!(*hps_raise, 18);
     assert_eq!(*hps_base_text, 21);
     assert_eq!(lid, "ja-JP");
+}
+
+#[test]
+fn wrap_polygon_tight_round_trip() {
+    let mut d = Document::from_text("");
+    let poly_pts: Vec<(f32, f32)> = vec![(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5), (0.5, 0.0)];
+    let float = Float {
+        wrap: Wrap::Tight,
+        h_rel: Anchor::Column,
+        v_rel: Anchor::Paragraph,
+        x: 50.0,
+        y: 30.0,
+        wrap_polygon: Some(poly_pts.clone().into()),
+        ..Default::default()
+    };
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Diamond,
+        w: 120.0,
+        h: 120.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    };
+    let mut p = Paragraph::with_text("tight wrap diamond ", CharProps::default());
+    let end = p.len();
+    p.insert_object(end, shape, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("<wp:wrapTight"), "should contain wp:wrapTight: {xml}");
+    assert!(xml.contains(r#"<wp:wrapPolygon edited="1">"#), "should contain edited=1 wrapPolygon: {xml}");
+    assert!(xml.contains(r#"<wp:start x="10800" y="0"/>"#), "should contain scaled start point: {xml}");
+    assert!(xml.contains(r#"<wp:lineTo x="21600" y="10800"/>"#), "should contain scaled lineTo: {xml}");
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r);
+    assert_eq!(got[0].objects.len(), 1);
+    let InlineObject::Shape { float: f_back, .. } = &got[0].objects[0] else {
+        panic!("expected shape: {:?}", got[0].objects);
+    };
+    assert_eq!(f_back.wrap, Wrap::Tight);
+    let poly_back = f_back.wrap_polygon.as_ref().expect("wrap_polygon should be present");
+    assert_eq!(poly_back.len(), 5);
+    for (i, &(px, py)) in poly_pts.iter().enumerate() {
+        assert!((poly_back[i].0 - px).abs() < 1e-3, "pt {i} x: {} vs {px}", poly_back[i].0);
+        assert!((poly_back[i].1 - py).abs() < 1e-3, "pt {i} y: {} vs {py}", poly_back[i].1);
+    }
 }
