@@ -477,7 +477,7 @@ fn blocks_have_bijoy(blocks: &[std::sync::Arc<wordcraft_doc::Block>]) -> bool {
     false
 }
 
-fn slice_safe(s: &str, start: usize, end: usize) -> &str {
+pub(crate) fn slice_safe(s: &str, start: usize, end: usize) -> &str {
     let end = end.min(s.len());
     let start = start.min(end);
     s.get(start..end).unwrap_or("")
@@ -545,12 +545,13 @@ fn normalize_blocks_bijoy(
         let block = std::sync::Arc::make_mut(b);
         match block {
             wordcraft_doc::Block::Para(p) => {
-                // A paragraph is Bijoy if: doc default is Bijoy, or the paragraph mark says so,
-                // or any run has a Bijoy font, or the named paragraph style resolves to Bijoy.
-                let style_is_bijoy = p.props.style.as_deref().is_some_and(|s| bijoy_style_ids.contains(s));
+                let style_is_bijoy = match p.props.style.as_deref() {
+                    Some(s) => bijoy_style_ids.contains(s),
+                    None => default_is_bijoy,
+                };
                 let style_size = resolve_style_size(styles, p.props.style.as_deref());
 
-                let mut para_has_bijoy = default_is_bijoy || char_props_has_bijoy(&p.mark) || style_is_bijoy;
+                let mut para_has_bijoy = style_is_bijoy || char_props_has_bijoy(&p.mark);
                 if !para_has_bijoy {
                     for r in &p.runs {
                         if char_props_has_bijoy(&r.props) {
@@ -598,8 +599,7 @@ fn normalize_blocks_bijoy(
 
                         // A run is Bijoy if it explicitly says so, or if it has no font of its
                         // own and the paragraph (or its style) is known to be Bijoy.
-                        let is_bijoy = char_props_has_bijoy(&r.props)
-                            || (r.props.font.is_none() && r.props.font_cs.is_none() && (para_has_bijoy || style_is_bijoy));
+                        let is_bijoy = char_props_has_bijoy(&r.props) || (r.props.font.is_none() && r.props.font_cs.is_none() && style_is_bijoy);
                         let is_partial = !is_bijoy && has_leftover_bijoy(run_slice);
 
                         let mut props = r.props.clone();
@@ -725,28 +725,42 @@ fn normalize_blocks_bijoy(
 }
 
 /// Build the set of style IDs whose resolved character properties include a Bijoy font.
-/// Walks each style's own `chr` and up to 32 `based_on` hops through the style sheet.
+/// Resolves font classification with nearest-style precedence: if a style or an intervening
+/// ancestor explicitly specifies a font, that nearest declaration determines whether the
+/// style is Bijoy (an explicit Latin font overrides an ancestor Bijoy font).
 fn bijoy_style_set(styles: &wordcraft_doc::StyleSheet) -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
+    let default_is_bijoy = char_props_has_bijoy(&styles.default_chr);
     for st in &styles.styles {
-        if char_props_has_bijoy(&st.chr) {
-            set.insert(st.id.clone());
+        // 1. If the style itself explicitly defines a font, that nearest declaration is decisive.
+        if st.chr.font.is_some() || st.chr.font_cs.is_some() {
+            if char_props_has_bijoy(&st.chr) {
+                set.insert(st.id.clone());
+            }
             continue;
         }
-        // Walk the based_on chain
+
+        // 2. Otherwise walk the based_on chain to find the nearest style with an explicit font.
         let mut base = st.based_on.as_deref();
         let mut hops = 0usize;
+        let mut resolved_bijoy = None;
         while let Some(b) = base {
             hops += 1;
             if hops > 32 {
                 break;
             }
             let Some(parent) = styles.styles.iter().find(|s| s.id == b) else { break };
-            if char_props_has_bijoy(&parent.chr) {
-                set.insert(st.id.clone());
+            if parent.chr.font.is_some() || parent.chr.font_cs.is_some() {
+                resolved_bijoy = Some(char_props_has_bijoy(&parent.chr));
                 break;
             }
             base = parent.based_on.as_deref();
+        }
+
+        // 3. If found an ancestor with an explicit font, use that; otherwise fall back to doc default.
+        let is_bijoy = resolved_bijoy.unwrap_or(default_is_bijoy);
+        if is_bijoy {
+            set.insert(st.id.clone());
         }
     }
     set
@@ -757,18 +771,17 @@ fn bijoy_style_set(styles: &wordcraft_doc::StyleSheet) -> std::collections::Hash
 /// a clean OpenType Unicode font ("Kalpurush") while strictly preserving character
 /// sizing, bold styling, and document colors.
 pub fn normalize_bijoy_fonts(doc: &mut Document) {
-    let default_is_bijoy = char_props_has_bijoy(&doc.styles.default_chr) || doc.styles.styles.iter().any(|s| char_props_has_bijoy(&s.chr));
+    let default_is_bijoy = char_props_has_bijoy(&doc.styles.default_chr);
+    let bijoy_style_ids = bijoy_style_set(&doc.styles);
 
-    let has_bijoy = default_is_bijoy || blocks_have_bijoy(&doc.body) || doc.parts.values().any(|part| blocks_have_bijoy(&part.blocks));
+    let has_bijoy = default_is_bijoy
+        || !bijoy_style_ids.is_empty()
+        || blocks_have_bijoy(&doc.body)
+        || doc.parts.values().any(|part| blocks_have_bijoy(&part.blocks));
 
     if !has_bijoy {
         return;
     }
-
-    // Build the set of style IDs whose font chain resolves to a Bijoy font.
-    // This lets us catch paragraphs that use a named style (e.g. "BanglaText")
-    // inheriting from SutonnyMJ even if no individual run has an explicit font.
-    let bijoy_style_ids = bijoy_style_set(&doc.styles);
 
     // Decode all body blocks recursively (including tables)
     normalize_blocks_bijoy(&mut doc.body, default_is_bijoy, &bijoy_style_ids, &doc.styles);
@@ -945,5 +958,123 @@ mod tests {
         assert_eq!((words[0], words[2]), ("আমি", "করি"), "{out:?}");
         assert_ne!(words[1], "šত্ন", "the leftover word is repaired: {out:?}");
         assert!(!words[1].contains('š'), "{out:?}");
+    }
+    #[test]
+    fn unused_bijoy_style_must_not_convert_plain_text() {
+        let mut doc = Document::from_text("Hello world");
+        doc.styles.default_chr = CharProps { font: Some("Calibri".into()), ..Default::default() };
+        doc.styles.styles.push(wordcraft_doc::Style {
+            id: "UnusedBanglaStyle".into(),
+            name: "Unused Bangla Style".into(),
+            chr: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        });
+        normalize_bijoy_fonts(&mut doc);
+        assert_eq!(body_text(&doc), "Hello world", "plain text should not be decoded as Bijoy");
+    }
+
+    #[test]
+    fn mixed_english_and_bijoy_import_preserves_english_and_converts_bijoy() {
+        let mut doc = Document::default();
+        doc.styles.default_chr = CharProps { font: Some("Calibri".into()), ..Default::default() };
+        doc.styles.styles.push(wordcraft_doc::Style {
+            id: "BanglaStyle".into(),
+            name: "Bangla Style".into(),
+            chr: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        });
+        let p_en = Paragraph {
+            text: "Hello world".into(),
+            props: wordcraft_doc::props::ParaProps { style: Some("Normal".into()), ..Default::default() },
+            ..Default::default()
+        };
+        let p_bn = Paragraph {
+            text: "Avgvi †mvbvi evsjv".into(),
+            props: wordcraft_doc::props::ParaProps { style: Some("BanglaStyle".into()), ..Default::default() },
+            ..Default::default()
+        };
+        doc.body = vec![std::sync::Arc::new(Block::Para(p_en)), std::sync::Arc::new(Block::Para(p_bn))];
+
+        normalize_bijoy_fonts(&mut doc);
+
+        let out_en = doc.body[0].as_para().map(|p| p.text.as_str()).unwrap_or("");
+        let out_bn = doc.body[1].as_para().map(|p| p.text.as_str()).unwrap_or("");
+        assert_eq!(out_en, "Hello world");
+        assert_eq!(out_bn, "আমার সোনার বাংলা");
+        assert_eq!(doc.body[1].as_para().and_then(|p| p.mark.font.as_deref()), Some("Kalpurush"));
+    }
+
+    #[test]
+    fn latin_child_style_over_bijoy_ancestor_must_not_convert_plain_text() {
+        let mut doc = Document::default();
+        doc.styles.default_chr = CharProps { font: Some("Calibri".into()), ..Default::default() };
+        // Grandparent/parent style has SutonnyMJ
+        doc.styles.styles.push(wordcraft_doc::Style {
+            id: "BanglaParent".into(),
+            name: "Bangla Parent".into(),
+            chr: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        });
+        // Child style explicitly overrides font with Latin Calibri
+        doc.styles.styles.push(wordcraft_doc::Style {
+            id: "LatinChild".into(),
+            name: "Latin Child".into(),
+            based_on: Some("BanglaParent".into()),
+            chr: CharProps { font: Some("Calibri".into()), ..Default::default() },
+            ..Default::default()
+        });
+        let p = Paragraph {
+            text: "Hello world".into(),
+            props: wordcraft_doc::props::ParaProps { style: Some("LatinChild".into()), ..Default::default() },
+            ..Default::default()
+        };
+        doc.body = vec![std::sync::Arc::new(Block::Para(p))];
+
+        normalize_bijoy_fonts(&mut doc);
+
+        let out = doc.body[0].as_para().map(|p| p.text.as_str()).unwrap_or("");
+        assert_eq!(out, "Hello world", "explicit Latin child style must override Bijoy ancestor");
+        // Style font must remain Calibri, NOT converted to Kalpurush
+        let child_style = doc.styles.styles.iter().find(|s| s.id == "LatinChild").unwrap();
+        assert_eq!(child_style.chr.font.as_deref(), Some("Calibri"));
+    }
+
+    #[test]
+    fn intervening_latin_parent_breaks_bijoy_inheritance() {
+        let mut doc = Document::default();
+        doc.styles.default_chr = CharProps { font: Some("Calibri".into()), ..Default::default() };
+        // Grandparent style has SutonnyMJ
+        doc.styles.styles.push(wordcraft_doc::Style {
+            id: "BanglaGrandparent".into(),
+            name: "Bangla Grandparent".into(),
+            chr: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        });
+        // Intervening parent style overrides with Latin Calibri
+        doc.styles.styles.push(wordcraft_doc::Style {
+            id: "LatinParent".into(),
+            name: "Latin Parent".into(),
+            based_on: Some("BanglaGrandparent".into()),
+            chr: CharProps { font: Some("Calibri".into()), ..Default::default() },
+            ..Default::default()
+        });
+        // Child style specifies no explicit font, inherits from LatinParent
+        doc.styles.styles.push(wordcraft_doc::Style {
+            id: "ChildStyle".into(),
+            name: "Child Style".into(),
+            based_on: Some("LatinParent".into()),
+            ..Default::default()
+        });
+        let p = Paragraph {
+            text: "Important announcement".into(),
+            props: wordcraft_doc::props::ParaProps { style: Some("ChildStyle".into()), ..Default::default() },
+            ..Default::default()
+        };
+        doc.body = vec![std::sync::Arc::new(Block::Para(p))];
+
+        normalize_bijoy_fonts(&mut doc);
+
+        let out = doc.body[0].as_para().map(|p| p.text.as_str()).unwrap_or("");
+        assert_eq!(out, "Important announcement", "intervening Latin parent must break Bijoy inheritance");
     }
 }

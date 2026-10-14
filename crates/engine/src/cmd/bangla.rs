@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+use crate::io::slice_safe;
 use crate::{CmdResult, CommandSpec, Session, p};
 
 /// Active Bangla typing mode.
@@ -815,9 +816,38 @@ pub fn find_bijoy_conjunct(c1: char, c2: char) -> Option<&'static str> {
 // 3. Bidirectional Unicode ⇄ ANSI (SutonnyMJ) Converter Engine
 // ============================================================================
 
-/// Converts Unicode Bengali text to ANSI (SutonnyMJ encoding).
-pub fn unicode_to_ansi(text: &str) -> String {
-    let mut s = text.to_string();
+fn replace_tagged(input: Vec<(char, usize)>, from: &str, to: &str) -> Vec<(char, usize)> {
+    let from_chars: Vec<char> = from.chars().collect();
+    if from_chars.is_empty() || input.len() < from_chars.len() {
+        return input;
+    }
+    let Some(&first) = from_chars.first() else { return input };
+    if !input.iter().any(|(c, _)| *c == first) {
+        return input;
+    }
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        let matches = input.get(i..i + from_chars.len()).is_some_and(|slice| slice.iter().zip(&from_chars).all(|((c, _), fc)| c == fc));
+        if matches {
+            let tag = input.get(i).map(|(_, t)| *t).unwrap_or(0);
+            for c in to.chars() {
+                out.push((c, tag));
+            }
+            i += from_chars.len();
+        } else {
+            if let Some(&item) = input.get(i) {
+                out.push(item);
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Converts Unicode Bengali text to ANSI (SutonnyMJ encoding), preserving character property tags.
+pub fn unicode_to_ansi_tagged(input: &[(char, usize)]) -> Vec<(char, usize)> {
+    let mut chars = input.to_vec();
 
     // 1. Common Conjuncts (যুক্তবর্ণ) — 3-consonant clusters first so 2-consonant substrings don't match prematurely
     let conjuncts: &[(&str, &str)] = &[
@@ -926,24 +956,29 @@ pub fn unicode_to_ansi(text: &str) -> String {
     ];
 
     for &(u, a) in conjuncts {
-        s = s.replace(u, a);
+        chars = replace_tagged(chars, u, a);
     }
 
     // 2. Reph reordering: র + ্ + X -> X + ©
-    let mut chars: Vec<char> = s.chars().collect();
-    let mut out = String::new();
+    let mut out: Vec<(char, usize)> = Vec::with_capacity(chars.len());
     let len = chars.len();
     let mut i = 0;
 
     while i < len {
-        if i + 2 < len && chars[i] == 'র' && chars[i + 1] == '্' {
-            let next = chars[i + 2];
+        if i + 2 < len
+            && chars.get(i).map(|(c, _)| *c) == Some('র')
+            && chars.get(i + 1).map(|(c, _)| *c) == Some('্')
+            && let Some(&next) = chars.get(i + 2)
+        {
+            let r_tag = chars.get(i).map(|(_, t)| *t).unwrap_or(0);
             out.push(next);
-            out.push('©'); // SutonnyMJ reph glyph
+            out.push(('©', r_tag));
             i += 3;
             continue;
         }
-        out.push(chars[i]);
+        if let Some(&item) = chars.get(i) {
+            out.push(item);
+        }
         i += 1;
     }
 
@@ -955,107 +990,139 @@ pub fn unicode_to_ansi(text: &str) -> String {
     // ৈ: '‰' + Consonant
     // ো: ('†' or '‡') + Consonant + 'v'
     // ৌ: ('†' or '‡') + Consonant + 'Š'
-    chars = out.chars().collect();
-    out = String::new();
+    let in_chars = out;
+    out = Vec::with_capacity(in_chars.len());
     i = 0;
-    let len = chars.len();
+    let len = in_chars.len();
 
     while i < len {
         // Check for 2-character conjunct cluster first (e.g. "cÖ" for প্র, "¯Í" for স্ত)
-        if i + 2 < len && is_two_char_conjunct(chars[i], chars[i + 1]) {
-            let next = chars[i + 2];
-            let is_medial = i > 0 && !is_word_boundary(chars[i - 1]);
-            let e_glyph = if is_medial { '‡' } else { '†' };
-            match next {
-                'ি' => {
-                    out.push('w');
-                    out.push(chars[i]);
-                    out.push(chars[i + 1]);
-                    i += 3;
-                    continue;
+        if i + 2 < len {
+            let c0 = in_chars.get(i).map(|(c, _)| *c).unwrap_or('\0');
+            let c1 = in_chars.get(i + 1).map(|(c, _)| *c).unwrap_or('\0');
+            if is_two_char_conjunct(c0, c1) {
+                let next_entry = in_chars.get(i + 2).copied();
+                let next = next_entry.map(|(c, _)| c).unwrap_or('\0');
+                let next_tag = next_entry.map(|(_, t)| t).unwrap_or(0);
+                let prev_c = if i > 0 { in_chars.get(i - 1).map(|(c, _)| *c) } else { None };
+                let is_medial = prev_c.is_some_and(|c| !is_word_boundary(c));
+                let e_glyph = if is_medial { '‡' } else { '†' };
+                match next {
+                    'ি' => {
+                        out.push(('w', next_tag));
+                        if let Some(&item) = in_chars.get(i) {
+                            out.push(item);
+                        }
+                        if let Some(&item) = in_chars.get(i + 1) {
+                            out.push(item);
+                        }
+                        i += 3;
+                        continue;
+                    }
+                    'ে' => {
+                        out.push((e_glyph, next_tag));
+                        if let Some(&item) = in_chars.get(i) {
+                            out.push(item);
+                        }
+                        if let Some(&item) = in_chars.get(i + 1) {
+                            out.push(item);
+                        }
+                        i += 3;
+                        continue;
+                    }
+                    'ৈ' => {
+                        out.push(('‰', next_tag));
+                        if let Some(&item) = in_chars.get(i) {
+                            out.push(item);
+                        }
+                        if let Some(&item) = in_chars.get(i + 1) {
+                            out.push(item);
+                        }
+                        i += 3;
+                        continue;
+                    }
+                    'ো' => {
+                        out.push((e_glyph, next_tag));
+                        if let Some(&item) = in_chars.get(i) {
+                            out.push(item);
+                        }
+                        if let Some(&item) = in_chars.get(i + 1) {
+                            out.push(item);
+                        }
+                        out.push(('v', next_tag));
+                        i += 3;
+                        continue;
+                    }
+                    'ৌ' => {
+                        out.push((e_glyph, next_tag));
+                        if let Some(&item) = in_chars.get(i) {
+                            out.push(item);
+                        }
+                        if let Some(&item) = in_chars.get(i + 1) {
+                            out.push(item);
+                        }
+                        out.push(('Š', next_tag));
+                        i += 3;
+                        continue;
+                    }
+                    _ => {}
                 }
-                'ে' => {
-                    out.push(e_glyph);
-                    out.push(chars[i]);
-                    out.push(chars[i + 1]);
-                    i += 3;
-                    continue;
-                }
-                'ৈ' => {
-                    out.push('‰');
-                    out.push(chars[i]);
-                    out.push(chars[i + 1]);
-                    i += 3;
-                    continue;
-                }
-                'ো' => {
-                    out.push(e_glyph);
-                    out.push(chars[i]);
-                    out.push(chars[i + 1]);
-                    out.push('v');
-                    i += 3;
-                    continue;
-                }
-                'ৌ' => {
-                    out.push(e_glyph);
-                    out.push(chars[i]);
-                    out.push(chars[i + 1]);
-                    out.push('Š');
-                    i += 3;
-                    continue;
-                }
-                _ => {}
             }
         }
 
-        let ch = chars[i];
-        if i + 1 < len {
-            let next = chars[i + 1];
-            let is_medial = i > 0 && !is_word_boundary(chars[i - 1]);
-            let e_glyph = if is_medial { '‡' } else { '†' };
-            match next {
-                'ি' => {
-                    out.push('w');
-                    out.push(ch);
-                    i += 2;
-                    continue;
+        if let Some(&ch_entry) = in_chars.get(i) {
+            let _ch = ch_entry.0;
+            if i + 1 < len {
+                let next_entry = in_chars.get(i + 1).copied();
+                let next = next_entry.map(|(c, _)| c).unwrap_or('\0');
+                let next_tag = next_entry.map(|(_, t)| t).unwrap_or(0);
+                let prev_c = if i > 0 { in_chars.get(i - 1).map(|(c, _)| *c) } else { None };
+                let is_medial = prev_c.is_some_and(|c| !is_word_boundary(c));
+                let e_glyph = if is_medial { '‡' } else { '†' };
+                match next {
+                    'ি' => {
+                        out.push(('w', next_tag));
+                        out.push(ch_entry);
+                        i += 2;
+                        continue;
+                    }
+                    'ে' => {
+                        out.push((e_glyph, next_tag));
+                        out.push(ch_entry);
+                        i += 2;
+                        continue;
+                    }
+                    'ৈ' => {
+                        out.push(('‰', next_tag));
+                        out.push(ch_entry);
+                        i += 2;
+                        continue;
+                    }
+                    'ো' => {
+                        out.push((e_glyph, next_tag));
+                        out.push(ch_entry);
+                        out.push(('v', next_tag));
+                        i += 2;
+                        continue;
+                    }
+                    'ৌ' => {
+                        out.push((e_glyph, next_tag));
+                        out.push(ch_entry);
+                        out.push(('Š', next_tag));
+                        i += 2;
+                        continue;
+                    }
+                    _ => {}
                 }
-                'ে' => {
-                    out.push(e_glyph);
-                    out.push(ch);
-                    i += 2;
-                    continue;
-                }
-                'ৈ' => {
-                    out.push('‰');
-                    out.push(ch);
-                    i += 2;
-                    continue;
-                }
-                'ো' => {
-                    out.push(e_glyph);
-                    out.push(ch);
-                    out.push('v');
-                    i += 2;
-                    continue;
-                }
-                'ৌ' => {
-                    out.push(e_glyph);
-                    out.push(ch);
-                    out.push('Š');
-                    i += 2;
-                    continue;
-                }
-                _ => {}
             }
+            out.push(ch_entry);
         }
-        out.push(ch);
         i += 1;
     }
 
     // 4. Character Mapping to SutonnyMJ ASCII
-    let mut final_out = String::with_capacity(out.len());
-    for ch in out.chars() {
+    let mut final_out: Vec<(char, usize)> = Vec::with_capacity(out.len());
+    for (ch, tag) in out {
         let mapped = match ch {
             // Vowels
             'অ' => "A",
@@ -1142,15 +1209,27 @@ pub fn unicode_to_ansi(text: &str) -> String {
         };
 
         if !mapped.is_empty() {
-            final_out.push_str(mapped);
+            for mc in mapped.chars() {
+                final_out.push((mc, tag));
+            }
         } else {
-            final_out.push(ch);
+            final_out.push((ch, tag));
         }
     }
 
     final_out
 }
 
+/// Converts Unicode Bengali text to ANSI (SutonnyMJ encoding).
+pub fn unicode_to_ansi(text: &str) -> String {
+    let tagged: Vec<(char, usize)> = text.chars().map(|c| (c, 0)).collect();
+    let out = unicode_to_ansi_tagged(&tagged);
+    out.into_iter().map(|(c, _)| c).collect()
+}
+
+pub fn is_bn_char(c: char) -> bool {
+    matches!(c, '\u{0980}'..='\u{09FF}')
+}
 pub fn is_bn_consonant(c: char) -> bool {
     ('ক'..='হ').contains(&c) || ('ড়'..='য়').contains(&c) || c == 'ৎ'
 }
@@ -1159,13 +1238,13 @@ fn is_bn_vowel_sign(c: char) -> bool {
     matches!(c, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ' | '্' | 'ং' | 'ঃ' | 'ঁ')
 }
 
-fn parse_bn_cluster(chars: &[char], start: usize) -> Option<usize> {
-    if !chars.get(start).copied().is_some_and(is_bn_consonant) {
+fn parse_bn_cluster_tagged(chars: &[(char, usize)], start: usize) -> Option<usize> {
+    if !chars.get(start).copied().is_some_and(|(c, _)| is_bn_consonant(c)) {
         return None;
     }
     let mut end = start + 1;
     while end < chars.len() {
-        if chars.get(end) == Some(&'্') && chars.get(end + 1).copied().is_some_and(is_bn_consonant) {
+        if chars.get(end).map(|(c, _)| *c) == Some('্') && chars.get(end + 1).copied().is_some_and(|(c, _)| is_bn_consonant(c)) {
             end += 2;
         } else {
             break;
@@ -1312,67 +1391,90 @@ pub fn normalize_bn_cluster_order(text: &str) -> String {
     out
 }
 
+fn normalize_bn_cluster_order_tagged(chars: Vec<(char, usize)>) -> Vec<(char, usize)> {
+    let mut out: Vec<(char, usize)> = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if let Some(&entry) = chars.get(i) {
+            let ch = entry.0;
+            if matches!(ch, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ')
+                && chars.get(i + 1).map(|(c, _)| *c) == Some('্')
+                && chars.get(i + 2).copied().is_some_and(|(c, _)| is_bn_consonant(c))
+            {
+                let mut end = i + 1;
+                while chars.get(end).map(|(c, _)| *c) == Some('্') && chars.get(end + 1).copied().is_some_and(|(c, _)| is_bn_consonant(c)) {
+                    end += 2;
+                }
+                if let Some(tail) = chars.get(i + 1..end) {
+                    for &item in tail {
+                        out.push(item);
+                    }
+                }
+                out.push(entry);
+                i = end;
+                continue;
+            }
+            out.push(entry);
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Converts ANSI (SutonnyMJ encoding) text to Unicode Bengali with full ligature,
-/// diacritic reordering, and cluster-aware vowel shaping.
-pub fn ansi_to_unicode(text: &str) -> String {
+/// diacritic reordering, and cluster-aware vowel shaping, preserving character property tags.
+pub fn ansi_to_unicode_tagged(input: &[(char, usize)]) -> Vec<(char, usize)> {
+    let mut chars = input.to_vec();
+
     // 1. Pre-normalize special symbols, Bijoy shortcuts, and previously corrupted partial conversions
-    let mut s = text
-        .replace("šত্ন", "ন্ত")
-        .replace("¯ত্ন", "স্ত")
-        // Normalise double (accidentally repeated) vowel-diacritic glyphs
-        .replace("~~", "~")
-        .replace("vv", "v")
-        .replace("xx", "x")
-        // Ellipsis / ri-kar shorthand
-        .replace("...", "\u{201E}")
-        .replace('\u{2026}', "\u{201E}")
-        // Precomposed ri-kar pairs: consonant + „ / … / ...
-        .replace("K\u{2026}", "\u{0995}\u{09C3}")
-        .replace("K...", "\u{0995}\u{09C3}")
-        .replace("K\u{201E}", "\u{0995}\u{09C3}")
-        .replace("M\u{2026}", "\u{0997}\u{09C3}")
-        .replace("M...", "\u{0997}\u{09C3}")
-        .replace("M\u{201E}", "\u{0997}\u{09C3}")
-        .replace("d\u{2026}", "\u{09A6}\u{09C3}")
-        .replace("d...", "\u{09A6}\u{09C3}")
-        .replace("d\u{201E}", "\u{09A6}\u{09C3}")
-        .replace("e\u{2026}", "\u{09AC}\u{09C3}")
-        .replace("e...", "\u{09AC}\u{09C3}")
-        .replace("e\u{201E}", "\u{09AC}\u{09C3}")
-        .replace("k\u{2026}", "\u{09B6}\u{09C3}")
-        .replace("m\u{2026}", "\u{09B8}\u{09C3}")
-        .replace("n\u{2026}", "\u{09B9}\u{09C3}")
-        // Dari / pipe
-        .replace('|', "\u{0964}")
-        // Normalise alternate e-kar glyph \u{2021} -> \u{2020}  (must happen before conjunct lookup)
-        .replace('\u{2021}', "\u{2020}")
-        // Collapse doubled pre-vowels (typing artefact or split-run re-join)
-        .replace("\u{2020}\u{2020}", "\u{2020}")
-        // ˆ is the alternate oi-kar glyph; normalise to \u{2030} before the conjunct table
-        .replace('\u{02C6}', "\u{2030}")
-        .replace("\u{2030}\u{2030}", "\u{2030}")
-        // Collapse doubled reph (copy-paste artefact)
-        .replace("\u{00A9}\u{00A9}", "\u{00A9}")
-        // Precomposed \u{09AD}\u{09C2} variants
-        .replace("f\u{201A}", "\u{09AD}\u{09C2}")
-        .replace("f~", "\u{09AD}\u{09C2}")
-        .replace("f\u{201E}", "\u{09AD}\u{09C2}")
-        // \u{099E}\u{09BE} shorthand glyphs
-        .replace("T\u{00C2}", "\u{099E}\u{09BE}")
-        .replace("Tv", "\u{099E}\u{09BE}")
-        // \u{0996}\u{09CD}\u{09B0}\u{09BF} + bisarga / visarga
-        .replace("wL\u{00AA}\u{2122}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}")
-        .replace("wL\u{00AA}t", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}")
-        .replace("wL\u{00AA}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}")
-        // Precomposed \u{09B0}\u{09C1} variants (must come BEFORE the conjunct table maps \u{00A9} and \u{2030})
-        .replace("i\u{00E6}", "\u{09B0}\u{09C1}")
-        .replace("i\u{201C}", "\u{09B0}\u{09C1}")
-        // Precomposed \u{09B9}\u{09C1} / \u{0997}\u{09C1} / \u{09B6}\u{09C1}
-        .replace('\u{00FB}', "\u{09B9}\u{09C1}")
-        .replace('\u{00B8}', "\u{0997}\u{09C1}")
-        .replace('\u{00EF}', "\u{09B6}\u{09C1}")
-        // Collapse doubled \u{09CC} glyph
-        .replace("\u{0160}\u{0160}", "\u{0160}");
+    let pre_normalizations: &[(&str, &str)] = &[
+        ("šত্ন", "ন্ত"),
+        ("¯ত্ন", "স্ত"),
+        ("~~", "~"),
+        ("vv", "v"),
+        ("xx", "x"),
+        ("...", "\u{201E}"),
+        ("\u{2026}", "\u{201E}"),
+        ("K\u{2026}", "\u{0995}\u{09C3}"),
+        ("K...", "\u{0995}\u{09C3}"),
+        ("K\u{201E}", "\u{0995}\u{09C3}"),
+        ("M\u{2026}", "\u{0997}\u{09C3}"),
+        ("M...", "\u{0997}\u{09C3}"),
+        ("M\u{201E}", "\u{0997}\u{09C3}"),
+        ("d\u{2026}", "\u{09A6}\u{09C3}"),
+        ("d...", "\u{09A6}\u{09C3}"),
+        ("d\u{201E}", "\u{09A6}\u{09C3}"),
+        ("e\u{2026}", "\u{09AC}\u{09C3}"),
+        ("e...", "\u{09AC}\u{09C3}"),
+        ("e\u{201E}", "\u{09AC}\u{09C3}"),
+        ("k\u{2026}", "\u{09B6}\u{09C3}"),
+        ("m\u{2026}", "\u{09B8}\u{09C3}"),
+        ("n\u{2026}", "\u{09B9}\u{09C3}"),
+        ("|", "\u{0964}"),
+        ("\u{2021}", "\u{2020}"),
+        ("\u{2020}\u{2020}", "\u{2020}"),
+        ("\u{02C6}", "\u{2030}"),
+        ("\u{2030}\u{2030}", "\u{2030}"),
+        ("\u{00A9}\u{00A9}", "\u{00A9}"),
+        ("f\u{201A}", "\u{09AD}\u{09C2}"),
+        ("f~", "\u{09AD}\u{09C2}"),
+        ("f\u{201E}", "\u{09AD}\u{09C2}"),
+        ("T\u{00C2}", "\u{099E}\u{09BE}"),
+        ("Tv", "\u{099E}\u{09BE}"),
+        ("wL\u{00AA}\u{2122}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}"),
+        ("wL\u{00AA}t", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}"),
+        ("wL\u{00AA}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}"),
+        ("i\u{00E6}", "\u{09B0}\u{09C1}"),
+        ("i\u{201C}", "\u{09B0}\u{09C1}"),
+        ("\u{00FB}", "\u{09B9}\u{09C1}"),
+        ("\u{00B8}", "\u{0997}\u{09C1}"),
+        ("\u{00EF}", "\u{09B6}\u{09C1}"),
+        ("\u{0160}\u{0160}", "\u{0160}"),
+    ];
+
+    for &(from, to) in pre_normalizations {
+        chars = replace_tagged(chars, from, to);
+    }
 
     // 2. Replace Conjunct Glyphs and Phalas (longest matches first).
     // Note: Pre-kars ('w', '†', '‰') are intentionally NOT expanded here so that Step 4
@@ -1507,13 +1609,13 @@ pub fn ansi_to_unicode(text: &str) -> String {
     ];
 
     for &(a, u) in conjuncts {
-        s = s.replace(a, u);
+        chars = replace_tagged(chars, a, u);
     }
 
     // 3. Map Independent Vowels and Consonants to Bengali Unicode
-    s = s.replace("Av", "আ");
-    let mut mapped_chars = String::with_capacity(s.len());
-    for ch in s.chars() {
+    chars = replace_tagged(chars, "Av", "আ");
+    let mut mapped_chars: Vec<(char, usize)> = Vec::with_capacity(chars.len());
+    for (ch, tag) in chars {
         let m = match ch {
             'A' => "অ",
             'B' => "ই",
@@ -1572,67 +1674,69 @@ pub fn ansi_to_unicode(text: &str) -> String {
             _ => "",
         };
         if !m.is_empty() {
-            mapped_chars.push_str(m);
+            for mc in m.chars() {
+                mapped_chars.push((mc, tag));
+            }
         } else {
-            mapped_chars.push(ch);
+            mapped_chars.push((ch, tag));
         }
     }
 
     // 4. Cluster-Aware Pre-kar & Split-Vowel Reordering
-    let in_chars: Vec<char> = mapped_chars.chars().collect();
-    let mut out = String::with_capacity(in_chars.len());
+    let in_chars = mapped_chars;
+    let mut out: Vec<(char, usize)> = Vec::with_capacity(in_chars.len());
     let mut i = 0;
 
-    while let Some(&ch) = in_chars.get(i) {
+    while let Some(&(ch, tag)) = in_chars.get(i) {
         match ch {
             'w' => {
-                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1)
+                if let Some(c_end) = parse_bn_cluster_tagged(&in_chars, i + 1)
                     && let Some(cluster) = in_chars.get(i + 1..c_end)
                 {
-                    for &c in cluster {
-                        out.push(c);
+                    for &item in cluster {
+                        out.push(item);
                     }
-                    out.push('ি');
+                    out.push(('ি', tag));
                     i = c_end;
                     continue;
                 }
             }
             '†' => {
-                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1)
+                if let Some(c_end) = parse_bn_cluster_tagged(&in_chars, i + 1)
                     && let Some(cluster) = in_chars.get(i + 1..c_end)
                 {
-                    if matches!(in_chars.get(c_end), Some('v' | 'া')) {
-                        for &c in cluster {
-                            out.push(c);
+                    if matches!(in_chars.get(c_end).map(|(c, _)| *c), Some('v' | 'া')) {
+                        for &item in cluster {
+                            out.push(item);
                         }
-                        out.push('ো');
+                        out.push(('ো', tag));
                         i = c_end + 1;
                         continue;
-                    } else if matches!(in_chars.get(c_end), Some('Š' | 'ৌ')) {
-                        for &c in cluster {
-                            out.push(c);
+                    } else if matches!(in_chars.get(c_end).map(|(c, _)| *c), Some('Š' | 'ৌ')) {
+                        for &item in cluster {
+                            out.push(item);
                         }
-                        out.push('ৌ');
+                        out.push(('ৌ', tag));
                         i = c_end + 1;
                         continue;
                     } else {
-                        for &c in cluster {
-                            out.push(c);
+                        for &item in cluster {
+                            out.push(item);
                         }
-                        out.push('ে');
+                        out.push(('ে', tag));
                         i = c_end;
                         continue;
                     }
                 }
             }
             '‰' => {
-                if let Some(c_end) = parse_bn_cluster(&in_chars, i + 1)
+                if let Some(c_end) = parse_bn_cluster_tagged(&in_chars, i + 1)
                     && let Some(cluster) = in_chars.get(i + 1..c_end)
                 {
-                    for &c in cluster {
-                        out.push(c);
+                    for &item in cluster {
+                        out.push(item);
                     }
-                    out.push('ৈ');
+                    out.push(('ৈ', tag));
                     i = c_end;
                     continue;
                 }
@@ -1640,14 +1744,14 @@ pub fn ansi_to_unicode(text: &str) -> String {
             _ => {}
         }
 
-        out.push(ch);
+        out.push((ch, tag));
         i += 1;
     }
 
     // 5. Map Post-Diacritics, Punctuation, and Digits BEFORE Reph Reordering
     // so that C + vowel + © (e.g. KZ…©K -> কর্তৃক, mvKz©jvi -> সার্কুলার, m‡ev©”P -> সর্বোচ্চ) is recognized.
-    let mut post_out = String::with_capacity(out.len());
-    for ch in out.chars() {
+    let mut post_out: Vec<(char, usize)> = Vec::with_capacity(out.len());
+    for (ch, tag) in out {
         let mapped = match ch {
             'v' => "া",
             'x' => "ী",
@@ -1672,49 +1776,59 @@ pub fn ansi_to_unicode(text: &str) -> String {
             _ => "",
         };
         if !mapped.is_empty() {
-            post_out.push_str(mapped);
+            for mc in mapped.chars() {
+                post_out.push((mc, tag));
+            }
         } else {
-            post_out.push(ch);
+            post_out.push((ch, tag));
         }
     }
 
     // 6. Reph (©) Reordering: C (+ vowel signs) + © -> র্ + C (+ vowel signs)
-    let rchars: Vec<char> = post_out.chars().collect();
-    let mut reph_out = String::with_capacity(rchars.len());
+    let rchars = post_out;
+    let mut reph_out: Vec<(char, usize)> = Vec::with_capacity(rchars.len());
     let mut j = 0;
 
-    while let Some(&rch) = rchars.get(j) {
-        if let Some(c_end) = parse_bn_cluster(&rchars, j) {
+    while let Some(&(rch, tag)) = rchars.get(j) {
+        if let Some(c_end) = parse_bn_cluster_tagged(&rchars, j) {
             let mut v_end = c_end;
-            while rchars.get(v_end).copied().is_some_and(is_bn_vowel_sign) {
+            while rchars.get(v_end).copied().is_some_and(|(c, _)| is_bn_vowel_sign(c)) {
                 v_end += 1;
             }
-            if rchars.get(v_end) == Some(&'©')
+            if rchars.get(v_end).map(|(c, _)| *c) == Some('©')
                 && let Some(slice) = rchars.get(j..v_end)
             {
-                reph_out.push_str("র্");
-                for &c in slice {
-                    reph_out.push(c);
+                let reph_tag = rchars.get(v_end).map(|(_, t)| *t).unwrap_or(tag);
+                reph_out.push(('র', reph_tag));
+                reph_out.push(('্', reph_tag));
+                for &item in slice {
+                    reph_out.push(item);
                 }
                 j = v_end + 1;
                 continue;
             }
         }
-        reph_out.push(rch);
+        reph_out.push((rch, tag));
         j += 1;
     }
 
     // 7. Normalize any vowel sign preceding `্` + Consonant (e.g. যান্তি্রক -> যান্ত্রিক)
     // and Chandrabindu (ঁ) after vowel signs (e.g. চঁাদ -> চাঁদ).
-    let mut final_out = normalize_bn_cluster_order(&reph_out);
+    let mut final_out = normalize_bn_cluster_order_tagged(reph_out);
     for (bad, good) in [("ঁা", "াঁ"), ("ঁি", "িঁ"), ("ঁী", "ীঁ"), ("ঁু", "ুঁ"), ("ঁূ", "ূঁ"), ("ঁৃ", "ৃঁ"), ("ঁে", "েঁ"), ("ঁৈ", "ৈঁ"), ("ঁো", "োঁ"), ("ঁৌ", "ৌঁ")]
     {
-        if final_out.contains(bad) {
-            final_out = final_out.replace(bad, good);
-        }
+        final_out = replace_tagged(final_out, bad, good);
     }
 
     final_out
+}
+
+/// Converts ANSI (SutonnyMJ encoding) text to Unicode Bengali with full ligature,
+/// diacritic reordering, and cluster-aware vowel shaping.
+pub fn ansi_to_unicode(text: &str) -> String {
+    let tagged: Vec<(char, usize)> = text.chars().map(|c| (c, 0)).collect();
+    let out = ansi_to_unicode_tagged(&tagged);
+    out.into_iter().map(|(c, _)| c).collect()
 }
 
 // ============================================================================
@@ -1975,21 +2089,75 @@ fn convert_blocks_recursive(blocks: &mut Vec<Arc<wordcraft_doc::Block>>, is_to_a
                 p.mark.font = Some(target_font.into());
                 p.mark.font_cs = Some(target_font.into());
                 if !p.text.is_empty() {
-                    let converted = if is_to_ansi { unicode_to_ansi(&p.text) } else { ansi_to_unicode(&p.text) };
-                    let mut props = p.runs.first().map(|r| r.props.clone()).unwrap_or_default();
-                    props.font = Some(target_font.into());
-                    props.font_cs = Some(target_font.into());
-                    if props.size.is_some() {
-                        props.size_cs = props.size;
+                    // 1. Tag each character with its source run index
+                    let mut tagged = Vec::with_capacity(p.text.chars().count());
+                    if p.runs.is_empty() {
+                        for c in p.text.chars() {
+                            tagged.push((c, 0));
+                        }
+                    } else {
+                        let mut offset = 0;
+                        for (run_idx, r) in p.runs.iter().enumerate() {
+                            let end = (offset + r.len).min(p.text.len());
+                            let slice = slice_safe(&p.text, offset, end);
+                            offset = end;
+                            for c in slice.chars() {
+                                tagged.push((c, run_idx));
+                            }
+                        }
+                        if offset < p.text.len() {
+                            let trailing = slice_safe(&p.text, offset, p.text.len());
+                            let last_idx = p.runs.len().saturating_sub(1);
+                            for c in trailing.chars() {
+                                tagged.push((c, last_idx));
+                            }
+                        }
                     }
-                    if props.bold.is_some() {
-                        props.bold_cs = props.bold;
+
+                    // 2. Convert holistically across run boundaries
+                    let converted_tagged = if is_to_ansi { unicode_to_ansi_tagged(&tagged) } else { ansi_to_unicode_tagged(&tagged) };
+
+                    // 3. Reconstruct text and runs with mapped properties
+                    let mut new_text = String::with_capacity(converted_tagged.len() * 3);
+                    let mut new_runs: Vec<wordcraft_doc::Run> = Vec::new();
+
+                    let resolve_run_props = |run_idx: usize| -> wordcraft_doc::CharProps {
+                        let mut props = p.runs.get(run_idx).map(|r| r.props.clone()).unwrap_or_default();
+                        props.font = Some(target_font.into());
+                        props.font_cs = Some(target_font.into());
+                        if props.size.is_some() {
+                            props.size_cs = props.size;
+                        }
+                        if props.bold.is_some() {
+                            props.bold_cs = props.bold;
+                        }
+                        if props.italic.is_some() {
+                            props.italic_cs = props.italic;
+                        }
+                        props
+                    };
+
+                    for (c, run_idx) in converted_tagged {
+                        let char_len = c.len_utf8();
+                        new_text.push(c);
+                        let props = resolve_run_props(run_idx);
+
+                        if let Some(last_run) = new_runs.last_mut()
+                            && last_run.props == props
+                        {
+                            last_run.len += char_len;
+                        } else {
+                            new_runs.push(wordcraft_doc::Run { len: char_len, props });
+                        }
                     }
-                    if props.italic.is_some() {
-                        props.italic_cs = props.italic;
+
+                    if new_runs.is_empty() && !new_text.is_empty() {
+                        let props = resolve_run_props(0);
+                        new_runs.push(wordcraft_doc::Run { len: new_text.len(), props });
                     }
-                    p.text = converted.clone();
-                    p.runs = vec![wordcraft_doc::Run { len: converted.len(), props }];
+
+                    p.text = new_text;
+                    p.runs = new_runs;
                     count += 1;
                 }
             }
@@ -2428,5 +2596,65 @@ mod tests {
         assert_eq!(phonetic_transliterate("achi"), "আছি");
         assert_eq!(phonetic_transliterate("ononto"), "অনন্ত");
         assert_eq!(phonetic_transliterate("kal"), "কাল");
+    }
+
+    #[test]
+    fn split_pre_base_vowel_and_conjunct_runs_convert_correctly() {
+        use std::sync::Arc;
+        use wordcraft_doc::{Block, CharProps, Paragraph, Run};
+
+        // Test 1: Unicode to ANSI with split pre-base vowel (ক + ি across runs)
+        // Run 0 has 'ক' (bold), Run 1 has 'ি' (italic)
+        let r0 = Run { len: "ক".len(), props: CharProps { bold: Some(true), ..Default::default() } };
+        let r1 = Run { len: "ি".len(), props: CharProps { italic: Some(true), ..Default::default() } };
+        let p1 = Paragraph { text: "কি".into(), runs: vec![r0, r1], ..Default::default() };
+        let mut blocks = vec![Arc::new(Block::Para(p1))];
+        convert_blocks_recursive(&mut blocks, true, "SutonnyMJ");
+
+        let p1_out = blocks[0].as_para().expect("paragraph");
+        assert_eq!(p1_out.text, "wK", "Unicode 'কি' split across runs must convert to 'wK' in ANSI, not 'Kw'");
+        assert_eq!(p1_out.runs.len(), 2);
+        // 'w' (1 byte) inherits props of 'ি' (italic)
+        assert_eq!(p1_out.runs[0].len, 1);
+        assert_eq!(p1_out.runs[0].props.italic, Some(true));
+        assert_eq!(p1_out.runs[0].props.font.as_deref(), Some("SutonnyMJ"));
+        // 'K' (1 byte) inherits props of 'ক' (bold)
+        assert_eq!(p1_out.runs[1].len, 1);
+        assert_eq!(p1_out.runs[1].props.bold, Some(true));
+        assert_eq!(p1_out.runs[1].props.font.as_deref(), Some("SutonnyMJ"));
+
+        // Test 2: ANSI to Unicode with split pre-base vowel (w + K across runs)
+        // Run 0 has 'w' (italic), Run 1 has 'K' (bold)
+        let r0 = Run { len: "w".len(), props: CharProps { italic: Some(true), ..Default::default() } };
+        let r1 = Run { len: "K".len(), props: CharProps { bold: Some(true), ..Default::default() } };
+        let p2 = Paragraph { text: "wK".into(), runs: vec![r0, r1], ..Default::default() };
+        let mut blocks = vec![Arc::new(Block::Para(p2))];
+        convert_blocks_recursive(&mut blocks, false, "Kalpurush");
+
+        let p2_out = blocks[0].as_para().expect("paragraph");
+        assert_eq!(p2_out.text, "কি", "ANSI 'wK' split across runs must convert to 'কি' in Unicode, not 'িক'");
+        assert_eq!(p2_out.runs.len(), 2);
+        // 'ক' (3 bytes) inherits props of 'K' (bold)
+        assert_eq!(p2_out.runs[0].len, "ক".len());
+        assert_eq!(p2_out.runs[0].props.bold, Some(true));
+        assert_eq!(p2_out.runs[0].props.font.as_deref(), Some("Kalpurush"));
+        // 'ি' (3 bytes) inherits props of 'w' (italic)
+        assert_eq!(p2_out.runs[1].len, "ি".len());
+        assert_eq!(p2_out.runs[1].props.italic, Some(true));
+        assert_eq!(p2_out.runs[1].props.font.as_deref(), Some("Kalpurush"));
+
+        // Test 3: Conjunct split across runs in Unicode to ANSI
+        // Run 0 has 'ক', Run 1 has '্ত'
+        let r0 = Run { len: "ক".len(), props: CharProps { bold: Some(true), ..Default::default() } };
+        let r1 = Run { len: "্ত".len(), props: CharProps { bold: Some(true), ..Default::default() } };
+        let p3 = Paragraph { text: "ক্ত".into(), runs: vec![r0, r1], ..Default::default() };
+        let mut blocks = vec![Arc::new(Block::Para(p3))];
+        convert_blocks_recursive(&mut blocks, true, "SutonnyMJ");
+
+        let p3_out = blocks[0].as_para().expect("paragraph");
+        assert_eq!(p3_out.text, "³", "Unicode 'ক্ত' split across runs must form the ANSI conjunct '³'");
+        assert_eq!(p3_out.runs.len(), 1);
+        assert_eq!(p3_out.runs[0].len, "³".len());
+        assert_eq!(p3_out.runs[0].props.bold, Some(true));
     }
 }
