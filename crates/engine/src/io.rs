@@ -487,52 +487,59 @@ pub(crate) fn slice_safe(s: &str, start: usize, end: usize) -> &str {
 /// plus multiple tabs plus long runs of spaces (`   \t\t\t                `). Because Unicode
 /// `Kalpurush` glyphs and spaces are slightly wider than `SutonnyMJ`, trailing spaces before `\t`
 /// can push a tab past a 36pt stop and long space runs after `\t` can wrap the date onto line 2.
-fn compact_bijoy_tab_spaces(s: &str) -> String {
-    if !s.contains('\t') {
-        return s.to_string();
+fn compact_bijoy_tab_spaces_tagged(chars: &[(char, usize)]) -> Vec<(char, usize)> {
+    if !chars.iter().any(|(c, _)| *c == '\t') {
+        return chars.to_vec();
     }
-    let chars: Vec<char> = s.chars().collect();
-    let mut out = String::with_capacity(s.len());
+    let mut out = Vec::with_capacity(chars.len());
     let mut i = 0usize;
     let mut after_tab = false;
     while i < chars.len() {
-        let Some(&ch) = chars.get(i) else { break };
+        let (ch, tag) = chars[i];
         if ch == ' ' {
             let mut j = i;
-            while chars.get(j) == Some(&' ') {
+            while j < chars.len() && chars[j].0 == ' ' {
                 j += 1;
             }
             let space_count = j - i;
-            if chars.get(j) == Some(&'\t') {
+            if j < chars.len() && chars[j].0 == '\t' {
                 // Strip spaces immediately preceding a tab stop.
                 i = j;
                 continue;
             }
             if after_tab && space_count >= 4 {
                 let keep = (space_count / 4).max(1);
-                for _ in 0..keep {
-                    out.push(' ');
+                for k in 0..keep {
+                    out.push(chars[i + k]);
                 }
                 after_tab = false;
                 i = j;
                 continue;
             }
-            for _ in 0..space_count {
-                out.push(' ');
+            for k in 0..space_count {
+                out.push(chars[i + k]);
             }
             after_tab = false;
             i = j;
         } else if ch == '\t' {
-            out.push('\t');
+            out.push((ch, tag));
             after_tab = true;
             i += 1;
         } else {
-            out.push(ch);
+            out.push((ch, tag));
             after_tab = false;
             i += 1;
         }
     }
     out
+}
+
+fn compact_bijoy_tab_spaces(s: &str) -> String {
+    if !s.contains('\t') {
+        return s.to_string();
+    }
+    let tagged: Vec<(char, usize)> = s.chars().map(|c| (c, 0)).collect();
+    compact_bijoy_tab_spaces_tagged(&tagged).into_iter().map(|(c, _)| c).collect()
 }
 
 fn normalize_blocks_bijoy(
@@ -633,54 +640,87 @@ fn normalize_blocks_bijoy(
                             props.size_cs = props.size;
                         }
 
-                        // Coalesce consecutive Bijoy runs that share identical formatting OR split a single word
-                        // across an XML `<w:r>` boundary so pre-base vowels (`w`, `†`, `‰`), conjuncts (`¯Í`),
-                        // and reph (`©`) reorder cleanly across the entire word.
-                        // Do NOT merge across OBJ placeholder characters (inline images / objects).
-                        const OBJ: char = wordcraft_doc::para::OBJ;
-                        if let Some(last) = staged.last_mut()
-                            && last.is_bijoy
-                            && is_bijoy
-                        {
-                            let same_props = last.props == props;
-                            let splits_word = !last.slice.ends_with(char::is_whitespace)
-                                && !run_slice.starts_with(char::is_whitespace)
-                                && !last.slice.ends_with(OBJ)
-                                && !run_slice.starts_with(OBJ);
-                            if same_props || splits_word {
-                                last.slice.push_str(run_slice);
-                                continue;
-                            }
-                        }
-
                         staged.push(PendingRun { slice: run_slice.to_string(), props, is_bijoy, is_partial });
                     }
 
-                    let mut new_text = String::new();
+                    let mut new_text = String::with_capacity(p.text.len() * 3);
                     let mut new_runs = Vec::with_capacity(staged.len().max(1));
 
-                    for item in staged {
-                        if item.is_bijoy {
-                            let converted = compact_bijoy_tab_spaces(&crate::cmd::bangla::ansi_to_unicode(&item.slice));
-                            new_runs.push(wordcraft_doc::Run { len: converted.len(), props: item.props });
-                            new_text.push_str(&converted);
-                        } else if item.is_partial {
-                            let converted = compact_bijoy_tab_spaces(&repair_partial_bijoy(&item.slice));
-                            new_runs.push(wordcraft_doc::Run { len: converted.len(), props: item.props });
-                            new_text.push_str(&converted);
+                    let push_char = |c: char, props: &wordcraft_doc::CharProps, text: &mut String, runs: &mut Vec<wordcraft_doc::Run>| {
+                        let char_len = c.len_utf8();
+                        text.push(c);
+                        if let Some(last) = runs.last_mut()
+                            && last.props == *props
+                        {
+                            last.len += char_len;
                         } else {
-                            new_runs.push(wordcraft_doc::Run { len: item.slice.len(), props: item.props });
-                            new_text.push_str(&item.slice);
+                            runs.push(wordcraft_doc::Run { len: char_len, props: props.clone() });
+                        }
+                    };
+
+                    let mut i = 0;
+                    while i < staged.len() {
+                        if staged[i].is_bijoy {
+                            // Collect contiguous Bijoy runs into a single tagged cluster
+                            let mut tagged = Vec::new();
+                            while i < staged.len() && staged[i].is_bijoy {
+                                for c in staged[i].slice.chars() {
+                                    if c == wordcraft_doc::para::OBJ {
+                                        // Flush preceding Bijoy cluster before OBJ
+                                        if !tagged.is_empty() {
+                                            let converted = crate::cmd::bangla::ansi_to_unicode_tagged(&tagged);
+                                            let compacted = compact_bijoy_tab_spaces_tagged(&converted);
+                                            for (conv_c, run_idx) in compacted {
+                                                push_char(conv_c, &staged[run_idx].props, &mut new_text, &mut new_runs);
+                                            }
+                                            tagged.clear();
+                                        }
+                                        push_char(c, &staged[i].props, &mut new_text, &mut new_runs);
+                                    } else {
+                                        tagged.push((c, i));
+                                    }
+                                }
+                                i += 1;
+                            }
+                            if !tagged.is_empty() {
+                                let converted = crate::cmd::bangla::ansi_to_unicode_tagged(&tagged);
+                                let compacted = compact_bijoy_tab_spaces_tagged(&converted);
+                                for (conv_c, run_idx) in compacted {
+                                    push_char(conv_c, &staged[run_idx].props, &mut new_text, &mut new_runs);
+                                }
+                            }
+                        } else if staged[i].is_partial {
+                            let converted = compact_bijoy_tab_spaces(&repair_partial_bijoy(&staged[i].slice));
+                            for c in converted.chars() {
+                                push_char(c, &staged[i].props, &mut new_text, &mut new_runs);
+                            }
+                            i += 1;
+                        } else {
+                            for c in staged[i].slice.chars() {
+                                push_char(c, &staged[i].props, &mut new_text, &mut new_runs);
+                            }
+                            i += 1;
                         }
                     }
 
                     if new_runs.is_empty() {
-                        let raw = if para_is_partial { repair_partial_bijoy(&p.text) } else { crate::cmd::bangla::ansi_to_unicode(&p.text) };
-                        let converted = compact_bijoy_tab_spaces(&raw);
                         let mut props = wordcraft_doc::CharProps { size: style_size, ..Default::default() };
-                        normalize_bijoy_char_props(&mut props);
-                        new_runs.push(wordcraft_doc::Run { len: converted.len(), props });
-                        new_text = converted;
+                        if para_has_bijoy || default_is_bijoy {
+                            normalize_bijoy_char_props(&mut props);
+                            let tagged: Vec<(char, usize)> = p.text.chars().map(|c| (c, 0)).collect();
+                            let converted = crate::cmd::bangla::ansi_to_unicode_tagged(&tagged);
+                            let compacted = compact_bijoy_tab_spaces_tagged(&converted);
+                            for (c, _) in compacted {
+                                push_char(c, &props, &mut new_text, &mut new_runs);
+                            }
+                        } else if para_is_partial {
+                            props.font = Some("Kalpurush".into());
+                            props.font_cs = Some("Kalpurush".into());
+                            let converted = compact_bijoy_tab_spaces(&repair_partial_bijoy(&p.text));
+                            for c in converted.chars() {
+                                push_char(c, &props, &mut new_text, &mut new_runs);
+                            }
+                        }
                     }
 
                     p.text = new_text;
@@ -1076,5 +1116,39 @@ mod tests {
 
         let out = doc.body[0].as_para().map(|p| p.text.as_str()).unwrap_or("");
         assert_eq!(out, "Important announcement", "intervening Latin parent must break Bijoy inheritance");
+    }
+
+    #[test]
+    fn import_preserves_distinct_formatting_across_intra_word_runs() {
+        let mut doc = Document::default();
+        // Run 0 has 'w' (italic) in SutonnyMJ
+        let r0 = Run { len: "w".len(), props: CharProps { font: Some("SutonnyMJ".into()), italic: Some(true), ..Default::default() } };
+        // Run 1 has 'K' (bold) in SutonnyMJ
+        let r1 = Run { len: "K".len(), props: CharProps { font: Some("SutonnyMJ".into()), bold: Some(true), ..Default::default() } };
+        let p = Paragraph {
+            text: "wK".into(),
+            runs: vec![r0, r1],
+            mark: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        };
+        doc.body = vec![std::sync::Arc::new(Block::Para(p))];
+
+        normalize_bijoy_fonts(&mut doc);
+
+        let p_out = doc.body[0].as_para().expect("paragraph");
+        assert_eq!(p_out.text, "কি", "wK in SutonnyMJ must convert to Unicode কি on import");
+        assert_eq!(p_out.runs.len(), 2, "must keep 2 runs preserving distinct bold and italic formatting");
+
+        // In Unicode 'কি', 'ক' comes first (inheriting props of 'K', bold)
+        assert_eq!(p_out.runs[0].len, "ক".len());
+        assert_eq!(p_out.runs[0].props.bold, Some(true));
+        assert_eq!(p_out.runs[0].props.italic, None);
+        assert_eq!(p_out.runs[0].props.font.as_deref(), Some("Kalpurush"));
+
+        // Followed by 'ি' (inheriting props of 'w', italic)
+        assert_eq!(p_out.runs[1].len, "ি".len());
+        assert_eq!(p_out.runs[1].props.italic, Some(true));
+        assert_eq!(p_out.runs[1].props.bold, None);
+        assert_eq!(p_out.runs[1].props.font.as_deref(), Some("Kalpurush"));
     }
 }
