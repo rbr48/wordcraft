@@ -1,9 +1,12 @@
 //! The browser shell: web `Services`, drag-and-drop, the unsaved-changes guard and the eframe
 //! web runner.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast as _;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
@@ -13,6 +16,53 @@ const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 const RECIPIENT_EXTS: &[&str] = &["csv", "tsv", "txt"];
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
+const DOC_STORAGE_KEY: &str = "wordcraft_active_document";
+
+#[derive(Serialize, Deserialize)]
+struct StoredDocument {
+    doc: wordcraft_doc::Document,
+    #[serde(default)]
+    media: Vec<(String, String)>,
+}
+
+fn load_stored_document() -> Option<wordcraft_doc::Document> {
+    let window = web_sys::window()?;
+    let storage = window.local_storage().ok()??;
+    let json = storage.get_item(DOC_STORAGE_KEY).ok()??;
+    if json.trim().is_empty() {
+        return None;
+    }
+    match serde_json::from_str::<StoredDocument>(&json) {
+        Ok(mut stored) => {
+            for (key, b64) in stored.media {
+                if let Ok(bytes) = BASE64.decode(b64.as_bytes()) {
+                    stored.doc.media.insert(key, std::sync::Arc::new(bytes));
+                }
+            }
+            log::info!("Restored document from browser localStorage");
+            Some(stored.doc)
+        }
+        Err(e) => {
+            log::warn!("Could not restore document from localStorage: {e}");
+            None
+        }
+    }
+}
+
+fn save_stored_document(doc: &wordcraft_doc::Document) {
+    let Some(window) = web_sys::window() else { return };
+    let Some(storage) = window.local_storage().ok().flatten() else { return };
+    let mut media = Vec::new();
+    for (key, arc_bytes) in &doc.media {
+        media.push((key.clone(), BASE64.encode(&**arc_bytes)));
+    }
+    let stored = StoredDocument { doc: doc.clone(), media };
+    if let Ok(json) = serde_json::to_string(&stored) {
+        if let Err(e) = storage.set_item(DOC_STORAGE_KEY, &json) {
+            log::warn!("Failed to save document to localStorage: {e:?}");
+        }
+    }
+}
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
@@ -26,7 +76,17 @@ pub fn start() {
             return;
         };
         let dirty = Rc::new(Cell::new(false));
-        if let Err(e) = guard_unload(dirty.clone()) {
+        let doc = if query().contains("sample") {
+            wordcraft_engine::sample::sample_document()
+        } else if query().contains("new") {
+            wordcraft_doc::Document::new()
+        } else if let Some(stored) = load_stored_document() {
+            stored
+        } else {
+            wordcraft_doc::Document::new()
+        };
+        let last_doc = Rc::new(RefCell::new(Some(doc.clone())));
+        if let Err(e) = guard_unload(dirty.clone(), last_doc.clone()) {
             log::error!("no unsaved-changes guard: {e}");
         }
         let mut options = eframe::WebOptions::default();
@@ -35,6 +95,7 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
+        let shell_last_doc = last_doc.clone();
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -47,10 +108,10 @@ pub fn start() {
                     if let Err(e) = listen_for_pasted_pictures(inbox.clone(), cc.egui_ctx.clone()) {
                         log::error!("pasting pictures is unavailable: {e}");
                     }
-                    let doc = if query().contains("sample") { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
                     let mut app = WordApp::new(Session::new(doc), services(inbox.clone(), cc.egui_ctx.clone(), dirty));
                     app.autosave = false;
-                    Ok(Box::new(WebShell { app, inbox }))
+                    let initial_rev = app.session.rev();
+                    Ok(Box::new(WebShell { app, inbox, last_doc: shell_last_doc, last_saved_rev: initial_rev, dirty_since_ms: None }))
                 }),
             )
             .await;
@@ -72,6 +133,9 @@ fn query() -> String {
 struct WebShell {
     app: WordApp,
     inbox: Inbox,
+    last_doc: Rc<RefCell<Option<wordcraft_doc::Document>>>,
+    last_saved_rev: u64,
+    dirty_since_ms: Option<f64>,
 }
 
 impl eframe::App for WebShell {
@@ -91,6 +155,26 @@ impl eframe::App for WebShell {
                 }
             });
         }
+
+        let current_rev = self.app.session.rev();
+        if current_rev != self.last_saved_rev {
+            if let Ok(mut guard) = self.last_doc.try_borrow_mut() {
+                *guard = Some(self.app.session.doc.clone());
+            }
+            let now = js_sys::Date::now();
+            match self.dirty_since_ms {
+                None => {
+                    self.dirty_since_ms = Some(now);
+                }
+                Some(since) if now - since >= 800.0 => {
+                    save_stored_document(&self.app.session.doc);
+                    self.last_saved_rev = current_rev;
+                    self.dirty_since_ms = None;
+                }
+                _ => {}
+            }
+        }
+
         self.app.logic(ctx);
     }
 
@@ -184,9 +268,14 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>) -> Services
 
 /// Closing, reloading or leaving the tab with unsaved changes asks first. Browsers show their own
 /// confirmation (a page can only ask for it), so there is no Save button: Cancel, then File › Save.
-fn guard_unload(dirty: Rc<Cell<bool>>) -> Result<(), String> {
+fn guard_unload(dirty: Rc<Cell<bool>>, last_doc: Rc<RefCell<Option<wordcraft_doc::Document>>>) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
     let on_unload = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
+        if let Ok(guard) = last_doc.try_borrow() {
+            if let Some(doc) = &*guard {
+                save_stored_document(doc);
+            }
+        }
         if dirty.get() {
             e.prevent_default();
             // Older browsers ask only when `returnValue` is set.

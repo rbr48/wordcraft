@@ -36,6 +36,7 @@ static BUNDLED: &[&[u8]] = &[
     include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"),
     include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
     include_bytes!("../../../assets/fonts/Kalpurush.ttf"),
+    include_bytes!("../../../assets/fonts/KalpurushANSI.ttf"),
 ];
 
 #[derive(Clone)]
@@ -1195,5 +1196,13 @@ mod tests {
         let fallback = db.fallback_for('ক', latin.id());
         assert!(fallback.is_some(), "Must find fallback for Bengali Ka");
         assert_eq!(fallback.map(|f| f.family.clone()), Some("Kalpurush".into()));
+    }
+
+    #[test]
+    fn kalpurush_ansi_is_bundled() {
+        let db = FontDb::with_font_dirs(vec![]);
+        let families = db.families();
+        println!("Bundled families: {families:?}");
+        assert!(db.has_family("Kalpurush ANSI") || db.has_family("kalpurush ANSI"), "Kalpurush ANSI must be bundled: {families:?}");
     }
 }

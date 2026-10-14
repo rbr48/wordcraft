@@ -33,9 +33,13 @@ $RemoteDir = "/tmp/office-deploy"
 
 $KeyOpt = if (Test-Path $IdentityFile) { @("-i", $IdentityFile) } else { @() }
 
-Write-Host "`n[1/3] Uploading deployment package to VPS ($RemoteDir)..." -ForegroundColor Yellow
-# Using scp with legacy protocol (-O) and custom port
-scp -O -P $VpsPort @KeyOpt -r "$DeployDir" "${VpsUser}@${VpsHost}:${RemoteDir}"
+Write-Host "`n[1/3] Packaging and uploading deployment package to VPS ($RemoteDir)..." -ForegroundColor Yellow
+$LocalArchive = "$env:TEMP\office-deploy.tar.gz"
+if (Test-Path $LocalArchive) { Remove-Item $LocalArchive -Force }
+tar -czf "$LocalArchive" -C "$DeployDir" .
+scp -O -P $VpsPort @KeyOpt "$LocalArchive" "${VpsUser}@${VpsHost}:/tmp/office-deploy.tar.gz"
+ssh -p $VpsPort @KeyOpt "${VpsUser}@${VpsHost}" "rm -rf ${RemoteDir} && mkdir -p ${RemoteDir} && tar -xzf /tmp/office-deploy.tar.gz -C ${RemoteDir} && rm -f /tmp/office-deploy.tar.gz"
+if (Test-Path $LocalArchive) { Remove-Item $LocalArchive -Force }
 
 Write-Host "`n[2/3] Setting permissions on VPS..." -ForegroundColor Yellow
 ssh -p $VpsPort @KeyOpt "${VpsUser}@${VpsHost}" "chmod +x ${RemoteDir}/deploy-vps.sh"

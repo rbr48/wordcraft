@@ -36,6 +36,8 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     // headings and screens. Open fonts with full Persian coverage first.
     const NASKH: &[&str] = &["Noto Naskh Arabic", "XB Zar", "XB Niloofar", "Amiri", "Vazirmatn", "Noto Sans Arabic", "DejaVu Sans", "Source Serif 4"];
     const ARABIC_SANS: &[&str] = &["Vazirmatn", "Sahel", "Shabnam", "Samim", "Noto Sans Arabic", "Noto Naskh Arabic", "DejaVu Sans", "Source Sans 3"];
+    // Bengali Bijoy / ANSI legacy fonts: SutonnyMJ, Kalpurush ANSI, Siyam Rupali ANSI, Classic Bangla.
+    const BIJOY_ANSI: &[&str] = &["SutonnyMJ", "Kalpurush ANSI", "Siyam Rupali ANSI", "Classic Bangla"];
     // Bengali document fonts: Kalpurush, SolaimanLipi, Vrinda, Noto Sans/Serif Bengali, Shonar Bangla, Nirmala UI.
     const BENGALI: &[&str] = &[
         "Kalpurush",
@@ -55,6 +57,9 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     }
     if is_persian_sans(&f) {
         return ARABIC_SANS;
+    }
+    if is_bijoy_family(&f) {
+        return BIJOY_ANSI;
     }
     if is_bengali_family(&f) {
         return BENGALI;
@@ -164,15 +169,25 @@ fn is_persian_sans(f: &str) -> bool {
     NAMES.contains(&f) || f.starts_with("iransans") || f.starts_with("iranyekan")
 }
 
+/// Bengali Bijoy / ANSI legacy font names (SutonnyMJ, Kalpurush ANSI, Bijoy Classic, etc.).
+pub fn is_bijoy_family(family: &str) -> bool {
+    let f = family.to_ascii_lowercase();
+    const NAMES: &[&str] =
+        &["sutonnymj", "sutonny", "sutonny bangla omj", "kalpurush ansi", "siyam rupali ansi", "classic bangla", "bijoy", "boshonto", "durgamj"];
+    let f_str = f.as_str();
+    NAMES.contains(&f_str) || f_str.contains("sutonny") || f_str.contains("ansi") || f_str.ends_with("mj") || f_str.ends_with("omj")
+}
+
 /// Bengali document and legacy font names (SutonnyMJ, Kalpurush, SolaimanLipi, etc.).
 pub fn is_bengali_family(family: &str) -> bool {
+    if is_bijoy_family(family) {
+        return true;
+    }
     let f = family.to_ascii_lowercase();
     const NAMES: &[&str] = &[
         "kalpurush",
-        "kalpurush ansi",
         "solaimanlipi",
         "siyam rupali",
-        "siyam rupali ansi",
         "vrinda",
         "noto sans bengali",
         "noto serif bengali",
@@ -181,21 +196,9 @@ pub fn is_bengali_family(family: &str) -> bool {
         "akaash",
         "nikosh",
         "nikoshban",
-        "sutonnymj",
-        "sutonny",
-        "sutonny bangla omj",
-        "classic bangla",
-        "bijoy",
-        "boshonto",
-        "durgamj",
     ];
     let f_str = f.as_str();
-    NAMES.contains(&f_str)
-        || f_str.contains("sutonny")
-        || f_str.contains("bijoy")
-        || f_str.contains("bangla")
-        || f_str.contains("bengali")
-        || f_str.ends_with("mj")
+    NAMES.contains(&f_str) || f_str.contains("bangla") || f_str.contains("bengali")
 }
 
 fn style_name(bold: bool, italic: bool) -> &'static str {
@@ -373,7 +376,17 @@ mod tests {
         assert!(is_bengali_family("Nikosh"));
         assert!(is_bengali_family("Vrinda"));
 
+        assert!(is_bijoy_family("SutonnyMJ"));
+        assert!(is_bijoy_family("sutonnymj"));
+        assert!(is_bijoy_family("Kalpurush ANSI"));
+        assert!(!is_bijoy_family("Kalpurush"));
+        assert!(!is_bijoy_family("SolaimanLipi"));
+
         let subs = substitutes("SutonnyMJ");
-        assert_eq!(subs[0], "Kalpurush");
+        assert_eq!(subs[0], "SutonnyMJ");
+        assert_eq!(subs[1], "Kalpurush ANSI");
+
+        let subs_uni = substitutes("SolaimanLipi");
+        assert_eq!(subs_uni[0], "Kalpurush");
     }
 }

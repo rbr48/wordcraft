@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use crate::io::slice_safe;
 use crate::{CmdResult, CommandSpec, Session, p};
 
 /// Active Bangla typing mode.
@@ -816,420 +815,865 @@ pub fn find_bijoy_conjunct(c1: char, c2: char) -> Option<&'static str> {
 // 3. Bidirectional Unicode ⇄ ANSI (SutonnyMJ) Converter Engine
 // ============================================================================
 
-fn replace_tagged(input: Vec<(char, usize)>, from: &str, to: &str) -> Vec<(char, usize)> {
-    let from_chars: Vec<char> = from.chars().collect();
-    if from_chars.is_empty() || input.len() < from_chars.len() {
-        return input;
+/// Text whose characters each carry a tag: the index of the source unit, such as a run, they came
+/// from. The converters work on it so that each character's formatting follows it through conjunct
+/// mapping and vowel-sign and reph reordering.
+///
+/// Each tag also has a class (`classes[tag]`, 0 when not given). Characters of different classes are
+/// never fused into one glyph: where a table entry or a reordering would join them, they are converted
+/// separately instead, so a tracked insertion, deletion or hidden text keeps covering exactly its own
+/// characters.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Tagged {
+    chars: Vec<(char, u32)>,
+    classes: Vec<u32>,
+}
+
+impl Tagged {
+    /// `text` with every character tagged `tag`.
+    pub(crate) fn uniform(text: &str, tag: u32) -> Self {
+        Self { chars: text.chars().map(|c| (c, tag)).collect(), classes: Vec::new() }
     }
-    let Some(&first) = from_chars.first() else { return input };
-    if !input.iter().any(|(c, _)| *c == first) {
-        return input;
+
+    /// `text` as consecutive runs of the given byte lengths, each character tagged with the index of
+    /// its run. Characters past the last run take the last run's index.
+    pub(crate) fn from_runs(text: &str, run_lens: &[usize]) -> Self {
+        let mut ends = Vec::with_capacity(run_lens.len());
+        let mut at = 0usize;
+        for len in run_lens {
+            at = at.saturating_add(*len);
+            ends.push(at);
+        }
+        let last = run_lens.len().saturating_sub(1);
+        let mut run = 0usize;
+        let chars = text
+            .char_indices()
+            .map(|(byte, c)| {
+                while run < last && ends.get(run).is_some_and(|&end| byte >= end) {
+                    run += 1;
+                }
+                (c, u32::try_from(run).unwrap_or(u32::MAX))
+            })
+            .collect();
+        Self { chars, classes: Vec::new() }
     }
-    let mut out = Vec::with_capacity(input.len());
-    let mut i = 0;
-    while i < input.len() {
-        let matches = input.get(i..i + from_chars.len()).is_some_and(|slice| slice.iter().zip(&from_chars).all(|((c, _), fc)| c == fc));
-        if matches {
-            let tag = input.get(i).map(|(_, t)| *t).unwrap_or(0);
-            for c in to.chars() {
+
+    /// Gives each tag a class (see the type's documentation).
+    pub(crate) fn with_classes(mut self, classes: Vec<u32>) -> Self {
+        self.classes = classes;
+        self
+    }
+
+    /// The text without its tags.
+    pub(crate) fn text(&self) -> String {
+        self.chars.iter().map(|&(c, _)| c).collect()
+    }
+
+    /// The characters and their tags, in order.
+    pub(crate) fn chars(&self) -> &[(char, u32)] {
+        &self.chars
+    }
+
+    /// Consecutive characters that share a tag, as (text, tag), in order.
+    pub(crate) fn segments(&self) -> Vec<(String, u32)> {
+        let mut out: Vec<(String, u32)> = Vec::new();
+        for &(c, tag) in &self.chars {
+            match out.last_mut() {
+                Some((text, last)) if *last == tag => text.push(c),
+                _ => out.push((c.to_string(), tag)),
+            }
+        }
+        out
+    }
+
+    pub(crate) fn push(&mut self, c: char, tag: u32) {
+        self.chars.push((c, tag));
+    }
+
+    pub(crate) fn push_str(&mut self, s: &str, tag: u32) {
+        self.chars.extend(s.chars().map(|c| (c, tag)));
+    }
+
+    /// An empty text with the same classes, for the next pass.
+    pub(crate) fn empty_like(&self) -> Self {
+        Self { chars: Vec::with_capacity(self.chars.len()), classes: self.classes.clone() }
+    }
+
+    fn char_at(&self, k: usize) -> Option<char> {
+        self.chars.get(k).map(|&(c, _)| c)
+    }
+
+    fn tag_at(&self, k: usize) -> u32 {
+        self.chars.get(k).map_or(0, |&(_, tag)| tag)
+    }
+
+    fn class_of(&self, tag: u32) -> u32 {
+        usize::try_from(tag).ok().and_then(|t| self.classes.get(t)).copied().unwrap_or(0)
+    }
+
+    /// Whether the characters at `positions` all have one class.
+    fn one_class(&self, positions: impl IntoIterator<Item = usize>) -> bool {
+        let mut classes = positions.into_iter().filter_map(|k| self.chars.get(k)).map(|&(_, tag)| self.class_of(tag));
+        match classes.next() {
+            Some(first) => classes.all(|c| c == first),
+            None => true,
+        }
+    }
+
+    fn matches_at(&self, at: usize, pattern: &[char]) -> bool {
+        // The first character rules out almost every position, so check it before the window.
+        self.chars.get(at).map(|&(c, _)| c) == pattern.first().copied()
+            && self.chars.get(at..at.saturating_add(pattern.len())).is_some_and(|window| window.iter().map(|&(c, _)| c).eq(pattern.iter().copied()))
+    }
+
+    /// Replaces every non-overlapping occurrence of `from`, scanning left to right as `str::replace`
+    /// does. Each output character takes the tag of the character it comes from (`entry_sources`).
+    /// An occurrence that would fuse characters of different classes into one output character, or
+    /// drop a character of another class, is left as it is.
+    fn replace(&mut self, from: &str, to: &str) {
+        let pattern: Vec<char> = from.chars().collect();
+        if pattern.is_empty() {
+            return;
+        }
+        let Some(first) = (0..self.chars.len()).find(|&at| self.matches_at(at, &pattern)) else { return };
+        let replacement: Vec<char> = to.chars().collect();
+        let sources = entry_sources(&pattern, &replacement);
+        let covers_all = (0..pattern.len()).all(|k| sources.iter().any(|from_k| from_k.contains(&k)));
+        let mut out = Vec::with_capacity(self.chars.len());
+        out.extend_from_slice(self.chars.get(..first).unwrap_or(&[]));
+        let mut at = first;
+        while let Some(&(c, tag)) = self.chars.get(at) {
+            let fusable = self.matches_at(at, &pattern)
+                && (self.one_class(at..at + pattern.len())
+                    || (covers_all && sources.iter().all(|from_k| self.one_class(from_k.iter().map(|&k| at + k)))));
+            if !fusable {
                 out.push((c, tag));
+                at += 1;
+                continue;
             }
-            i += from_chars.len();
+            for (&rc, from_k) in replacement.iter().zip(&sources) {
+                out.push((rc, self.tag_at(at + from_k.first().copied().unwrap_or(0))));
+            }
+            at += pattern.len();
+        }
+        self.chars = out;
+    }
+}
+
+/// For a table entry mapping `from` to `to`, the positions in `from` each character of `to` comes
+/// from. An entry between SutonnyMJ glyphs and Unicode Bengali is aligned glyph by glyph
+/// (`align_glyphs`). Otherwise a character of `to` that also occurs in `from` comes from that
+/// occurrence, and any other comes from all of `from` (its tag is the first character's).
+fn entry_sources(from: &[char], to: &[char]) -> Vec<Vec<usize>> {
+    let all: Vec<usize> = (0..from.len()).collect();
+    let glyphs = |cs: &[char]| !cs.iter().any(|&c| is_bn_char(c));
+    let bengali = |cs: &[char]| !cs.is_empty() && cs.iter().all(|&c| is_bn_char(c));
+    if glyphs(from) && bengali(to) {
+        if let Some(owner) = align_glyphs(from, to) {
+            return owner.into_iter().map(|g| vec![g]).collect();
+        }
+    } else if bengali(from)
+        && glyphs(to)
+        && let Some(owner) = align_glyphs(to, from)
+    {
+        return (0..to.len())
+            .map(|k| {
+                let own: Vec<usize> = owner.iter().enumerate().filter(|&(_, &g)| g == k).map(|(j, _)| j).collect();
+                if own.is_empty() { all.clone() } else { own }
+            })
+            .collect();
+    }
+    let mut used = vec![false; from.len()];
+    to.iter()
+        .map(|&rc| {
+            let own = from.iter().enumerate().position(|(k, &fc)| fc == rc && used.get(k) == Some(&false));
+            match own {
+                Some(k) => {
+                    if let Some(flag) = used.get_mut(k) {
+                        *flag = true;
+                    }
+                    vec![k]
+                }
+                None => all.clone(),
+            }
+        })
+        .collect()
+}
+
+/// The vowel sign a SutonnyMJ pre-base glyph stands for: it is written before its consonant.
+fn pre_kar_sign(glyph: char) -> Option<&'static str> {
+    match glyph {
+        'w' => Some("ি"),
+        '†' | '‡' => Some("ে"),
+        '‰' => Some("ৈ"),
+        _ => None,
+    }
+}
+
+/// The Unicode one SutonnyMJ glyph stands for, from the conversion tables. With `half_forms`, `›`
+/// and `š` are the half form ন্ they are inside a conjunct (`›`` ন্দ, `šÍ` ন্ত) rather than the whole
+/// conjunct they stand for alone.
+fn glyph_meaning(glyph: char, half_forms: bool) -> Option<&'static str> {
+    if half_forms && matches!(glyph, '›' | 'š') {
+        return Some("ন্");
+    }
+    if let Some(sign) = pre_kar_sign(glyph) {
+        return Some(sign);
+    }
+    let mut buf = [0u8; 4];
+    let key: &str = glyph.encode_utf8(&mut buf);
+    ANSI_CONJUNCTS
+        .iter()
+        .find(|&&(a, _)| a == key)
+        .map(|&(_, u)| u)
+        .or_else(|| Some(ansi_base_glyph(glyph)).filter(|m| !m.is_empty()))
+        .or_else(|| Some(ansi_post_glyph(glyph)).filter(|m| !m.is_empty()))
+}
+
+/// Aligns SutonnyMJ `glyphs` with the Unicode Bengali they stand for: for each Bengali character, the
+/// glyph it belongs to. A leading pre-base vowel glyph belongs with its vowel sign wherever that sits.
+/// The other glyphs take the characters of their own meaning in order, first from the start and then
+/// from the end, and the one glyph left over takes what remains. Half forms are tried when whole
+/// meanings do not align. None when the glyphs cannot be aligned that way.
+fn align_glyphs(glyphs: &[char], bengali: &[char]) -> Option<Vec<usize>> {
+    align_glyphs_with(glyphs, bengali, false).or_else(|| align_glyphs_with(glyphs, bengali, true))
+}
+
+fn align_glyphs_with(glyphs: &[char], bengali: &[char], half_forms: bool) -> Option<Vec<usize>> {
+    let mut owner: Vec<Option<usize>> = vec![None; bengali.len()];
+    let mut start = 0usize;
+    if glyphs.len() > 1
+        && let Some(sign) = glyphs.first().copied().and_then(pre_kar_sign).and_then(|s| s.chars().next())
+        && let Some(j) = bengali.iter().rposition(|&c| c == sign)
+        && let Some(slot) = owner.get_mut(j)
+    {
+        *slot = Some(0);
+        start = 1;
+    }
+    let free: Vec<usize> = (0..bengali.len()).filter(|&j| owner.get(j) == Some(&None)).collect();
+    let text_of = |range: std::ops::Range<usize>| -> Option<String> { free.get(range).map(|ks| ks.iter().filter_map(|&k| bengali.get(k)).collect()) };
+    let assign = |owner: &mut Vec<Option<usize>>, range: std::ops::Range<usize>, g: usize| {
+        for k in free.get(range).unwrap_or(&[]) {
+            if let Some(slot) = owner.get_mut(*k) {
+                *slot = Some(g);
+            }
+        }
+    };
+    let meaning_of = |g: usize| glyphs.get(g).copied().and_then(|c| glyph_meaning(c, half_forms));
+    // Glyphs start..last are not yet aligned; free characters lo..hi are not yet owned.
+    let (mut lo, mut hi) = (0usize, free.len());
+    let (mut first, mut last) = (start, glyphs.len());
+    while first + 1 < last {
+        let Some(meaning) = meaning_of(first) else { break };
+        let n = meaning.chars().count();
+        if lo + n > hi || text_of(lo..lo + n).as_deref() != Some(meaning) {
+            break;
+        }
+        assign(&mut owner, lo..lo + n, first);
+        lo += n;
+        first += 1;
+    }
+    while first + 1 < last {
+        let Some(meaning) = meaning_of(last - 1) else { break };
+        let n = meaning.chars().count();
+        if lo + n > hi || text_of(hi - n..hi).as_deref() != Some(meaning) {
+            break;
+        }
+        assign(&mut owner, hi - n..hi, last - 1);
+        hi -= n;
+        last -= 1;
+    }
+    if first + 1 != last || lo >= hi {
+        return None;
+    }
+    assign(&mut owner, lo..hi, first);
+    owner.into_iter().collect()
+}
+
+/// The glyphs SutonnyMJ writes around a consonant (cluster) for a vowel sign that Unicode places after
+/// it: the glyph before the consonant, and for ো and ৌ the glyph after it.
+fn pre_kar_glyphs(sign: char, e_glyph: char) -> Option<(char, Option<char>)> {
+    match sign {
+        'ি' => Some(('w', None)),
+        'ে' => Some((e_glyph, None)),
+        'ৈ' => Some(('‰', None)),
+        'ো' => Some((e_glyph, Some('v'))),
+        'ৌ' => Some((e_glyph, Some('Š'))),
+        _ => None,
+    }
+}
+
+/// Step 1 of [`unicode_to_ansi`]: common conjuncts (যুক্তবর্ণ), 3-consonant clusters first so
+/// 2-consonant substrings don't match prematurely.
+const UNICODE_CONJUNCTS: &[(&str, &str)] = &[
+    ("ঙ্ক্ষ", "•¶"),
+    ("ন্ত্র", "š¿"),
+    ("ন্তু", "š‘"),
+    ("স্ত্র", "¯¿"),
+    ("স্তু", "¯‘"),
+    ("স্ক্র", "¯Œ"),
+    ("ন্দ্র", "›`ª"),
+    ("ষ্ট্র", "óª"),
+    ("ক্ষ", "¶"),
+    ("জ্ঞ", "Á"),
+    ("ত্র", "Î"),
+    ("ক্ত", "³"),
+    ("ক্ক", "°"),
+    ("ক্ট", "±"),
+    ("ক্স", "·"),
+    ("গ্ধ", "»"),
+    ("ঙ্ক", "¼"),
+    ("ঙ্গ", "½"),
+    ("জ্জ", "¾"),
+    ("ঞ্চ", "Â"),
+    ("ঞ্ছ", "Ã"),
+    ("ঞ্জ", "Ä"),
+    ("ট্ট", "Æ"),
+    ("ড্ড", "Ç"),
+    ("ণ্ট", "È"),
+    ("ণ্ঠ", "É"),
+    ("ণ্ড", "Ê"),
+    ("ত্ত", "Ë"),
+    ("ত্থ", "Ì"),
+    ("ত্ন", "Zœ"),
+    ("ত্ম", "Z¥"),
+    ("ন্দ", "›`"),
+    ("ন্ট", "›U"),
+    ("ন্ড", "Û"),
+    ("ন্ধ", "Ü"),
+    ("ন্ন", "bœ"),
+    ("ন্স", "Ý"),
+    ("ন্ত", "šÍ"),
+    ("প্ট", "Þ"),
+    ("প্ত", "ß"),
+    ("প্প", "à"),
+    ("ব্দ", "ã"),
+    ("ব্ধ", "ä"),
+    ("ম্প", "¤ú"),
+    ("ম্ব", "¤^"),
+    ("ম্ভ", "¤¢"),
+    ("ম্ম", "¤§"),
+    ("ম্ন", "¤œ"),
+    ("দ্ভ", "™¢"),
+    ("ষ্ট", "ó"),
+    ("ষ্ঠ", "ô"),
+    ("ষ্ণ", "õ"),
+    ("ষ্প", "ö"),
+    ("স্ত", "¯Í"),
+    ("স্থ", "¯’"),
+    ("স্ট", "÷"),
+    ("স্ক", "¯‹"),
+    ("স্ন", "mœ"),
+    ("স্প", "¯ú"),
+    ("স্ফ", "ù"),
+    ("স্ব", "¯^"),
+    ("স্ম", "¯§"),
+    ("শ্চ", "ð"),
+    ("ল্প", "í"),
+    ("ল্গ", "î"),
+    ("ল্ট", "ë"),
+    ("ল্ড", "ì"),
+    ("ল্ক", "é"),
+    ("ল্ল", "jø"),
+    ("ন্ঠ", "›V"),
+    ("ন্থ", "š’"),
+    ("ন্ম", "š§"),
+    ("ন্ব", "š^"),
+    ("স্খ", "¯L"),
+    ("চ্চ", "”P"),
+    ("চ্ছ", "”Q"),
+    ("ষ্ক", "®‹"),
+    ("ষ্ফ", "®£"),
+    ("ষ্ম", "®§"),
+    ("ম্ফ", "¯£"),
+    ("ক্র", "µ"),
+    ("প্র", "cÖ"),
+    ("গ্র", "MÖ"),
+    ("ব্র", "eª"),
+    ("ভ্র", "å"),
+    ("শ্র", "kÖ"),
+    ("স্র", "mÖ"),
+    ("ধ্র", "aÖ"),
+    ("ম্র", "gÖ"),
+    ("হ্র", "nÖ"),
+    ("দ্দ", "Ï"),
+    ("দ্ধ", "×"),
+    ("দ্ব", "Ø"),
+    ("দ্ম", "Ù"),
+    ("হ্ন", "ý"),
+    ("হৃ", "ü"),
+    ("্র", "Ö"),
+    ("্য", "¨"),
+    ("্ল", "ø"),
+    ("্ন", "œ"),
+    ("্ম", "¥"),
+    ("্ব", "^"),
+];
+
+/// Step 2 of [`ansi_to_unicode`]: conjunct glyphs and phalas, longest matches first.
+///
+/// Pre-kars ('w', '†', '‰') are intentionally NOT expanded here so that step 4
+/// (`parse_bn_cluster`) moves them across the ENTIRE consonant cluster (including trailing
+/// phalas like `Ö`/`ª`/`«` for `্র` or `¿` for `্ত্র` in `যান্ত্রিক`).
+const ANSI_CONJUNCTS: &[(&str, &str)] = &[
+    ("cÖ", "প্র"),
+    ("MÖ", "গ্র"),
+    ("eª", "ব্র"),
+    ("eÖ", "ব্র"),
+    ("¤ª", "শ্র"),
+    ("¯Œ", "স্ক্র"),
+    ("¯‹", "স্ক"),
+    ("¯•", "স্প"),
+    ("¯Í", "স্ত"),
+    ("¯—", "স্ত"),
+    ("¯‘", "স্তু"),
+    ("¯¿", "স্ত্র"),
+    ("¯’", "স্থ"),
+    ("¯ú", "স্প"),
+    ("¯^", "স্ব"),
+    ("¯§", "স্ম"),
+    ("mœ", "স্ন"),
+    ("bœ", "ন্ন"),
+    ("¤œ", "ম্ন"),
+    ("¤ú", "ম্প"),
+    ("¤^", "ম্ব"),
+    ("¤¢", "ম্ভ"),
+    ("¤§", "ম্ম"),
+    ("™¢", "দ্ভ"),
+    ("šÍ", "ন্ত"),
+    ("š—", "ন্ত"),
+    ("š‘", "ন্তু"),
+    ("š¿", "ন্ত্র"),
+    ("š^", "ন্ব"),
+    ("š’", "ন্থ"),
+    ("š§", "ন্ম"),
+    ("š", "ন্ত"),
+    ("›`", "ন্দ"),
+    ("›U", "ন্ট"),
+    ("›V", "ন্ঠ"),
+    ("›W", "ন্ড"),
+    ("›a", "ন্ধ"),
+    ("›m", "ন্স"),
+    ("›", "ন্দ"),
+    ("®‹", "ষ্ক"),
+    ("®ú", "ষ্প"),
+    ("®§", "ষ্ম"),
+    ("•ÿ", "ঙ্ক্ষ"),
+    ("•¶", "ঙ্ক্ষ"),
+    ("”P", "চ্চ"),
+    ("”Q", "চ্ছ"),
+    ("“P", "চ্চ"),
+    ("“Q", "চ্ছ"),
+    ("¶", "ক্ষ"),
+    ("ÿ", "ক্ষ"),
+    ("Á", "জ্ঞ"),
+    ("Î", "ত্র"),
+    ("°", "ক্ক"),
+    ("±", "ক্ট"),
+    ("³", "ক্ত"),
+    ("·", "ক্স"),
+    ("»", "গ্ধ"),
+    ("¼", "ঙ্ক"),
+    ("½", "ঙ্গ"),
+    ("¾", "জ্জ"),
+    ("Â", "ঞ্চ"),
+    ("Ã", "ঞ্ছ"),
+    ("Ä", "ঞ্জ"),
+    ("Æ", "ট্ট"),
+    ("Ç", "ড্ড"),
+    ("È", "ণ্ট"),
+    ("Ú", "ণ্ট"),
+    ("É", "ণ্ঠ"),
+    ("Ê", "ণ্ড"),
+    ("Ð", "ণ্ড"),
+    ("Û", "ন্ড"),
+    ("Ë", "ত্ত"),
+    ("Ì", "ত্থ"),
+    ("Í", "্ত"),
+    ("—", "্ত"),
+    ("‘", "্তু"),
+    ("¿", "্ত্র"),
+    ("Ï", "দ্দ"),
+    ("×", "দ্ধ"),
+    ("Ø", "দ্ব"),
+    ("Ù", "দ্ম"),
+    ("Ü", "ন্ধ"),
+    ("Ý", "ন্স"),
+    ("Þ", "প্ট"),
+    ("ß", "প্ত"),
+    ("à", "প্প"),
+    ("ã", "ব্দ"),
+    ("ä", "ব্ধ"),
+    ("å", "ভ্র"),
+    ("é", "ল্ক"),
+    ("î", "ল্গ"),
+    ("ë", "ল্ট"),
+    ("ì", "ল্ড"),
+    ("í", "ল্প"),
+    ("ñ", "ল্প"),
+    ("ð", "শ্চ"),
+    ("ò", "ষ্ণ"),
+    ("ó", "ষ্ট"),
+    ("ô", "ষ্ঠ"),
+    ("õ", "ষ্ণ"),
+    ("ö", "ষ্প"),
+    ("÷", "স্ট"),
+    ("ø", "্ল"),
+    ("¬", "্ল"),
+    ("ù", "স্ফ"),
+    ("ú", "্প"),
+    ("¢", "্ভ"),
+    ("µ", "ক্র"),
+    ("Œ", "্ক্র"),
+    ("‹", "্ক"),
+    ("þ", "হ্ন"),
+    ("ý", "হ্ন"),
+    ("ü", "হৃ"),
+    ("œ", "্ন"),
+    ("¥", "্ম"),
+    ("§", "্ম"),
+    ("¡", "্ব"),
+    ("¦", "্ব"),
+    ("Ÿ", "্ব"),
+    ("^", "্ব"),
+    ("¯", "স্"),
+    ("¤", "ম্"),
+    ("®", "ষ্"),
+    ("”", "চ্"),
+    ("™", "ঃ"),
+];
+
+/// What one SutonnyMJ glyph is in Unicode at step 3 of [`ansi_to_unicode`] (independent vowels,
+/// consonants, the virama and phalas); empty when the glyph is mapped elsewhere.
+fn ansi_base_glyph(ch: char) -> &'static str {
+    match ch {
+        'A' => "অ",
+        'B' => "ই",
+        'C' => "ঈ",
+        'D' => "উ",
+        'E' => "ঊ",
+        'F' => "ঋ",
+        'G' => "এ",
+        'H' => "ঐ",
+        'I' => "ও",
+        'J' => "ঔ",
+        'K' => "ক",
+        'L' => "খ",
+        'M' => "গ",
+        'N' => "ঘ",
+        'O' => "ঙ",
+        'P' => "চ",
+        'Q' => "ছ",
+        'R' => "জ",
+        'S' => "ঝ",
+        'T' => "ঞ",
+        'U' => "ট",
+        'V' => "ঠ",
+        'W' => "ড",
+        'X' => "ঢ",
+        'Y' => "ণ",
+        'Z' => "ত",
+        '_' => "থ",
+        '`' => "দ",
+        'a' => "ধ",
+        'b' => "ন",
+        'c' => "প",
+        'd' => "ফ",
+        'e' => "ব",
+        'f' => "ভ",
+        'g' => "ম",
+        'h' => "য",
+        'i' => "র",
+        'j' => "ল",
+        'k' => "শ",
+        'l' => "ষ",
+        'm' => "স",
+        'n' => "হ",
+        'o' => "ড়",
+        'p' => "ঢ়",
+        'q' => "য়",
+        'r' => "ৎ",
+        '&' => "্",
+        '¨' => "্য",
+        'Ö' | 'ª' | '«' => "্র",
+        'Ñ' => "–",
+        'Ò' => "“",
+        'Ó' => "”",
+        'Ô' => "‘",
+        'Õ' => "’",
+        _ => "",
+    }
+}
+
+/// What one SutonnyMJ glyph is in Unicode at step 5 of [`ansi_to_unicode`] (vowel signs, signs and
+/// digits); empty when the glyph is mapped elsewhere.
+fn ansi_post_glyph(ch: char) -> &'static str {
+    match ch {
+        'v' => "া",
+        'x' => "ী",
+        'y' | 'z' | 'æ' | '“' => "ু",
+        '~' | '‚' | 'ƒ' => "ূ",
+        '„' => "ৃ",
+        'Š' => "ৌ",
+        '&' => "্",
+        's' => "ং",
+        't' => "ঃ",
+        'u' => "ঁ",
+        '0' => "০",
+        '1' => "১",
+        '2' => "২",
+        '3' => "৩",
+        '4' => "৪",
+        '5' => "৫",
+        '6' => "৬",
+        '7' => "৭",
+        '8' => "৮",
+        '9' => "৯",
+        _ => "",
+    }
+}
+
+/// The SutonnyMJ glyph(s) for one Unicode Bengali character at step 4 of [`unicode_to_ansi`]; empty
+/// when the character is written as itself.
+fn unicode_glyph(ch: char) -> &'static str {
+    match ch {
+        // Vowels
+        'অ' => "A",
+        'আ' => "Av",
+        'ই' => "B",
+        'ঈ' => "C",
+        'উ' => "D",
+        'ঊ' => "E",
+        'ঋ' => "F",
+        'এ' => "G",
+        'ঐ' => "H",
+        'ও' => "I",
+        'ঔ' => "J",
+
+        // Consonants
+        'ক' => "K",
+        'খ' => "L",
+        'গ' => "M",
+        'ঘ' => "N",
+        'ঙ' => "O",
+        'চ' => "P",
+        'ছ' => "Q",
+        'জ' => "R",
+        'ঝ' => "S",
+        'ঞ' => "T",
+        'ট' => "U",
+        'ঠ' => "V",
+        'ড' => "W",
+        'ঢ' => "X",
+        'ণ' => "Y",
+        'ত' => "Z",
+        'থ' => "_",
+        'দ' => "`",
+        'ধ' => "a",
+        'ন' => "b",
+        'প' => "c",
+        'ফ' => "d",
+        'ব' => "e",
+        'ভ' => "f",
+        'ম' => "g",
+        'য' => "h",
+        'র' => "i",
+        'ল' => "j",
+        'শ' => "k",
+        'ষ' => "l",
+        'স' => "m",
+        'হ' => "n",
+        'ড়' => "o",
+        'ঢ়' => "p",
+        'য়' => "q",
+        'ৎ' => "r",
+        'ং' => "s",
+        'ঃ' => "t",
+        'ঁ' => "u",
+
+        // Kars
+        'া' => "v",
+        'ি' => "w",
+        'ী' => "x",
+        'ু' => "y",
+        'ূ' => "~",
+        'ৃ' => "„",
+        'ে' => "†",
+        'ৈ' => "‰",
+        'ো' => "†v",
+        'ৌ' => "†Š",
+        '্' => "&",
+
+        // Digits
+        '০' => "0",
+        '১' => "1",
+        '২' => "2",
+        '৩' => "3",
+        '৪' => "4",
+        '৫' => "5",
+        '৬' => "6",
+        '৭' => "7",
+        '৮' => "8",
+        '৯' => "9",
+
+        // Punctuation
+        '।' => ".",
+        _ => "",
+    }
+}
+
+/// Step 1 of [`ansi_to_unicode`]: special symbols, Bijoy shortcuts and repairs of earlier partial
+/// conversions, applied in order.
+const ANSI_PRE_NORMALIZE: &[(&str, &str)] = &[
+    ("šত্ন", "ন্ত"),
+    ("¯ত্ন", "স্ত"),
+    // Normalise double (accidentally repeated) vowel-diacritic glyphs
+    ("~~", "~"),
+    ("vv", "v"),
+    ("xx", "x"),
+    // Ellipsis / ri-kar shorthand
+    ("...", "\u{201E}"),
+    ("\u{2026}", "\u{201E}"),
+    // Precomposed ri-kar pairs: consonant + „ / … / ...
+    ("K\u{2026}", "\u{0995}\u{09C3}"),
+    ("K...", "\u{0995}\u{09C3}"),
+    ("K\u{201E}", "\u{0995}\u{09C3}"),
+    ("M\u{2026}", "\u{0997}\u{09C3}"),
+    ("M...", "\u{0997}\u{09C3}"),
+    ("M\u{201E}", "\u{0997}\u{09C3}"),
+    ("d\u{2026}", "\u{09A6}\u{09C3}"),
+    ("d...", "\u{09A6}\u{09C3}"),
+    ("d\u{201E}", "\u{09A6}\u{09C3}"),
+    ("e\u{2026}", "\u{09AC}\u{09C3}"),
+    ("e...", "\u{09AC}\u{09C3}"),
+    ("e\u{201E}", "\u{09AC}\u{09C3}"),
+    ("k\u{2026}", "\u{09B6}\u{09C3}"),
+    ("m\u{2026}", "\u{09B8}\u{09C3}"),
+    ("n\u{2026}", "\u{09B9}\u{09C3}"),
+    // Dari / pipe
+    ("|", "\u{0964}"),
+    // Normalise alternate e-kar glyph \u{2021} -> \u{2020}  (must happen before conjunct lookup)
+    ("\u{2021}", "\u{2020}"),
+    // Collapse doubled pre-vowels (typing artefact or split-run re-join)
+    ("\u{2020}\u{2020}", "\u{2020}"),
+    // ˆ is the alternate oi-kar glyph; normalise to \u{2030} before the conjunct table
+    ("\u{02C6}", "\u{2030}"),
+    ("\u{2030}\u{2030}", "\u{2030}"),
+    // Collapse doubled reph (copy-paste artefact)
+    ("\u{00A9}\u{00A9}", "\u{00A9}"),
+    // Precomposed \u{09AD}\u{09C2} variants
+    ("f\u{201A}", "\u{09AD}\u{09C2}"),
+    ("f~", "\u{09AD}\u{09C2}"),
+    ("f\u{201E}", "\u{09AD}\u{09C2}"),
+    // \u{099E}\u{09BE} shorthand glyphs
+    ("T\u{00C2}", "\u{099E}\u{09BE}"),
+    ("Tv", "\u{099E}\u{09BE}"),
+    // \u{0996}\u{09CD}\u{09B0}\u{09BF} + bisarga / visarga
+    ("wL\u{00AA}\u{2122}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}"),
+    ("wL\u{00AA}t", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}"),
+    ("wL\u{00AA}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}"),
+    // Precomposed \u{09B0}\u{09C1} variants (must come BEFORE the conjunct table maps \u{00A9} and \u{2030})
+    ("i\u{00E6}", "\u{09B0}\u{09C1}"),
+    ("i\u{201C}", "\u{09B0}\u{09C1}"),
+    // Precomposed \u{09B9}\u{09C1} / \u{0997}\u{09C1} / \u{09B6}\u{09C1}
+    ("\u{00FB}", "\u{09B9}\u{09C1}"),
+    ("\u{00B8}", "\u{0997}\u{09C1}"),
+    ("\u{00EF}", "\u{09B6}\u{09C1}"),
+    // Collapse doubled \u{09CC} glyph
+    ("\u{0160}\u{0160}", "\u{0160}"),
+];
+
+/// Converts Unicode Bengali text to ANSI (SutonnyMJ encoding).
+pub fn unicode_to_ansi(text: &str) -> String {
+    unicode_to_ansi_tagged(Tagged::uniform(text, 0)).text()
+}
+
+/// [`unicode_to_ansi`] on tagged text. Each output glyph carries the tag of the character it comes
+/// from; a glyph written for several characters (a conjunct) takes the tag of the first of them.
+pub(crate) fn unicode_to_ansi_tagged(mut s: Tagged) -> Tagged {
+    // 1. Common Conjuncts (যুক্তবর্ণ), from UNICODE_CONJUNCTS.
+    for &(u, a) in UNICODE_CONJUNCTS {
+        s.replace(u, a);
+    }
+
+    // 2. Reph reordering: র + ্ + X -> X + ©. The reph glyph keeps the র's tag; a র and ্ of
+    // different classes are not joined.
+    let mut out = s.empty_like();
+    let mut i = 0;
+    while let Some(ch) = s.char_at(i) {
+        if ch == 'র'
+            && s.char_at(i + 1) == Some('্')
+            && let Some(next) = s.char_at(i + 2)
+            && s.one_class([i, i + 1])
+        {
+            out.push(next, s.tag_at(i + 2));
+            out.push('©', s.tag_at(i)); // SutonnyMJ reph glyph
+            i += 3;
+            continue;
+        }
+        out.push(ch, s.tag_at(i));
+        i += 1;
+    }
+    s = out;
+
+    // 3. Pre-kar reordering:
+    // Unicode has: Consonant + ি/ে/ৈ/ো/ৌ
+    // ৈ: '‰' + Consonant
+    // ো: ('†' or '‡') + Consonant + 'v'
+    // ৌ: ('†' or '‡') + Consonant + 'Š'
+    // The glyphs written for a vowel sign keep the vowel sign's tag.
+    let mut out = s.empty_like();
+    let mut i = 0;
+    while let Some(ch) = s.char_at(i) {
+        let is_medial = i.checked_sub(1).and_then(|k| s.char_at(k)).is_some_and(|prev| !is_word_boundary(prev));
+        let e_glyph = if is_medial { '‡' } else { '†' };
+        // Check for 2-character conjunct cluster first (e.g. "cÖ" for প্র, "¯Í" for স্ত)
+        if let (Some(second), Some(next)) = (s.char_at(i + 1), s.char_at(i + 2))
+            && is_two_char_conjunct(ch, second)
+            && let Some((before, after)) = pre_kar_glyphs(next, e_glyph)
+        {
+            out.push(before, s.tag_at(i + 2));
+            out.push(ch, s.tag_at(i));
+            out.push(second, s.tag_at(i + 1));
+            if let Some(after) = after {
+                out.push(after, s.tag_at(i + 2));
+            }
+            i += 3;
+            continue;
+        }
+        if let Some(next) = s.char_at(i + 1)
+            && let Some((before, after)) = pre_kar_glyphs(next, e_glyph)
+        {
+            out.push(before, s.tag_at(i + 1));
+            out.push(ch, s.tag_at(i));
+            if let Some(after) = after {
+                out.push(after, s.tag_at(i + 1));
+            }
+            i += 2;
+            continue;
+        }
+        out.push(ch, s.tag_at(i));
+        i += 1;
+    }
+    s = out;
+
+    // 4. Character Mapping to SutonnyMJ ASCII
+    let mut out = s.empty_like();
+    for &(ch, tag) in s.chars() {
+        let mapped = unicode_glyph(ch);
+        if !mapped.is_empty() {
+            out.push_str(mapped, tag);
         } else {
-            if let Some(&item) = input.get(i) {
-                out.push(item);
-            }
-            i += 1;
+            out.push(ch, tag);
         }
     }
     out
 }
 
-/// Converts Unicode Bengali text to ANSI (SutonnyMJ encoding), preserving character property tags.
-pub fn unicode_to_ansi_tagged(input: &[(char, usize)]) -> Vec<(char, usize)> {
-    let mut chars = input.to_vec();
-
-    // 1. Common Conjuncts (যুক্তবর্ণ) — 3-consonant clusters first so 2-consonant substrings don't match prematurely
-    let conjuncts: &[(&str, &str)] = &[
-        ("ঙ্ক্ষ", "•¶"),
-        ("ন্ত্র", "š¿"),
-        ("ন্তু", "š‘"),
-        ("স্ত্র", "¯¿"),
-        ("স্তু", "¯‘"),
-        ("স্ক্র", "¯Œ"),
-        ("ন্দ্র", "›`ª"),
-        ("ষ্ট্র", "óª"),
-        ("ক্ষ", "¶"),
-        ("জ্ঞ", "Á"),
-        ("ত্র", "Î"),
-        ("ক্ত", "³"),
-        ("ক্ক", "°"),
-        ("ক্ট", "±"),
-        ("ক্স", "·"),
-        ("গ্ধ", "»"),
-        ("ঙ্ক", "¼"),
-        ("ঙ্গ", "½"),
-        ("জ্জ", "¾"),
-        ("ঞ্চ", "Â"),
-        ("ঞ্ছ", "Ã"),
-        ("ঞ্জ", "Ä"),
-        ("ট্ট", "Æ"),
-        ("ড্ড", "Ç"),
-        ("ণ্ট", "È"),
-        ("ণ্ঠ", "É"),
-        ("ণ্ড", "Ê"),
-        ("ত্ত", "Ë"),
-        ("ত্থ", "Ì"),
-        ("ত্ন", "Zœ"),
-        ("ত্ম", "Z¥"),
-        ("ন্দ", "›`"),
-        ("ন্ট", "›U"),
-        ("ন্ড", "Û"),
-        ("ন্ধ", "Ü"),
-        ("ন্ন", "bœ"),
-        ("ন্স", "Ý"),
-        ("ন্ত", "šÍ"),
-        ("প্ট", "Þ"),
-        ("প্ত", "ß"),
-        ("প্প", "à"),
-        ("ব্দ", "ã"),
-        ("ব্ধ", "ä"),
-        ("ম্প", "¤ú"),
-        ("ম্ব", "¤^"),
-        ("ম্ভ", "¤¢"),
-        ("ম্ম", "¤§"),
-        ("ম্ন", "¤œ"),
-        ("দ্ভ", "™¢"),
-        ("ষ্ট", "ó"),
-        ("ষ্ঠ", "ô"),
-        ("ষ্ণ", "õ"),
-        ("ষ্প", "ö"),
-        ("স্ত", "¯Í"),
-        ("স্থ", "¯’"),
-        ("স্ট", "÷"),
-        ("স্ক", "¯‹"),
-        ("স্ন", "mœ"),
-        ("স্প", "¯ú"),
-        ("স্ফ", "ù"),
-        ("স্ব", "¯^"),
-        ("স্ম", "¯§"),
-        ("শ্চ", "ð"),
-        ("ল্প", "í"),
-        ("ল্গ", "î"),
-        ("ল্ট", "ë"),
-        ("ল্ড", "ì"),
-        ("ল্ক", "é"),
-        ("ল্ল", "jø"),
-        ("ন্ঠ", "›V"),
-        ("ন্থ", "š’"),
-        ("ন্ম", "š§"),
-        ("ন্ব", "š^"),
-        ("স্খ", "¯L"),
-        ("চ্চ", "”P"),
-        ("চ্ছ", "”Q"),
-        ("ষ্ক", "®‹"),
-        ("ষ্ফ", "®£"),
-        ("ষ্ম", "®§"),
-        ("ম্ফ", "¯£"),
-        ("ক্র", "µ"),
-        ("প্র", "cÖ"),
-        ("গ্র", "MÖ"),
-        ("ব্র", "eª"),
-        ("ভ্র", "å"),
-        ("শ্র", "kÖ"),
-        ("স্র", "mÖ"),
-        ("ধ্র", "aÖ"),
-        ("ম্র", "gÖ"),
-        ("হ্র", "nÖ"),
-        ("দ্দ", "Ï"),
-        ("দ্ধ", "×"),
-        ("দ্ব", "Ø"),
-        ("দ্ম", "Ù"),
-        ("হ্ন", "ý"),
-        ("হৃ", "ü"),
-        ("্র", "Ö"),
-        ("্য", "¨"),
-        ("্ল", "ø"),
-        ("্ন", "œ"),
-        ("্ম", "¥"),
-        ("্ব", "^"),
-    ];
-
-    for &(u, a) in conjuncts {
-        chars = replace_tagged(chars, u, a);
-    }
-
-    // 2. Reph reordering: র + ্ + X -> X + ©
-    let mut out: Vec<(char, usize)> = Vec::with_capacity(chars.len());
-    let len = chars.len();
-    let mut i = 0;
-
-    while i < len {
-        if i + 2 < len
-            && chars.get(i).map(|(c, _)| *c) == Some('র')
-            && chars.get(i + 1).map(|(c, _)| *c) == Some('্')
-            && let Some(&next) = chars.get(i + 2)
-        {
-            let r_tag = chars.get(i).map(|(_, t)| *t).unwrap_or(0);
-            out.push(next);
-            out.push(('©', r_tag));
-            i += 3;
-            continue;
-        }
-        if let Some(&item) = chars.get(i) {
-            out.push(item);
-        }
-        i += 1;
-    }
-
-    // 3. Pre-kar reordering:
-    // Unicode has: Consonant + ি/ে/ৈ/ো/ৌ
-    // SutonnyMJ requires:
-    // ি: 'w' + Consonant
-    // ে: '†' (initial) or '‡' (medial) + Consonant
-    // ৈ: '‰' + Consonant
-    // ো: ('†' or '‡') + Consonant + 'v'
-    // ৌ: ('†' or '‡') + Consonant + 'Š'
-    let in_chars = out;
-    out = Vec::with_capacity(in_chars.len());
-    i = 0;
-    let len = in_chars.len();
-
-    while i < len {
-        // Check for 2-character conjunct cluster first (e.g. "cÖ" for প্র, "¯Í" for স্ত)
-        if i + 2 < len {
-            let c0 = in_chars.get(i).map(|(c, _)| *c).unwrap_or('\0');
-            let c1 = in_chars.get(i + 1).map(|(c, _)| *c).unwrap_or('\0');
-            if is_two_char_conjunct(c0, c1) {
-                let next_entry = in_chars.get(i + 2).copied();
-                let next = next_entry.map(|(c, _)| c).unwrap_or('\0');
-                let next_tag = next_entry.map(|(_, t)| t).unwrap_or(0);
-                let prev_c = if i > 0 { in_chars.get(i - 1).map(|(c, _)| *c) } else { None };
-                let is_medial = prev_c.is_some_and(|c| !is_word_boundary(c));
-                let e_glyph = if is_medial { '‡' } else { '†' };
-                match next {
-                    'ি' => {
-                        out.push(('w', next_tag));
-                        if let Some(&item) = in_chars.get(i) {
-                            out.push(item);
-                        }
-                        if let Some(&item) = in_chars.get(i + 1) {
-                            out.push(item);
-                        }
-                        i += 3;
-                        continue;
-                    }
-                    'ে' => {
-                        out.push((e_glyph, next_tag));
-                        if let Some(&item) = in_chars.get(i) {
-                            out.push(item);
-                        }
-                        if let Some(&item) = in_chars.get(i + 1) {
-                            out.push(item);
-                        }
-                        i += 3;
-                        continue;
-                    }
-                    'ৈ' => {
-                        out.push(('‰', next_tag));
-                        if let Some(&item) = in_chars.get(i) {
-                            out.push(item);
-                        }
-                        if let Some(&item) = in_chars.get(i + 1) {
-                            out.push(item);
-                        }
-                        i += 3;
-                        continue;
-                    }
-                    'ো' => {
-                        out.push((e_glyph, next_tag));
-                        if let Some(&item) = in_chars.get(i) {
-                            out.push(item);
-                        }
-                        if let Some(&item) = in_chars.get(i + 1) {
-                            out.push(item);
-                        }
-                        out.push(('v', next_tag));
-                        i += 3;
-                        continue;
-                    }
-                    'ৌ' => {
-                        out.push((e_glyph, next_tag));
-                        if let Some(&item) = in_chars.get(i) {
-                            out.push(item);
-                        }
-                        if let Some(&item) = in_chars.get(i + 1) {
-                            out.push(item);
-                        }
-                        out.push(('Š', next_tag));
-                        i += 3;
-                        continue;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if let Some(&ch_entry) = in_chars.get(i) {
-            let _ch = ch_entry.0;
-            if i + 1 < len {
-                let next_entry = in_chars.get(i + 1).copied();
-                let next = next_entry.map(|(c, _)| c).unwrap_or('\0');
-                let next_tag = next_entry.map(|(_, t)| t).unwrap_or(0);
-                let prev_c = if i > 0 { in_chars.get(i - 1).map(|(c, _)| *c) } else { None };
-                let is_medial = prev_c.is_some_and(|c| !is_word_boundary(c));
-                let e_glyph = if is_medial { '‡' } else { '†' };
-                match next {
-                    'ি' => {
-                        out.push(('w', next_tag));
-                        out.push(ch_entry);
-                        i += 2;
-                        continue;
-                    }
-                    'ে' => {
-                        out.push((e_glyph, next_tag));
-                        out.push(ch_entry);
-                        i += 2;
-                        continue;
-                    }
-                    'ৈ' => {
-                        out.push(('‰', next_tag));
-                        out.push(ch_entry);
-                        i += 2;
-                        continue;
-                    }
-                    'ো' => {
-                        out.push((e_glyph, next_tag));
-                        out.push(ch_entry);
-                        out.push(('v', next_tag));
-                        i += 2;
-                        continue;
-                    }
-                    'ৌ' => {
-                        out.push((e_glyph, next_tag));
-                        out.push(ch_entry);
-                        out.push(('Š', next_tag));
-                        i += 2;
-                        continue;
-                    }
-                    _ => {}
-                }
-            }
-            out.push(ch_entry);
-        }
-        i += 1;
-    }
-
-    // 4. Character Mapping to SutonnyMJ ASCII
-    let mut final_out: Vec<(char, usize)> = Vec::with_capacity(out.len());
-    for (ch, tag) in out {
-        let mapped = match ch {
-            // Vowels
-            'অ' => "A",
-            'আ' => "Av",
-            'ই' => "B",
-            'ঈ' => "C",
-            'উ' => "D",
-            'ঊ' => "E",
-            'ঋ' => "F",
-            'এ' => "G",
-            'ঐ' => "H",
-            'ও' => "I",
-            'ঔ' => "J",
-
-            // Consonants
-            'ক' => "K",
-            'খ' => "L",
-            'গ' => "M",
-            'ঘ' => "N",
-            'ঙ' => "O",
-            'চ' => "P",
-            'ছ' => "Q",
-            'জ' => "R",
-            'ঝ' => "S",
-            'ঞ' => "T",
-            'ট' => "U",
-            'ঠ' => "V",
-            'ড' => "W",
-            'ঢ' => "X",
-            'ণ' => "Y",
-            'ত' => "Z",
-            'থ' => "_",
-            'দ' => "`",
-            'ধ' => "a",
-            'ন' => "b",
-            'প' => "c",
-            'ফ' => "d",
-            'ব' => "e",
-            'ভ' => "f",
-            'ম' => "g",
-            'য' => "h",
-            'র' => "i",
-            'ল' => "j",
-            'শ' => "k",
-            'ষ' => "l",
-            'স' => "m",
-            'হ' => "n",
-            'ড়' => "o",
-            'ঢ়' => "p",
-            'য়' => "q",
-            'ৎ' => "r",
-            'ং' => "s",
-            'ঃ' => "t",
-            'ঁ' => "u",
-
-            // Kars
-            'া' => "v",
-            'ি' => "w",
-            'ী' => "x",
-            'ু' => "y",
-            'ূ' => "~",
-            'ৃ' => "„",
-            'ে' => "†",
-            'ৈ' => "‰",
-            'ো' => "†v",
-            'ৌ' => "†Š",
-            '্' => "&",
-
-            // Digits
-            '০' => "0",
-            '১' => "1",
-            '২' => "2",
-            '৩' => "3",
-            '৪' => "4",
-            '৫' => "5",
-            '৬' => "6",
-            '৭' => "7",
-            '৮' => "8",
-            '৯' => "9",
-
-            // Punctuation
-            '।' => ".",
-            _ => "",
-        };
-
-        if !mapped.is_empty() {
-            for mc in mapped.chars() {
-                final_out.push((mc, tag));
-            }
-        } else {
-            final_out.push((ch, tag));
-        }
-    }
-
-    final_out
-}
-
-/// Converts Unicode Bengali text to ANSI (SutonnyMJ encoding).
-pub fn unicode_to_ansi(text: &str) -> String {
-    let tagged: Vec<(char, usize)> = text.chars().map(|c| (c, 0)).collect();
-    let out = unicode_to_ansi_tagged(&tagged);
-    out.into_iter().map(|(c, _)| c).collect()
-}
-
 pub fn is_bn_char(c: char) -> bool {
     matches!(c, '\u{0980}'..='\u{09FF}')
 }
+
 pub fn is_bn_consonant(c: char) -> bool {
     ('ক'..='হ').contains(&c) || ('ড়'..='য়').contains(&c) || c == 'ৎ'
 }
@@ -1238,22 +1682,6 @@ fn is_bn_vowel_sign(c: char) -> bool {
     matches!(c, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ' | '্' | 'ং' | 'ঃ' | 'ঁ')
 }
 
-fn parse_bn_cluster_tagged(chars: &[(char, usize)], start: usize) -> Option<usize> {
-    if !chars.get(start).copied().is_some_and(|(c, _)| is_bn_consonant(c)) {
-        return None;
-    }
-    let mut end = start + 1;
-    while end < chars.len() {
-        if chars.get(end).map(|(c, _)| *c) == Some('্') && chars.get(end + 1).copied().is_some_and(|(c, _)| is_bn_consonant(c)) {
-            end += 2;
-        } else {
-            break;
-        }
-    }
-    Some(end)
-}
-
-/// Returns true if `c` is a word boundary delimiter or whitespace.
 pub fn is_word_boundary(c: char) -> bool {
     c.is_whitespace()
         || matches!(
@@ -1360,475 +1788,171 @@ pub fn is_two_char_conjunct(c1: char, c2: char) -> bool {
     )
 }
 
+/// The end of the consonant cluster (consonants joined by `্`) starting at `start`, if one does.
+fn parse_bn_cluster(text: &Tagged, start: usize) -> Option<usize> {
+    if !text.char_at(start).is_some_and(is_bn_consonant) {
+        return None;
+    }
+    let mut end = start + 1;
+    while text.char_at(end) == Some('্') && text.char_at(end + 1).is_some_and(is_bn_consonant) {
+        end += 2;
+    }
+    Some(end)
+}
 /// Normalizes any malformed Unicode Bengali sequence where a dependent vowel sign (kar)
 /// precedes a `্` + Consonant continuation (such as `যান্তি্রক` -> `যান্ত্রিক`).
 pub fn normalize_bn_cluster_order(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
+    normalize_bn_cluster_order_tagged(Tagged::uniform(text, 0)).text()
+}
+
+/// [`normalize_bn_cluster_order`] on tagged text: each moved character keeps its tag.
+fn normalize_bn_cluster_order_tagged(text: Tagged) -> Tagged {
+    let mut out = text.empty_like();
     let mut i = 0;
-    while i < chars.len() {
-        let ch = chars[i];
+    while let Some(ch) = text.char_at(i) {
         if matches!(ch, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ')
-            && chars.get(i + 1) == Some(&'্')
-            && chars.get(i + 2).copied().is_some_and(is_bn_consonant)
+            && text.char_at(i + 1) == Some('্')
+            && text.char_at(i + 2).is_some_and(is_bn_consonant)
         {
             let mut end = i + 1;
-            while chars.get(end) == Some(&'্') && chars.get(end + 1).copied().is_some_and(is_bn_consonant) {
+            while text.char_at(end) == Some('্') && text.char_at(end + 1).is_some_and(is_bn_consonant) {
                 end += 2;
             }
-            if let Some(tail) = chars.get(i + 1..end) {
-                for &c in tail {
-                    out.push(c);
+            for k in i + 1..end {
+                if let Some(c) = text.char_at(k) {
+                    out.push(c, text.tag_at(k));
                 }
             }
-            out.push(ch);
+            out.push(ch, text.tag_at(i));
             i = end;
             continue;
         }
-        out.push(ch);
+        out.push(ch, text.tag_at(i));
         i += 1;
     }
     out
-}
-
-fn normalize_bn_cluster_order_tagged(chars: Vec<(char, usize)>) -> Vec<(char, usize)> {
-    let mut out: Vec<(char, usize)> = Vec::with_capacity(chars.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if let Some(&entry) = chars.get(i) {
-            let ch = entry.0;
-            if matches!(ch, 'া' | 'ি' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ে' | 'ৈ' | 'ো' | 'ৌ')
-                && chars.get(i + 1).map(|(c, _)| *c) == Some('্')
-                && chars.get(i + 2).copied().is_some_and(|(c, _)| is_bn_consonant(c))
-            {
-                let mut end = i + 1;
-                while chars.get(end).map(|(c, _)| *c) == Some('্') && chars.get(end + 1).copied().is_some_and(|(c, _)| is_bn_consonant(c)) {
-                    end += 2;
-                }
-                if let Some(tail) = chars.get(i + 1..end) {
-                    for &item in tail {
-                        out.push(item);
-                    }
-                }
-                out.push(entry);
-                i = end;
-                continue;
-            }
-            out.push(entry);
-        }
-        i += 1;
-    }
-    out
-}
-
-/// Converts ANSI (SutonnyMJ encoding) text to Unicode Bengali with full ligature,
-/// diacritic reordering, and cluster-aware vowel shaping, preserving character property tags.
-pub fn ansi_to_unicode_tagged(input: &[(char, usize)]) -> Vec<(char, usize)> {
-    let mut chars = input.to_vec();
-
-    // 1. Pre-normalize special symbols, Bijoy shortcuts, and previously corrupted partial conversions
-    let pre_normalizations: &[(&str, &str)] = &[
-        ("šত্ন", "ন্ত"),
-        ("¯ত্ন", "স্ত"),
-        ("~~", "~"),
-        ("vv", "v"),
-        ("xx", "x"),
-        ("...", "\u{201E}"),
-        ("\u{2026}", "\u{201E}"),
-        ("K\u{2026}", "\u{0995}\u{09C3}"),
-        ("K...", "\u{0995}\u{09C3}"),
-        ("K\u{201E}", "\u{0995}\u{09C3}"),
-        ("M\u{2026}", "\u{0997}\u{09C3}"),
-        ("M...", "\u{0997}\u{09C3}"),
-        ("M\u{201E}", "\u{0997}\u{09C3}"),
-        ("d\u{2026}", "\u{09A6}\u{09C3}"),
-        ("d...", "\u{09A6}\u{09C3}"),
-        ("d\u{201E}", "\u{09A6}\u{09C3}"),
-        ("e\u{2026}", "\u{09AC}\u{09C3}"),
-        ("e...", "\u{09AC}\u{09C3}"),
-        ("e\u{201E}", "\u{09AC}\u{09C3}"),
-        ("k\u{2026}", "\u{09B6}\u{09C3}"),
-        ("m\u{2026}", "\u{09B8}\u{09C3}"),
-        ("n\u{2026}", "\u{09B9}\u{09C3}"),
-        ("|", "\u{0964}"),
-        ("\u{2021}", "\u{2020}"),
-        ("\u{2020}\u{2020}", "\u{2020}"),
-        ("\u{02C6}", "\u{2030}"),
-        ("\u{2030}\u{2030}", "\u{2030}"),
-        ("\u{00A9}\u{00A9}", "\u{00A9}"),
-        ("f\u{201A}", "\u{09AD}\u{09C2}"),
-        ("f~", "\u{09AD}\u{09C2}"),
-        ("f\u{201E}", "\u{09AD}\u{09C2}"),
-        ("T\u{00C2}", "\u{099E}\u{09BE}"),
-        ("Tv", "\u{099E}\u{09BE}"),
-        ("wL\u{00AA}\u{2122}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}"),
-        ("wL\u{00AA}t", "\u{0996}\u{09CD}\u{09B0}\u{09BF}\u{0983}"),
-        ("wL\u{00AA}", "\u{0996}\u{09CD}\u{09B0}\u{09BF}"),
-        ("i\u{00E6}", "\u{09B0}\u{09C1}"),
-        ("i\u{201C}", "\u{09B0}\u{09C1}"),
-        ("\u{00FB}", "\u{09B9}\u{09C1}"),
-        ("\u{00B8}", "\u{0997}\u{09C1}"),
-        ("\u{00EF}", "\u{09B6}\u{09C1}"),
-        ("\u{0160}\u{0160}", "\u{0160}"),
-    ];
-
-    for &(from, to) in pre_normalizations {
-        chars = replace_tagged(chars, from, to);
-    }
-
-    // 2. Replace Conjunct Glyphs and Phalas (longest matches first).
-    // Note: Pre-kars ('w', '†', '‰') are intentionally NOT expanded here so that Step 4
-    // (`parse_bn_cluster`) moves them across the ENTIRE consonant cluster (including trailing
-    // phalas like `Ö`/`ª`/`«` for `্র` or `¿` for `্ত্র` in `যান্ত্রিক`).
-    let conjuncts: &[(&str, &str)] = &[
-        ("cÖ", "প্র"),
-        ("MÖ", "গ্র"),
-        ("eª", "ব্র"),
-        ("eÖ", "ব্র"),
-        ("¤ª", "শ্র"),
-        ("¯Œ", "স্ক্র"),
-        ("¯‹", "স্ক"),
-        ("¯•", "স্প"),
-        ("¯Í", "স্ত"),
-        ("¯—", "স্ত"),
-        ("¯‘", "স্তু"),
-        ("¯¿", "স্ত্র"),
-        ("¯’", "স্থ"),
-        ("¯ú", "স্প"),
-        ("¯^", "স্ব"),
-        ("¯§", "স্ম"),
-        ("mœ", "স্ন"),
-        ("bœ", "ন্ন"),
-        ("¤œ", "ম্ন"),
-        ("¤ú", "ম্প"),
-        ("¤^", "ম্ব"),
-        ("¤¢", "ম্ভ"),
-        ("¤§", "ম্ম"),
-        ("™¢", "দ্ভ"),
-        ("šÍ", "ন্ত"),
-        ("š—", "ন্ত"),
-        ("š‘", "ন্তু"),
-        ("š¿", "ন্ত্র"),
-        ("š^", "ন্ব"),
-        ("š’", "ন্থ"),
-        ("š§", "ন্ম"),
-        ("š", "ন্ত"),
-        ("›`", "ন্দ"),
-        ("›U", "ন্ট"),
-        ("›V", "ন্ঠ"),
-        ("›W", "ন্ড"),
-        ("›a", "ন্ধ"),
-        ("›m", "ন্স"),
-        ("›", "ন্দ"),
-        ("®‹", "ষ্ক"),
-        ("®ú", "ষ্প"),
-        ("®§", "ষ্ম"),
-        ("•ÿ", "ঙ্ক্ষ"),
-        ("•¶", "ঙ্ক্ষ"),
-        ("”P", "চ্চ"),
-        ("”Q", "চ্ছ"),
-        ("“P", "চ্চ"),
-        ("“Q", "চ্ছ"),
-        ("¶", "ক্ষ"),
-        ("ÿ", "ক্ষ"),
-        ("Á", "জ্ঞ"),
-        ("Î", "ত্র"),
-        ("°", "ক্ক"),
-        ("±", "ক্ট"),
-        ("³", "ক্ত"),
-        ("·", "ক্স"),
-        ("»", "গ্ধ"),
-        ("¼", "ঙ্ক"),
-        ("½", "ঙ্গ"),
-        ("¾", "জ্জ"),
-        ("Â", "ঞ্চ"),
-        ("Ã", "ঞ্ছ"),
-        ("Ä", "ঞ্জ"),
-        ("Æ", "ট্ট"),
-        ("Ç", "ড্ড"),
-        ("È", "ণ্ট"),
-        ("Ú", "ণ্ট"),
-        ("É", "ণ্ঠ"),
-        ("Ê", "ণ্ড"),
-        ("Ð", "ণ্ড"),
-        ("Û", "ন্ড"),
-        ("Ë", "ত্ত"),
-        ("Ì", "ত্থ"),
-        ("Í", "্ত"),
-        ("—", "্ত"),
-        ("‘", "্তু"),
-        ("¿", "্ত্র"),
-        ("Ï", "দ্দ"),
-        ("×", "দ্ধ"),
-        ("Ø", "দ্ব"),
-        ("Ù", "দ্ম"),
-        ("Ü", "ন্ধ"),
-        ("Ý", "ন্স"),
-        ("Þ", "প্ট"),
-        ("ß", "প্ত"),
-        ("à", "প্প"),
-        ("ã", "ব্দ"),
-        ("ä", "ব্ধ"),
-        ("å", "ভ্র"),
-        ("é", "ল্ক"),
-        ("î", "ল্গ"),
-        ("ë", "ল্ট"),
-        ("ì", "ল্ড"),
-        ("í", "ল্প"),
-        ("ñ", "ল্প"),
-        ("ð", "শ্চ"),
-        ("ò", "ষ্ণ"),
-        ("ó", "ষ্ট"),
-        ("ô", "ষ্ঠ"),
-        ("õ", "ষ্ণ"),
-        ("ö", "ষ্প"),
-        ("÷", "স্ট"),
-        ("ø", "্ল"),
-        ("¬", "্ল"),
-        ("ù", "স্ফ"),
-        ("ú", "্প"),
-        ("¢", "্ভ"),
-        ("µ", "ক্র"),
-        ("Œ", "্ক্র"),
-        ("‹", "্ক"),
-        ("þ", "হ্ন"),
-        ("ý", "হ্ন"),
-        ("ü", "হৃ"),
-        ("œ", "্ন"),
-        ("¥", "্ম"),
-        ("§", "্ম"),
-        ("¡", "্ব"),
-        ("¦", "্ব"),
-        ("Ÿ", "্ব"),
-        ("^", "্ব"),
-        ("¯", "স্"),
-        ("¤", "ম্"),
-        ("®", "ষ্"),
-        ("”", "চ্"),
-        ("™", "ঃ"),
-    ];
-
-    for &(a, u) in conjuncts {
-        chars = replace_tagged(chars, a, u);
-    }
-
-    // 3. Map Independent Vowels and Consonants to Bengali Unicode
-    chars = replace_tagged(chars, "Av", "আ");
-    let mut mapped_chars: Vec<(char, usize)> = Vec::with_capacity(chars.len());
-    for (ch, tag) in chars {
-        let m = match ch {
-            'A' => "অ",
-            'B' => "ই",
-            'C' => "ঈ",
-            'D' => "উ",
-            'E' => "ঊ",
-            'F' => "ঋ",
-            'G' => "এ",
-            'H' => "ঐ",
-            'I' => "ও",
-            'J' => "ঔ",
-            'K' => "ক",
-            'L' => "খ",
-            'M' => "গ",
-            'N' => "ঘ",
-            'O' => "ঙ",
-            'P' => "চ",
-            'Q' => "ছ",
-            'R' => "জ",
-            'S' => "ঝ",
-            'T' => "ঞ",
-            'U' => "ট",
-            'V' => "ঠ",
-            'W' => "ড",
-            'X' => "ঢ",
-            'Y' => "ণ",
-            'Z' => "ত",
-            '_' => "থ",
-            '`' => "দ",
-            'a' => "ধ",
-            'b' => "ন",
-            'c' => "প",
-            'd' => "ফ",
-            'e' => "ব",
-            'f' => "ভ",
-            'g' => "ম",
-            'h' => "য",
-            'i' => "র",
-            'j' => "ল",
-            'k' => "শ",
-            'l' => "ষ",
-            'm' => "স",
-            'n' => "হ",
-            'o' => "ড়",
-            'p' => "ঢ়",
-            'q' => "য়",
-            'r' => "ৎ",
-            '&' => "্",
-            '¨' => "্য",
-            'Ö' | 'ª' | '«' => "্র",
-            'Ñ' => "–",
-            'Ò' => "“",
-            'Ó' => "”",
-            'Ô' => "‘",
-            'Õ' => "’",
-            _ => "",
-        };
-        if !m.is_empty() {
-            for mc in m.chars() {
-                mapped_chars.push((mc, tag));
-            }
-        } else {
-            mapped_chars.push((ch, tag));
-        }
-    }
-
-    // 4. Cluster-Aware Pre-kar & Split-Vowel Reordering
-    let in_chars = mapped_chars;
-    let mut out: Vec<(char, usize)> = Vec::with_capacity(in_chars.len());
-    let mut i = 0;
-
-    while let Some(&(ch, tag)) = in_chars.get(i) {
-        match ch {
-            'w' => {
-                if let Some(c_end) = parse_bn_cluster_tagged(&in_chars, i + 1)
-                    && let Some(cluster) = in_chars.get(i + 1..c_end)
-                {
-                    for &item in cluster {
-                        out.push(item);
-                    }
-                    out.push(('ি', tag));
-                    i = c_end;
-                    continue;
-                }
-            }
-            '†' => {
-                if let Some(c_end) = parse_bn_cluster_tagged(&in_chars, i + 1)
-                    && let Some(cluster) = in_chars.get(i + 1..c_end)
-                {
-                    if matches!(in_chars.get(c_end).map(|(c, _)| *c), Some('v' | 'া')) {
-                        for &item in cluster {
-                            out.push(item);
-                        }
-                        out.push(('ো', tag));
-                        i = c_end + 1;
-                        continue;
-                    } else if matches!(in_chars.get(c_end).map(|(c, _)| *c), Some('Š' | 'ৌ')) {
-                        for &item in cluster {
-                            out.push(item);
-                        }
-                        out.push(('ৌ', tag));
-                        i = c_end + 1;
-                        continue;
-                    } else {
-                        for &item in cluster {
-                            out.push(item);
-                        }
-                        out.push(('ে', tag));
-                        i = c_end;
-                        continue;
-                    }
-                }
-            }
-            '‰' => {
-                if let Some(c_end) = parse_bn_cluster_tagged(&in_chars, i + 1)
-                    && let Some(cluster) = in_chars.get(i + 1..c_end)
-                {
-                    for &item in cluster {
-                        out.push(item);
-                    }
-                    out.push(('ৈ', tag));
-                    i = c_end;
-                    continue;
-                }
-            }
-            _ => {}
-        }
-
-        out.push((ch, tag));
-        i += 1;
-    }
-
-    // 5. Map Post-Diacritics, Punctuation, and Digits BEFORE Reph Reordering
-    // so that C + vowel + © (e.g. KZ…©K -> কর্তৃক, mvKz©jvi -> সার্কুলার, m‡ev©”P -> সর্বোচ্চ) is recognized.
-    let mut post_out: Vec<(char, usize)> = Vec::with_capacity(out.len());
-    for (ch, tag) in out {
-        let mapped = match ch {
-            'v' => "া",
-            'x' => "ী",
-            'y' | 'z' | 'æ' | '“' => "ু",
-            '~' | '‚' | 'ƒ' => "ূ",
-            '„' => "ৃ",
-            'Š' => "ৌ",
-            '&' => "্",
-            's' => "ং",
-            't' => "ঃ",
-            'u' => "ঁ",
-            '0' => "০",
-            '1' => "১",
-            '2' => "২",
-            '3' => "৩",
-            '4' => "৪",
-            '5' => "৫",
-            '6' => "৬",
-            '7' => "৭",
-            '8' => "৮",
-            '9' => "৯",
-            _ => "",
-        };
-        if !mapped.is_empty() {
-            for mc in mapped.chars() {
-                post_out.push((mc, tag));
-            }
-        } else {
-            post_out.push((ch, tag));
-        }
-    }
-
-    // 6. Reph (©) Reordering: C (+ vowel signs) + © -> র্ + C (+ vowel signs)
-    let rchars = post_out;
-    let mut reph_out: Vec<(char, usize)> = Vec::with_capacity(rchars.len());
-    let mut j = 0;
-
-    while let Some(&(rch, tag)) = rchars.get(j) {
-        if let Some(c_end) = parse_bn_cluster_tagged(&rchars, j) {
-            let mut v_end = c_end;
-            while rchars.get(v_end).copied().is_some_and(|(c, _)| is_bn_vowel_sign(c)) {
-                v_end += 1;
-            }
-            if rchars.get(v_end).map(|(c, _)| *c) == Some('©')
-                && let Some(slice) = rchars.get(j..v_end)
-            {
-                let reph_tag = rchars.get(v_end).map(|(_, t)| *t).unwrap_or(tag);
-                reph_out.push(('র', reph_tag));
-                reph_out.push(('্', reph_tag));
-                for &item in slice {
-                    reph_out.push(item);
-                }
-                j = v_end + 1;
-                continue;
-            }
-        }
-        reph_out.push((rch, tag));
-        j += 1;
-    }
-
-    // 7. Normalize any vowel sign preceding `্` + Consonant (e.g. যান্তি্রক -> যান্ত্রিক)
-    // and Chandrabindu (ঁ) after vowel signs (e.g. চঁাদ -> চাঁদ).
-    let mut final_out = normalize_bn_cluster_order_tagged(reph_out);
-    for (bad, good) in [("ঁা", "াঁ"), ("ঁি", "িঁ"), ("ঁী", "ীঁ"), ("ঁু", "ুঁ"), ("ঁূ", "ূঁ"), ("ঁৃ", "ৃঁ"), ("ঁে", "েঁ"), ("ঁৈ", "ৈঁ"), ("ঁো", "োঁ"), ("ঁৌ", "ৌঁ")]
-    {
-        final_out = replace_tagged(final_out, bad, good);
-    }
-
-    final_out
 }
 
 /// Converts ANSI (SutonnyMJ encoding) text to Unicode Bengali with full ligature,
 /// diacritic reordering, and cluster-aware vowel shaping.
 pub fn ansi_to_unicode(text: &str) -> String {
-    let tagged: Vec<(char, usize)> = text.chars().map(|c| (c, 0)).collect();
-    let out = ansi_to_unicode_tagged(&tagged);
-    out.into_iter().map(|(c, _)| c).collect()
+    ansi_to_unicode_tagged(Tagged::uniform(text, 0)).text()
+}
+
+/// [`ansi_to_unicode`] on tagged text. Each output character carries the tag of the glyph it comes
+/// from, through conjunct mapping and pre-base vowel and reph reordering.
+pub(crate) fn ansi_to_unicode_tagged(mut s: Tagged) -> Tagged {
+    // 1. Pre-normalize special symbols, Bijoy shortcuts, and previously corrupted partial conversions
+    for &(from, to) in ANSI_PRE_NORMALIZE {
+        s.replace(from, to);
+    }
+
+    // 2. Replace Conjunct Glyphs and Phalas (longest matches first), from ANSI_CONJUNCTS.
+    for &(a, u) in ANSI_CONJUNCTS {
+        s.replace(a, u);
+    }
+
+    // 3. Map Independent Vowels and Consonants to Bengali Unicode
+    s.replace("Av", "আ");
+    let mut out = s.empty_like();
+    for &(ch, tag) in s.chars() {
+        let m = ansi_base_glyph(ch);
+        if !m.is_empty() {
+            out.push_str(m, tag);
+        } else {
+            out.push(ch, tag);
+        }
+    }
+    s = out;
+
+    // 4. Cluster-Aware Pre-kar & Split-Vowel Reordering. The vowel sign moves after the whole consonant
+    // cluster and keeps the pre-kar glyph's tag; the cluster's characters keep their own. The two
+    // glyphs of ো and ৌ are joined only when they share a class; otherwise they stay the two vowel
+    // signs they stand for (ে + া, ে + ৗ), which is the same text in Unicode's canonical form.
+    let mut out = s.empty_like();
+    let mut i = 0;
+    while let Some(ch) = s.char_at(i) {
+        if matches!(ch, 'w' | '†' | '‰')
+            && let Some(c_end) = parse_bn_cluster(&s, i + 1)
+        {
+            let joins = s.one_class([i, c_end]);
+            let (sign, consumed) = match ch {
+                'w' => ('ি', 0),
+                '‰' => ('ৈ', 0),
+                _ => match s.char_at(c_end) {
+                    Some('v' | 'া') if joins => ('ো', 1),
+                    Some('Š' | 'ৌ') if joins => ('ৌ', 1),
+                    _ => ('ে', 0),
+                },
+            };
+            for k in i + 1..c_end {
+                if let Some(c) = s.char_at(k) {
+                    out.push(c, s.tag_at(k));
+                }
+            }
+            out.push(sign, s.tag_at(i));
+            if !joins && ch == '†' && s.char_at(c_end) == Some('Š') {
+                out.push('\u{09D7}', s.tag_at(c_end));
+                i = c_end + 1;
+                continue;
+            }
+            i = c_end + consumed;
+            continue;
+        }
+
+        out.push(ch, s.tag_at(i));
+        i += 1;
+    }
+    s = out;
+
+    // 5. Map Post-Diacritics, Punctuation, and Digits BEFORE Reph Reordering
+    // so that C + vowel + © (e.g. KZ…©K -> কর্তৃক, mvKz©jvi -> সার্কুলার, m‡ev©”P -> সর্বোচ্চ) is recognized.
+    let mut out = s.empty_like();
+    for &(ch, tag) in s.chars() {
+        let mapped = ansi_post_glyph(ch);
+        if !mapped.is_empty() {
+            out.push_str(mapped, tag);
+        } else {
+            out.push(ch, tag);
+        }
+    }
+    s = out;
+
+    // 6. Reph (©) Reordering: C (+ vowel signs) + © -> র্ + C (+ vowel signs). The র্ keeps the reph
+    // glyph's tag.
+    let mut out = s.empty_like();
+    let mut j = 0;
+    while let Some(rch) = s.char_at(j) {
+        if let Some(c_end) = parse_bn_cluster(&s, j) {
+            let mut v_end = c_end;
+            while s.char_at(v_end).is_some_and(is_bn_vowel_sign) {
+                v_end += 1;
+            }
+            if s.char_at(v_end) == Some('©') {
+                out.push_str("র্", s.tag_at(v_end));
+                for k in j..v_end {
+                    if let Some(c) = s.char_at(k) {
+                        out.push(c, s.tag_at(k));
+                    }
+                }
+                j = v_end + 1;
+                continue;
+            }
+        }
+        out.push(rch, s.tag_at(j));
+        j += 1;
+    }
+    s = out;
+
+    // 7. Normalize any vowel sign preceding `্` + Consonant (e.g. যান্তি্রক -> যান্ত্রিক)
+    // and Chandrabindu (ঁ) after vowel signs (e.g. চঁাদ -> চাঁদ).
+    let mut final_out = normalize_bn_cluster_order_tagged(s);
+    for (bad, good) in [("ঁা", "াঁ"), ("ঁি", "িঁ"), ("ঁী", "ীঁ"), ("ঁু", "ুঁ"), ("ঁূ", "ূঁ"), ("ঁৃ", "ৃঁ"), ("ঁে", "েঁ"), ("ঁৈ", "ৈঁ"), ("ঁো", "োঁ"), ("ঁৌ", "ৌঁ")]
+    {
+        final_out.replace(bad, good);
+    }
+
+    final_out
 }
 
 // ============================================================================
@@ -2080,6 +2204,34 @@ fn cmd_bangla_transliterate(_s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"result": result, "mode": mode}))
 }
 
+/// Appends a run, extending the last one when it has the same formatting.
+/// A [`Tagged`] class for each run: runs that differ in tracked insertion, tracked deletion, hidden
+/// text or hyperlink get different classes, so a conjunct glyph never joins text that is (say)
+/// deleted with text that is not. Bold, size and other formatting don't separate runs.
+pub(crate) fn run_classes<'a>(props: impl IntoIterator<Item = &'a wordcraft_doc::CharProps>) -> Vec<u32> {
+    let mut seen: std::collections::HashMap<(Option<u32>, Option<u32>, bool, Option<&'a str>), u32> = std::collections::HashMap::new();
+    props
+        .into_iter()
+        .map(|p| {
+            let key = (p.ins, p.del, p.hidden == Some(true), p.link.as_deref());
+            let next = u32::try_from(seen.len()).unwrap_or(u32::MAX);
+            *seen.entry(key).or_insert(next)
+        })
+        .collect()
+}
+
+/// The run index a [`Tagged`] tag names.
+pub(crate) fn tag_index(tag: u32) -> usize {
+    usize::try_from(tag).unwrap_or(usize::MAX)
+}
+
+pub(crate) fn push_run(runs: &mut Vec<wordcraft_doc::Run>, len: usize, props: wordcraft_doc::CharProps) {
+    match runs.last_mut() {
+        Some(last) if last.props == props => last.len += len,
+        _ => runs.push(wordcraft_doc::Run { len, props }),
+    }
+}
+
 fn convert_blocks_recursive(blocks: &mut Vec<Arc<wordcraft_doc::Block>>, is_to_ansi: bool, target_font: &str) -> usize {
     let mut count = 0;
     for b in blocks {
@@ -2089,71 +2241,39 @@ fn convert_blocks_recursive(blocks: &mut Vec<Arc<wordcraft_doc::Block>>, is_to_a
                 p.mark.font = Some(target_font.into());
                 p.mark.font_cs = Some(target_font.into());
                 if !p.text.is_empty() {
-                    // 1. Tag each character with its source run index
-                    let mut tagged = Vec::with_capacity(p.text.chars().count());
+                    let mut new_text = String::with_capacity(p.text.len() * 2);
+                    let mut new_runs = Vec::with_capacity(p.runs.len().max(1));
+
                     if p.runs.is_empty() {
-                        for c in p.text.chars() {
-                            tagged.push((c, 0));
-                        }
+                        let converted = if is_to_ansi { unicode_to_ansi(&p.text) } else { ansi_to_unicode(&p.text) };
+                        let props =
+                            wordcraft_doc::CharProps { font: Some(target_font.into()), font_cs: Some(target_font.into()), ..Default::default() };
+                        new_runs.push(wordcraft_doc::Run { len: converted.len(), props });
+                        new_text = converted;
                     } else {
-                        let mut offset = 0;
-                        for (run_idx, r) in p.runs.iter().enumerate() {
-                            let end = (offset + r.len).min(p.text.len());
-                            let slice = slice_safe(&p.text, offset, end);
-                            offset = end;
-                            for c in slice.chars() {
-                                tagged.push((c, run_idx));
+                        // Convert the paragraph as one text, so vowel signs, conjuncts and reph see their
+                        // neighbours across run boundaries; each output character keeps its source run's
+                        // formatting through the reordering.
+                        let run_lens: Vec<usize> = p.runs.iter().map(|r| r.len).collect();
+                        let source = Tagged::from_runs(&p.text, &run_lens).with_classes(run_classes(p.runs.iter().map(|r| &r.props)));
+                        let converted_text = if is_to_ansi { unicode_to_ansi_tagged(source) } else { ansi_to_unicode_tagged(source) };
+                        for (converted, run_index) in converted_text.segments() {
+                            let mut props = p.runs.get(tag_index(run_index)).map(|r| r.props.clone()).unwrap_or_default();
+                            props.font = Some(target_font.into());
+                            props.font_cs = Some(target_font.into());
+                            if props.size.is_some() {
+                                props.size_cs = props.size;
                             }
-                        }
-                        if offset < p.text.len() {
-                            let trailing = slice_safe(&p.text, offset, p.text.len());
-                            let last_idx = p.runs.len().saturating_sub(1);
-                            for c in trailing.chars() {
-                                tagged.push((c, last_idx));
+                            if props.bold.is_some() {
+                                props.bold_cs = props.bold;
                             }
+                            if props.italic.is_some() {
+                                props.italic_cs = props.italic;
+                            }
+
+                            push_run(&mut new_runs, converted.len(), props);
+                            new_text.push_str(&converted);
                         }
-                    }
-
-                    // 2. Convert holistically across run boundaries
-                    let converted_tagged = if is_to_ansi { unicode_to_ansi_tagged(&tagged) } else { ansi_to_unicode_tagged(&tagged) };
-
-                    // 3. Reconstruct text and runs with mapped properties
-                    let mut new_text = String::with_capacity(converted_tagged.len() * 3);
-                    let mut new_runs: Vec<wordcraft_doc::Run> = Vec::new();
-
-                    let resolve_run_props = |run_idx: usize| -> wordcraft_doc::CharProps {
-                        let mut props = p.runs.get(run_idx).map(|r| r.props.clone()).unwrap_or_default();
-                        props.font = Some(target_font.into());
-                        props.font_cs = Some(target_font.into());
-                        if props.size.is_some() {
-                            props.size_cs = props.size;
-                        }
-                        if props.bold.is_some() {
-                            props.bold_cs = props.bold;
-                        }
-                        if props.italic.is_some() {
-                            props.italic_cs = props.italic;
-                        }
-                        props
-                    };
-
-                    for (c, run_idx) in converted_tagged {
-                        let char_len = c.len_utf8();
-                        new_text.push(c);
-                        let props = resolve_run_props(run_idx);
-
-                        if let Some(last_run) = new_runs.last_mut()
-                            && last_run.props == props
-                        {
-                            last_run.len += char_len;
-                        } else {
-                            new_runs.push(wordcraft_doc::Run { len: char_len, props });
-                        }
-                    }
-
-                    if new_runs.is_empty() && !new_text.is_empty() {
-                        let props = resolve_run_props(0);
-                        new_runs.push(wordcraft_doc::Run { len: new_text.len(), props });
                     }
 
                     p.text = new_text;
@@ -2656,5 +2776,310 @@ mod tests {
         assert_eq!(p3_out.runs.len(), 1);
         assert_eq!(p3_out.runs[0].len, "³".len());
         assert_eq!(p3_out.runs[0].props.bold, Some(true));
+    }
+}
+
+#[cfg(test)]
+mod run_conversion_tests {
+    use super::*;
+    use wordcraft_doc::{Block, CharProps, Paragraph, Run};
+
+    fn bold() -> CharProps {
+        CharProps { bold: Some(true), ..Default::default() }
+    }
+
+    /// A one-paragraph body whose text is the pieces joined, with one run per piece.
+    fn paragraph_in_runs(pieces: &[(&str, CharProps)]) -> Vec<Arc<Block>> {
+        let text: String = pieces.iter().map(|(t, _)| *t).collect();
+        let runs = pieces.iter().map(|(t, props)| Run { len: t.len(), props: props.clone() }).collect();
+        vec![Arc::new(Block::Para(Paragraph { text, runs, ..Default::default() }))]
+    }
+
+    fn convert(pieces: &[(&str, CharProps)], is_to_ansi: bool) -> Paragraph {
+        let mut body = paragraph_in_runs(pieces);
+        convert_blocks_recursive(&mut body, is_to_ansi, "SutonnyMJ");
+        body[0].as_para().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn pre_base_vowel_split_across_runs_converts_as_one_word() {
+        // The vowel sign ি is typed before its consonant in ANSI, so it reorders across the word.
+        let unicode = "কি";
+        assert_eq!(unicode_to_ansi(unicode), "wK", "the whole word is the reference");
+        let split = convert(&[("ক", CharProps::default()), ("ি", CharProps::default())], true);
+        assert_eq!(split.text, unicode_to_ansi(unicode), "a run boundary inside the word is not a linguistic boundary");
+        assert_eq!(split.runs.len(), 1, "identical formatting is one run");
+
+        let ansi = "wK";
+        let split = convert(&[("w", CharProps::default()), ("K", CharProps::default())], false);
+        assert_eq!(split.text, ansi_to_unicode(ansi));
+        assert_eq!(split.text, "কি");
+    }
+
+    #[test]
+    fn conjunct_split_across_runs_converts_as_one_word() {
+        let unicode = "ক্ত";
+        let whole = unicode_to_ansi(unicode);
+        let split = convert(&[("ক্", CharProps::default()), ("ত", CharProps::default())], true);
+        assert_eq!(split.text, whole);
+        assert_eq!(split.runs.len(), 1);
+    }
+
+    #[test]
+    fn ansi_conjunct_split_across_runs_converts_as_one_word() {
+        // ¯Í is স্ত in SutonnyMJ; the two glyphs form one conjunct across the word.
+        let ansi = "¯Í";
+        let split = convert(&[("¯", CharProps::default()), ("Í", CharProps::default())], false);
+        assert_eq!(split.text, ansi_to_unicode(ansi));
+        assert_eq!(split.runs.len(), 1);
+    }
+
+    #[test]
+    fn formatting_change_at_a_word_gap_keeps_its_runs() {
+        let split = convert(&[("কি ", bold()), ("কি", CharProps::default())], true);
+        assert_eq!(split.text, unicode_to_ansi("কি কি"));
+        assert_eq!(split.runs.len(), 2, "two words with different formatting stay in two runs");
+        assert_eq!(split.runs.first().and_then(|r| r.props.bold), Some(true));
+        assert_eq!(split.runs.get(1).and_then(|r| r.props.bold), None);
+    }
+
+    #[test]
+    fn formatting_change_at_punctuation_inside_a_word_keeps_its_runs() {
+        // A colon after a bold word cannot change the converted text, so the formatting stays split.
+        let split = convert(&[("নাম", bold()), (":", CharProps::default())], true);
+        assert_eq!(split.text, unicode_to_ansi("নাম:"));
+        assert_eq!(split.runs.len(), 2, "a neutral split keeps the formatting change");
+        assert_eq!(split.runs.first().and_then(|r| r.props.bold), Some(true));
+        assert_eq!(split.runs.get(1).and_then(|r| r.props.bold), None);
+    }
+
+    #[test]
+    fn pathological_word_with_alternating_formats_converts_without_losing_text() {
+        // One long word with a formatting change every three characters, so most changes fall inside
+        // a cluster: the text must still equal the whole-word conversion, promptly.
+        let word: String = "কি".repeat(600);
+        let pieces: Vec<(String, CharProps)> = word
+            .chars()
+            .collect::<Vec<char>>()
+            .chunks(3)
+            .enumerate()
+            .map(|(i, c)| (c.iter().collect::<String>(), if i % 2 == 0 { bold() } else { CharProps::default() }))
+            .collect();
+        let refs: Vec<(&str, CharProps)> = pieces.iter().map(|(t, p)| (t.as_str(), p.clone())).collect();
+        let split = convert(&refs, true);
+        assert_eq!(split.text, unicode_to_ansi(&word));
+        // Each ক and ি is one ASCII glyph, so the bold glyphs are exactly as many as the bold characters.
+        let bold_chars: usize = pieces.iter().filter(|(_, p)| p.bold == Some(true)).map(|(t, _)| t.chars().count()).sum();
+        let bold_glyphs: usize = split.runs.iter().filter(|r| r.props.bold == Some(true)).map(|r| r.len).sum();
+        assert_eq!(bold_glyphs, bold_chars, "every glyph keeps its character's formatting");
+    }
+
+    /// The converted runs as (text, bold) pairs.
+    fn runs_with_bold(p: &Paragraph) -> Vec<(String, Option<bool>)> {
+        let mut at = 0usize;
+        p.runs
+            .iter()
+            .map(|r| {
+                let text = p.text.get(at..at + r.len).unwrap_or("").to_string();
+                at += r.len;
+                (text, r.props.bold)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn formatting_inside_a_word_follows_each_character_through_reordering() {
+        // ক is bold and ি plain. SutonnyMJ writes the vowel sign first, so the plain glyph comes first.
+        let split = convert(&[("ক", bold()), ("ি", CharProps::default())], true);
+        assert_eq!(split.text, "wK");
+        assert_eq!(runs_with_bold(&split), vec![("w".to_string(), None), ("K".to_string(), Some(true))]);
+
+        // And back: the bold pre-base glyph becomes the bold vowel sign after its consonant.
+        let split = convert(&[("w", bold()), ("K", CharProps::default())], false);
+        assert_eq!(split.text, "কি");
+        assert_eq!(runs_with_bold(&split), vec![("ক".to_string(), None), ("ি".to_string(), Some(true))]);
+    }
+
+    #[test]
+    fn reph_keeps_the_formatting_of_its_ra() {
+        // র্ক: the bold র্ becomes the reph glyph © after the plain consonant.
+        let split = convert(&[("র্", bold()), ("ক", CharProps::default())], true);
+        assert_eq!(split.text, unicode_to_ansi("র্ক"));
+        assert_eq!(runs_with_bold(&split), vec![("K".to_string(), None), ("©".to_string(), Some(true))]);
+    }
+
+    #[test]
+    fn conjunct_written_as_one_glyph_takes_its_first_characters_formatting() {
+        // ক্ত is the single glyph ³: one glyph cannot be half bold, so it takes the bold of its first
+        // character.
+        let split = convert(&[("ক্", bold()), ("ত", CharProps::default())], true);
+        assert_eq!(split.text, "³");
+        assert_eq!(runs_with_bold(&split), vec![("³".to_string(), Some(true))]);
+    }
+
+    #[test]
+    fn tracked_insertion_inside_a_word_stays_on_its_characters() {
+        // A tracked insertion of the vowel sign alone: after reordering it still marks only that glyph.
+        let inserted = CharProps { ins: Some(7), ..Default::default() };
+        let split = convert(&[("ক", CharProps::default()), ("ি", inserted)], true);
+        assert_eq!(split.text, "wK");
+        let marks: Vec<Option<u32>> = split.runs.iter().map(|r| r.props.ins).collect();
+        assert_eq!(marks, vec![Some(7), None], "the inserted vowel sign is the glyph written first");
+    }
+
+    fn deleted(rev: u32) -> CharProps {
+        CharProps { del: Some(rev), ..Default::default() }
+    }
+
+    fn inserted(rev: u32) -> CharProps {
+        CharProps { ins: Some(rev), ..Default::default() }
+    }
+
+    /// The converted runs as (text, tracked insertion, tracked deletion).
+    fn runs_with_marks(p: &Paragraph) -> Vec<(String, Option<u32>, Option<u32>)> {
+        let mut at = 0usize;
+        p.runs
+            .iter()
+            .map(|r| {
+                let text = p.text.get(at..at + r.len).unwrap_or("").to_string();
+                at += r.len;
+                (text, r.props.ins, r.props.del)
+            })
+            .collect()
+    }
+
+    fn s(text: &str) -> String {
+        text.to_string()
+    }
+
+    #[test]
+    fn reph_glyph_gives_its_formatting_to_the_ra() {
+        // K© is র্ক: the bold reph glyph becomes the bold র্ before the plain consonant.
+        let split = convert(&[("K", CharProps::default()), ("©", bold())], false);
+        assert_eq!(split.text, "র্ক");
+        assert_eq!(runs_with_bold(&split), vec![(s("র্"), Some(true)), (s("ক"), None)]);
+    }
+
+    #[test]
+    fn precomposed_kha_ra_i_keeps_each_glyphs_formatting() {
+        // wLª is one table entry for খ্রি: the pre-base glyph's formatting goes to the vowel sign only,
+        // as for every other pre-base vowel.
+        let split = convert(&[("w", bold()), ("Lª", CharProps::default())], false);
+        assert_eq!(split.text, "খ্রি");
+        assert_eq!(runs_with_bold(&split), vec![(s("খ্র"), None), (s("ি"), Some(true))]);
+
+        // A tracked deletion of the pre-base glyph deletes only the vowel sign.
+        let split = convert(&[("w", deleted(0)), ("Lª", CharProps::default())], false);
+        assert_eq!(runs_with_marks(&split), vec![(s("খ্র"), None, None), (s("ি"), None, Some(0))]);
+    }
+
+    #[test]
+    fn consonant_and_vowel_sign_entries_keep_each_glyphs_formatting() {
+        // f~ is a table entry for ভূ; the bold ূ stays bold both ways.
+        let to_ansi = convert(&[("ভ", CharProps::default()), ("ূ", bold())], true);
+        let ansi_runs = runs_with_bold(&to_ansi);
+        assert_eq!(ansi_runs.last().map(|r| r.1), Some(Some(true)), "{ansi_runs:?}");
+        let pieces: Vec<(&str, CharProps)> =
+            ansi_runs.iter().map(|(t, b)| (t.as_str(), if *b == Some(true) { bold() } else { CharProps::default() })).collect();
+        let back = convert(&pieces, false);
+        assert_eq!(back.text, "ভূ");
+        assert_eq!(runs_with_bold(&back), vec![(s("ভ"), None), (s("ূ"), Some(true))]);
+
+        // K„ is কৃ: a deleted ri-kar stays deleted.
+        let split = convert(&[("K", CharProps::default()), ("„", deleted(4))], false);
+        assert_eq!(split.text, "কৃ");
+        assert_eq!(runs_with_marks(&split), vec![(s("ক"), None, None), (s("ৃ"), None, Some(4))]);
+    }
+
+    #[test]
+    fn phala_written_as_its_own_glyph_keeps_its_formatting() {
+        // প্র is cÖ: the inserted র-phala is the glyph Ö, so Reject All leaves প.
+        let split = convert(&[("প", CharProps::default()), ("্র", inserted(7))], true);
+        assert_eq!(split.text, "cÖ");
+        assert_eq!(runs_with_marks(&split), vec![(s("c"), None, None), (s("Ö"), Some(7), None)]);
+
+        let split = convert(&[("c", CharProps::default()), ("Ö", bold())], false);
+        assert_eq!(split.text, "প্র");
+        assert_eq!(runs_with_bold(&split), vec![(s("প"), None), (s("্র"), Some(true))]);
+    }
+
+    #[test]
+    fn half_form_conjuncts_align_glyph_by_glyph() {
+        // ন্দ্র is ›`ª: ন্ is the half form ›, দ is `, র-phala is ª.
+        let from: Vec<char> = "ন্দ্র".chars().collect();
+        let to: Vec<char> = "›`ª".chars().collect();
+        assert_eq!(entry_sources(&from, &to), vec![vec![0, 1], vec![2], vec![3, 4]]);
+    }
+
+    #[test]
+    fn conjunct_spanning_a_tracked_change_is_not_fused() {
+        // ক্ত is the one glyph ³, but ত is deleted: fusing would delete ক্ too (or keep ত). The two
+        // parts are written separately, which is the same text.
+        let split = convert(&[("ক্", CharProps::default()), ("ত", deleted(3))], true);
+        assert_eq!(split.text, format!("{}{}", unicode_to_ansi("ক্"), unicode_to_ansi("ত")));
+        let marks: Vec<Option<u32>> = split.runs.iter().map(|r| r.props.del).collect();
+        assert_eq!(marks, vec![None, Some(3)]);
+        assert_eq!(ansi_to_unicode(&split.text), "ক্ত", "the separate glyphs still read as ক্ত");
+
+        // Bold alone is not a reason to split it.
+        let split = convert(&[("ক্", bold()), ("ত", CharProps::default())], true);
+        assert_eq!(split.text, "³");
+    }
+
+    #[test]
+    fn two_glyph_conjunct_with_a_pre_base_vowel_keeps_each_glyphs_formatting() {
+        // প্রে: the vowel sign's glyph † goes before the two-glyph conjunct cÖ.
+        let split = convert(&[("প্র", CharProps::default()), ("ে", bold())], true);
+        assert_eq!(split.text, unicode_to_ansi("প্রে"));
+        assert_eq!(runs_with_bold(&split), vec![(s("†"), Some(true)), (s("cÖ"), None)]);
+    }
+
+    #[test]
+    fn split_vowel_o_keeps_its_formatting_on_both_glyphs() {
+        // কো is †Kv in SutonnyMJ: both glyphs of the bold ো are bold.
+        let split = convert(&[("ক", CharProps::default()), ("ো", bold())], true);
+        assert_eq!(split.text, "†Kv");
+        assert_eq!(runs_with_bold(&split), vec![(s("†"), Some(true)), (s("K"), None), (s("v"), Some(true))]);
+
+        // And back: the joined vowel sign takes the pre-base glyph's formatting.
+        let split = convert(&[("†", bold()), ("K", CharProps::default()), ("v", bold())], false);
+        assert_eq!(split.text, "কো");
+        assert_eq!(runs_with_bold(&split), vec![(s("ক"), None), (s("ো"), Some(true))]);
+    }
+
+    #[test]
+    fn split_vowel_with_a_deleted_half_stays_two_vowel_signs() {
+        // †Kv with the v deleted: joining would delete the whole ো. Unicode's canonical ে + া keeps the
+        // deleted glyph's part separate, so Accept All leaves কে.
+        let split = convert(&[("†K", CharProps::default()), ("v", deleted(2))], false);
+        assert_eq!(runs_with_marks(&split), vec![(s("কে"), None, None), (s("া"), None, Some(2))]);
+    }
+
+    #[test]
+    fn tracked_replacement_inside_a_word_keeps_both_halves() {
+        // ি deleted and ী inserted after ক: each glyph keeps its own mark, so Accept All reads কী and
+        // Reject All reads কি.
+        let split = convert(&[("ক", CharProps::default()), ("ি", deleted(1)), ("ী", inserted(2))], true);
+        let marks = runs_with_marks(&split);
+        let accepted: String = marks.iter().filter(|r| r.2.is_none()).map(|r| r.0.as_str()).collect();
+        let rejected: String = marks.iter().filter(|r| r.1.is_none()).map(|r| r.0.as_str()).collect();
+        assert_eq!(ansi_to_unicode(&accepted), "কী", "{marks:?}");
+        assert_eq!(ansi_to_unicode(&rejected), "কি", "{marks:?}");
+    }
+
+    #[test]
+    fn replace_tags_each_output_character_with_its_source() {
+        // A swap of two characters: each keeps its own tag (the chandrabindu fixes move ঁ this way).
+        let mut text = Tagged::from_runs("ঁা", &["ঁ".len(), "া".len()]);
+        text.replace("ঁা", "াঁ");
+        assert_eq!(text.chars(), &[('া', 1), ('ঁ', 0)]);
+    }
+
+    #[test]
+    fn cluster_reordering_keeps_each_characters_tag() {
+        // কি্র: the vowel sign typed before ্র moves after it and keeps its own tag.
+        let text = Tagged::from_runs("কি্র", &["ক".len(), "ি".len(), "্র".len()]);
+        let out = normalize_bn_cluster_order_tagged(text);
+        assert_eq!(out.chars(), &[('ক', 0), ('্', 2), ('র', 2), ('ি', 1)]);
     }
 }

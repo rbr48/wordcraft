@@ -245,7 +245,12 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
         "pageWidth" => scale = ((avail.x - 2.0 * GAP - 20.0) / maxw).clamp(0.1, 6.0),
         "onePage" => scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 2.0 * GAP) / maxw).clamp(0.05, 6.0),
         "multiplePages" => scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 3.0 * GAP) / (2.0 * maxw)).clamp(0.05, 6.0),
-        _ => {}
+        _ => {
+            // On mobile / narrow screens (< 650pt), fit page width edge-to-edge if 100% zoom overflows
+            if avail.x > 0.0 && avail.x < 650.0 && scale * maxw > avail.x - 2.0 * GAP {
+                scale = ((avail.x - 2.0 * GAP - 8.0) / maxw).clamp(0.1, 6.0);
+            }
+        }
     }
     if v.read_mode {
         scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 3.0 * GAP) / (2.0 * maxw)).clamp(0.05, 6.0);
@@ -430,7 +435,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let hovered = ui.rect_contains_pointer(area) && ui.ctx().dragged_id().is_none();
     let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
     let opts = ui.ctx().options(|o| o.input_options);
-    let delta = ui.input(|i| app.canvas.wheel.frame(i, &opts, hovered, notch, area.height()));
+    let touch_pan = ui.input(|i| i.multi_touch().map(|t| t.translation_delta).unwrap_or(egui::Vec2::ZERO));
+    let delta = ui.input(|i| app.canvas.wheel.frame(i, &opts, hovered, notch, area.height())) + touch_pan;
     let mut scroll_area = egui::ScrollArea::both()
         .id_salt("canvas_scroll")
         .auto_shrink([false, false])

@@ -80,6 +80,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let is_compact = avail_w < 1220.0;
             let is_narrow = avail_w < 980.0;
             let is_tight = avail_w < 820.0;
+            let is_mobile = avail_w < 600.0;
 
             let is_bangla_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;
             let share_btn_w = if is_narrow { 32.0 } else { 74.0 };
@@ -87,7 +88,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let comment_btn_w = if is_compact { 28.0 } else { 85.0 };
             let copilot_btn_w = if is_narrow { 30.0 } else { 74.0 };
             let conv_btn_w = if is_narrow { 26.0 } else { 76.0 };
-            let b_btn_w = if is_narrow {
+            let b_btn_w = if is_mobile {
+                38.0
+            } else if is_narrow {
                 42.0
             } else if is_bangla_on {
                 110.0
@@ -95,9 +98,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 76.0
             };
 
-            // Reserve dynamic space for all 6 right-hand utility controls + spacing + separator
-            let right_w = share_btn_w + 6.0 + mode_btn_w + 4.0 + comment_btn_w + 3.0 + copilot_btn_w + 3.0 + conv_btn_w + 3.0 + b_btn_w + 20.0;
-            let max_tab_x = (avail_w - right_w).max(120.0);
+            // Reserve dynamic space for all right-hand utility controls
+            let right_w = if is_mobile {
+                b_btn_w + 32.0 + 16.0
+            } else {
+                share_btn_w + 6.0 + mode_btn_w + 4.0 + comment_btn_w + 3.0 + copilot_btn_w + 3.0 + conv_btn_w + 3.0 + b_btn_w + 20.0
+            };
+            let max_tab_x = (avail_w - right_w).max(90.0);
 
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(if is_narrow { 1.0 } else { 2.0 }, 0.0);
@@ -163,6 +170,94 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if is_mobile {
+                        // Compact mobile menu: Share, Mode, Comments, Copilot, Converter
+                        ui.menu_button(egui::RichText::new("More ▾").font(semibold(11.5)), |ui| {
+                            if ui.button(tl!("Share / Export…")).clicked() {
+                                let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
+                                ui.close();
+                            }
+                            let track = app.session.doc.settings.track_changes;
+                            if ui.selectable_label(track, tl!("Track Changes")).clicked() {
+                                let _ = app.run("review.trackChanges", json!({"value": !track}));
+                                ui.close();
+                            }
+                            if ui.button(tl!("Comments")).clicked() {
+                                let _ = app.run("view.commentsPane", json!({}));
+                                ui.close();
+                            }
+                            if ui.button(tl!("Copilot Assistant")).clicked() {
+                                let _ = app.run("ui.copilot", json!({}));
+                                ui.close();
+                            }
+                            if ui.button(tl!("Bangla Converter…")).clicked() {
+                                let _ = app.run("tools.banglaConverter", json!({}));
+                                ui.close();
+                            }
+                        });
+                        ui.add_space(3.0);
+
+                        // Bangla Input Mode dropdown
+                        let is_bangla_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;
+                        let b_label = if is_bangla_on { "বাং ▾" } else { "EN ▾" };
+                        ui.menu_button(
+                            egui::RichText::new(b_label).font(if is_bangla_on { semibold(11.5) } else { regular(11.5) }).color(if is_bangla_on {
+                                t.accent_text
+                            } else {
+                                t.text
+                            }),
+                            |ui| {
+                                if ui
+                                    .selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Off, "English (F12)")
+                                    .clicked()
+                                {
+                                    let _ = app.run("tools.banglaMode", json!({"mode": "off"}));
+                                    ui.close();
+                                }
+                                if ui
+                                    .selectable_label(
+                                        app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic,
+                                        "Bangla Phonetic (Avro)",
+                                    )
+                                    .clicked()
+                                {
+                                    let _ = app.run("tools.banglaMode", json!({"mode": "phonetic"}));
+                                    ui.close();
+                                }
+                                if ui
+                                    .selectable_label(
+                                        app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Jatiya,
+                                        "Bangla Jatiya (National / Ctrl+Alt+V)",
+                                    )
+                                    .clicked()
+                                {
+                                    let _ = app.run("tools.banglaMode", json!({"mode": "jatiya"}));
+                                    ui.close();
+                                }
+                                if ui
+                                    .selectable_label(
+                                        app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Ansi,
+                                        "Bangla ANSI (Bijoy / Ctrl+Alt+B)",
+                                    )
+                                    .clicked()
+                                {
+                                    let _ = app.run("tools.banglaMode", json!({"mode": "ansi"}));
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if ui.button("Bangla Converter…").clicked() {
+                                    let _ = app.run("tools.banglaConverter", json!({}));
+                                    ui.close();
+                                }
+                            },
+                        );
+                        ui.add_space(4.0);
+                        let sep_rect = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover()).0;
+                        ui.painter().vline(sep_rect.center().x, sep_rect.y_range(), Stroke::new(1.0, t.border));
+                        ui.add_space(4.0);
+                        return;
+                    }
+
                     // Right utilities: Share, Editing, Comments, Copilot
                     let share = tl!("Share");
                     let share_w =

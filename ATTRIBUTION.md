@@ -30,10 +30,12 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `assets/fonts/Inter-Regular.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface (Latin UI/document font, carried over from DesignCraft) |
 | `assets/fonts/Inter-SemiBold.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface (Latin UI/document font, carried over from DesignCraft) |
 | `assets/fonts/Kalpurush.ttf` | Mehdi Hasan Khan / Ekushey / OmicronLab | https://www.omicronlab.com · https://github.com/omicronlab | OFL-1.1 (`assets/fonts/OFL-Kalpurush.txt`) | Open-source Bengali Unicode typeface (document and UI font) |
+| `assets/fonts/KalpurushANSI.ttf` | Mehdi Hasan Khan / Ekushey / OmicronLab | https://www.omicronlab.com · https://github.com/omicronlab | OFL-1.1 (`assets/fonts/OFL-KalpurushANSI.txt`) | Open-source Bengali Bijoy/ANSI typeface (document and legacy font) |
 | `assets/fonts/JetBrainsMono-Regular.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 (`assets/fonts/OFL-JetBrainsMono.txt`) | Open-source typeface (Latin UI/document font, carried over from DesignCraft) |
 | `assets/fonts/OFL-Inter.txt` | (licence text) | upstream project | — |  |
 | `assets/fonts/OFL-JetBrainsMono.txt` | (licence text) | upstream project | — |  |
 | `assets/fonts/OFL-Kalpurush.txt` | (licence text) | upstream project | — |  |
+| `assets/fonts/OFL-KalpurushANSI.txt` | (licence text) | upstream project | — |  |
 | `assets/fonts/OFL-SourceSans3.txt` | (licence text) | upstream project | — |  |
 | `assets/fonts/OFL-SourceSerif4.txt` | (licence text) | upstream project | — |  |
 | `assets/fonts/SourceSans3-Bold.ttf` | Paul D. Hunt / Frank Grießhammer, Adobe (released as open source) | https://github.com/adobe-fonts/source-sans · https://github.com/adobe-fonts/source-serif | OFL-1.1 (`assets/fonts/OFL-SourceSans3.txt`, `OFL-SourceSerif4.txt`) | Open-source typeface (Latin UI/document font, carried over from DesignCraft) |

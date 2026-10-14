@@ -347,8 +347,18 @@ fn is_bijoy_font(font_name: &str) -> bool {
         || lower.ends_with("mj")
 }
 
+/// Whether a font pair makes its text Bijoy. The Latin font decides when one is set, because
+/// Bijoy keystrokes sit in the Latin range; the complex-script font decides only when no Latin
+/// font is set.
+fn font_pair_is_bijoy(latin: Option<&str>, complex: Option<&str>) -> bool {
+    match latin {
+        Some(font) => is_bijoy_font(font),
+        None => complex.is_some_and(is_bijoy_font),
+    }
+}
+
 fn char_props_has_bijoy(c: &wordcraft_doc::CharProps) -> bool {
-    c.font.as_deref().is_some_and(is_bijoy_font) || c.font_cs.as_deref().is_some_and(is_bijoy_font)
+    font_pair_is_bijoy(c.font.as_deref(), c.font_cs.as_deref())
 }
 
 fn normalize_bijoy_char_props(props: &mut wordcraft_doc::CharProps) {
@@ -487,46 +497,47 @@ pub(crate) fn slice_safe(s: &str, start: usize, end: usize) -> &str {
 /// plus multiple tabs plus long runs of spaces (`   \t\t\t                `). Because Unicode
 /// `Kalpurush` glyphs and spaces are slightly wider than `SutonnyMJ`, trailing spaces before `\t`
 /// can push a tab past a 36pt stop and long space runs after `\t` can wrap the date onto line 2.
-fn compact_bijoy_tab_spaces_tagged(chars: &[(char, usize)]) -> Vec<(char, usize)> {
-    if !chars.iter().any(|(c, _)| *c == '\t') {
-        return chars.to_vec();
+fn compact_bijoy_tab_spaces(s: &str) -> String {
+    if !s.contains('\t') {
+        return s.to_string();
     }
-    let mut out = Vec::with_capacity(chars.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
     let mut i = 0usize;
     let mut after_tab = false;
     while i < chars.len() {
-        let (ch, tag) = chars[i];
+        let ch = chars[i];
         if ch == ' ' {
             let mut j = i;
-            while j < chars.len() && chars[j].0 == ' ' {
+            while j < chars.len() && chars[j] == ' ' {
                 j += 1;
             }
             let space_count = j - i;
-            if j < chars.len() && chars[j].0 == '\t' {
+            if j < chars.len() && chars[j] == '\t' {
                 // Strip spaces immediately preceding a tab stop.
                 i = j;
                 continue;
             }
             if after_tab && space_count >= 4 {
                 let keep = (space_count / 4).max(1);
-                for k in 0..keep {
-                    out.push(chars[i + k]);
+                for _ in 0..keep {
+                    out.push(' ');
                 }
                 after_tab = false;
                 i = j;
                 continue;
             }
-            for k in 0..space_count {
-                out.push(chars[i + k]);
+            for _ in 0..space_count {
+                out.push(' ');
             }
             after_tab = false;
             i = j;
         } else if ch == '\t' {
-            out.push((ch, tag));
+            out.push(ch);
             after_tab = true;
             i += 1;
         } else {
-            out.push((ch, tag));
+            out.push(ch);
             after_tab = false;
             i += 1;
         }
@@ -534,12 +545,43 @@ fn compact_bijoy_tab_spaces_tagged(chars: &[(char, usize)]) -> Vec<(char, usize)
     out
 }
 
-fn compact_bijoy_tab_spaces(s: &str) -> String {
-    if !s.contains('\t') {
-        return s.to_string();
+/// A (Latin, complex-script) font pair; `None` where nothing sets that font.
+type FontPair<'a> = (Option<&'a str>, Option<&'a str>);
+
+/// The fonts each style resolves to (see [`effective_style_fonts`]), worked out once per document so
+/// a paragraph's fonts are one lookup rather than a walk up its style chain.
+struct StyleFonts<'a> {
+    by_id: std::collections::HashMap<&'a str, FontPair<'a>>,
+    defaults: FontPair<'a>,
+}
+
+impl<'a> StyleFonts<'a> {
+    fn new(styles: &'a wordcraft_doc::StyleSheet) -> Self {
+        // The first style with an id is the one `based_on` and paragraphs find.
+        let mut index: std::collections::HashMap<&'a str, &'a wordcraft_doc::Style> = std::collections::HashMap::new();
+        for st in &styles.styles {
+            index.entry(st.id.as_str()).or_insert(st);
+        }
+        let by_id = index.iter().map(|(&id, &st)| (id, effective_style_fonts(styles, &index, st))).collect();
+        Self { by_id, defaults: (styles.default_chr.font.as_deref(), styles.default_chr.font_cs.as_deref()) }
     }
-    let tagged: Vec<(char, usize)> = s.chars().map(|c| (c, 0)).collect();
-    compact_bijoy_tab_spaces_tagged(&tagged).into_iter().map(|(c, _)| c).collect()
+
+    /// The fonts a paragraph's text inherits: from its paragraph style, or from the document defaults
+    /// when it has none (or names a style that is not in the sheet).
+    fn paragraph(&self, style: Option<&str>) -> FontPair<'a> {
+        style.and_then(|id| self.by_id.get(id)).copied().unwrap_or(self.defaults)
+    }
+
+    /// The ids of the styles whose fonts make their text Bijoy.
+    fn bijoy_ids(&self) -> std::collections::HashSet<String> {
+        self.by_id.iter().filter(|&(_, &(latin, complex))| font_pair_is_bijoy(latin, complex)).map(|(id, _)| id.to_string()).collect()
+    }
+}
+
+/// Whether a run is Bijoy: its own fonts decide where it sets them, and the paragraph's inherited
+/// fonts decide the rest, so a run that sets only a complex-script font under an English style is English.
+fn run_is_bijoy(props: &wordcraft_doc::CharProps, para_fonts: FontPair<'_>) -> bool {
+    font_pair_is_bijoy(props.font.as_deref().or(para_fonts.0), props.font_cs.as_deref().or(para_fonts.1))
 }
 
 fn normalize_blocks_bijoy(
@@ -547,6 +589,7 @@ fn normalize_blocks_bijoy(
     default_is_bijoy: bool,
     bijoy_style_ids: &std::collections::HashSet<String>,
     styles: &wordcraft_doc::StyleSheet,
+    fonts: &StyleFonts<'_>,
 ) {
     for b in blocks.iter_mut() {
         let block = std::sync::Arc::make_mut(b);
@@ -557,11 +600,12 @@ fn normalize_blocks_bijoy(
                     None => default_is_bijoy,
                 };
                 let style_size = resolve_style_size(styles, p.props.style.as_deref());
+                let para_fonts = fonts.paragraph(p.props.style.as_deref());
 
                 let mut para_has_bijoy = style_is_bijoy || char_props_has_bijoy(&p.mark);
                 if !para_has_bijoy {
                     for r in &p.runs {
-                        if char_props_has_bijoy(&r.props) {
+                        if run_is_bijoy(&r.props, para_fonts) {
                             para_has_bijoy = true;
                             break;
                         }
@@ -588,16 +632,19 @@ fn normalize_blocks_bijoy(
                 }
 
                 if (para_has_bijoy || para_is_partial || (p.runs.is_empty() && default_is_bijoy)) && !p.text.is_empty() {
-                    // 1. Extract slices and classify each run
-                    struct PendingRun {
-                        slice: String,
-                        props: wordcraft_doc::CharProps,
-                        is_bijoy: bool,
-                        is_partial: bool,
+                    // 1. Extract slices and classify each run. Consecutive Bijoy runs form one group that
+                    // is converted as one text, so pre-base vowels (`w`, `†`, `‰`), conjuncts (`¯Í`) and reph
+                    // (`©`) reorder across run boundaries; each converted character keeps the formatting of
+                    // the run it comes from. A group ends at an inline object placeholder.
+                    enum Pending {
+                        Bijoy { text: crate::cmd::bangla::Tagged, props: Vec<wordcraft_doc::CharProps> },
+                        Partial { slice: String, props: wordcraft_doc::CharProps },
+                        Plain { slice: String, props: wordcraft_doc::CharProps },
                     }
+                    const OBJ: char = wordcraft_doc::para::OBJ;
 
                     let mut offset = 0;
-                    let mut staged: Vec<PendingRun> = Vec::with_capacity(p.runs.len().max(1));
+                    let mut staged: Vec<Pending> = Vec::with_capacity(p.runs.len().max(1));
 
                     for r in &p.runs {
                         let end = (offset + r.len).min(p.text.len());
@@ -606,7 +653,7 @@ fn normalize_blocks_bijoy(
 
                         // A run is Bijoy if it explicitly says so, or if it has no font of its
                         // own and the paragraph (or its style) is known to be Bijoy.
-                        let is_bijoy = char_props_has_bijoy(&r.props) || (r.props.font.is_none() && r.props.font_cs.is_none() && style_is_bijoy);
+                        let is_bijoy = run_is_bijoy(&r.props, para_fonts);
                         let is_partial = !is_bijoy && has_leftover_bijoy(run_slice);
 
                         let mut props = r.props.clone();
@@ -640,66 +687,54 @@ fn normalize_blocks_bijoy(
                             props.size_cs = props.size;
                         }
 
-                        staged.push(PendingRun { slice: run_slice.to_string(), props, is_bijoy, is_partial });
+                        if !is_bijoy {
+                            staged.push(if is_partial {
+                                Pending::Partial { slice: run_slice.to_string(), props }
+                            } else {
+                                Pending::Plain { slice: run_slice.to_string(), props }
+                            });
+                            continue;
+                        }
+                        if let Some(Pending::Bijoy { text, props: group }) = staged.last_mut()
+                            && !text.chars().last().is_some_and(|&(c, _)| c == OBJ)
+                            && !run_slice.starts_with(OBJ)
+                        {
+                            let tag = u32::try_from(group.len()).unwrap_or(u32::MAX);
+                            group.push(props);
+                            text.push_str(run_slice, tag);
+                            continue;
+                        }
+                        staged.push(Pending::Bijoy { text: crate::cmd::bangla::Tagged::uniform(run_slice, 0), props: vec![props] });
                     }
 
-                    let mut new_text = String::with_capacity(p.text.len() * 3);
+                    let mut new_text = String::new();
                     let mut new_runs = Vec::with_capacity(staged.len().max(1));
 
-                    let push_char = |c: char, props: &wordcraft_doc::CharProps, text: &mut String, runs: &mut Vec<wordcraft_doc::Run>| {
-                        let char_len = c.len_utf8();
-                        text.push(c);
-                        if let Some(last) = runs.last_mut()
-                            && last.props == *props
-                        {
-                            last.len += char_len;
-                        } else {
-                            runs.push(wordcraft_doc::Run { len: char_len, props: props.clone() });
-                        }
-                    };
-
-                    let mut i = 0;
-                    while i < staged.len() {
-                        if staged[i].is_bijoy {
-                            // Collect contiguous Bijoy runs into a single tagged cluster
-                            let mut tagged = Vec::new();
-                            while i < staged.len() && staged[i].is_bijoy {
-                                for c in staged[i].slice.chars() {
-                                    if c == wordcraft_doc::para::OBJ {
-                                        // Flush preceding Bijoy cluster before OBJ
-                                        if !tagged.is_empty() {
-                                            let converted = crate::cmd::bangla::ansi_to_unicode_tagged(&tagged);
-                                            let compacted = compact_bijoy_tab_spaces_tagged(&converted);
-                                            for (conv_c, run_idx) in compacted {
-                                                push_char(conv_c, &staged[run_idx].props, &mut new_text, &mut new_runs);
-                                            }
-                                            tagged.clear();
-                                        }
-                                        push_char(c, &staged[i].props, &mut new_text, &mut new_runs);
-                                    } else {
-                                        tagged.push((c, i));
+                    for item in staged {
+                        match item {
+                            Pending::Bijoy { text, props } => {
+                                let text = text.with_classes(crate::cmd::bangla::run_classes(&props));
+                                // Tab spaces are compacted within each run's text, as before runs were
+                                // converted together: spaces in one run are never shortened by a tab in another.
+                                for (segment, tag) in crate::cmd::bangla::ansi_to_unicode_tagged(text).segments() {
+                                    let segment = compact_bijoy_tab_spaces(&segment);
+                                    if segment.is_empty() {
+                                        continue;
                                     }
-                                }
-                                i += 1;
-                            }
-                            if !tagged.is_empty() {
-                                let converted = crate::cmd::bangla::ansi_to_unicode_tagged(&tagged);
-                                let compacted = compact_bijoy_tab_spaces_tagged(&converted);
-                                for (conv_c, run_idx) in compacted {
-                                    push_char(conv_c, &staged[run_idx].props, &mut new_text, &mut new_runs);
+                                    let run_props = props.get(crate::cmd::bangla::tag_index(tag)).cloned().unwrap_or_default();
+                                    crate::cmd::bangla::push_run(&mut new_runs, segment.len(), run_props);
+                                    new_text.push_str(&segment);
                                 }
                             }
-                        } else if staged[i].is_partial {
-                            let converted = compact_bijoy_tab_spaces(&repair_partial_bijoy(&staged[i].slice));
-                            for c in converted.chars() {
-                                push_char(c, &staged[i].props, &mut new_text, &mut new_runs);
+                            Pending::Partial { slice, props } => {
+                                let converted = compact_bijoy_tab_spaces(&repair_partial_bijoy(&slice));
+                                new_runs.push(wordcraft_doc::Run { len: converted.len(), props });
+                                new_text.push_str(&converted);
                             }
-                            i += 1;
-                        } else {
-                            for c in staged[i].slice.chars() {
-                                push_char(c, &staged[i].props, &mut new_text, &mut new_runs);
+                            Pending::Plain { slice, props } => {
+                                new_runs.push(wordcraft_doc::Run { len: slice.len(), props });
+                                new_text.push_str(&slice);
                             }
-                            i += 1;
                         }
                     }
 
@@ -707,19 +742,20 @@ fn normalize_blocks_bijoy(
                         let mut props = wordcraft_doc::CharProps { size: style_size, ..Default::default() };
                         if para_has_bijoy || default_is_bijoy {
                             normalize_bijoy_char_props(&mut props);
-                            let tagged: Vec<(char, usize)> = p.text.chars().map(|c| (c, 0)).collect();
-                            let converted = crate::cmd::bangla::ansi_to_unicode_tagged(&tagged);
-                            let compacted = compact_bijoy_tab_spaces_tagged(&converted);
-                            for (c, _) in compacted {
-                                push_char(c, &props, &mut new_text, &mut new_runs);
+                            let text = crate::cmd::bangla::Tagged::uniform(&p.text, 0);
+                            for (segment, _) in crate::cmd::bangla::ansi_to_unicode_tagged(text).segments() {
+                                let segment = compact_bijoy_tab_spaces(&segment);
+                                if !segment.is_empty() {
+                                    crate::cmd::bangla::push_run(&mut new_runs, segment.len(), props.clone());
+                                    new_text.push_str(&segment);
+                                }
                             }
                         } else if para_is_partial {
                             props.font = Some("Kalpurush".into());
                             props.font_cs = Some("Kalpurush".into());
                             let converted = compact_bijoy_tab_spaces(&repair_partial_bijoy(&p.text));
-                            for c in converted.chars() {
-                                push_char(c, &props, &mut new_text, &mut new_runs);
-                            }
+                            new_runs.push(wordcraft_doc::Run { len: converted.len(), props });
+                            new_text.push_str(&converted);
                         }
                     }
 
@@ -731,7 +767,7 @@ fn normalize_blocks_bijoy(
             wordcraft_doc::Block::Table(t) => {
                 for row in &mut t.rows {
                     for cell in &mut row.cells {
-                        normalize_blocks_bijoy(&mut cell.blocks, default_is_bijoy, bijoy_style_ids, styles);
+                        normalize_blocks_bijoy(&mut cell.blocks, default_is_bijoy, bijoy_style_ids, styles, fonts);
                     }
                 }
             }
@@ -765,45 +801,38 @@ fn normalize_blocks_bijoy(
 }
 
 /// Build the set of style IDs whose resolved character properties include a Bijoy font.
-/// Resolves font classification with nearest-style precedence: if a style or an intervening
-/// ancestor explicitly specifies a font, that nearest declaration determines whether the
-/// style is Bijoy (an explicit Latin font overrides an ancestor Bijoy font).
+#[cfg(test)]
 fn bijoy_style_set(styles: &wordcraft_doc::StyleSheet) -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
-    let default_is_bijoy = char_props_has_bijoy(&styles.default_chr);
-    for st in &styles.styles {
-        // 1. If the style itself explicitly defines a font, that nearest declaration is decisive.
-        if st.chr.font.is_some() || st.chr.font_cs.is_some() {
-            if char_props_has_bijoy(&st.chr) {
-                set.insert(st.id.clone());
-            }
-            continue;
-        }
+    StyleFonts::new(styles).bijoy_ids()
+}
 
-        // 2. Otherwise walk the based_on chain to find the nearest style with an explicit font.
-        let mut base = st.based_on.as_deref();
-        let mut hops = 0usize;
-        let mut resolved_bijoy = None;
-        while let Some(b) = base {
-            hops += 1;
-            if hops > 32 {
-                break;
-            }
-            let Some(parent) = styles.styles.iter().find(|s| s.id == b) else { break };
-            if parent.chr.font.is_some() || parent.chr.font_cs.is_some() {
-                resolved_bijoy = Some(char_props_has_bijoy(&parent.chr));
-                break;
-            }
-            base = parent.based_on.as_deref();
+/// The Latin and complex-script fonts a style resolves to. Each comes from the nearest style in the
+/// `based_on` chain that sets it, then from the document defaults, so a nearer override always wins
+/// over an ancestor (a Bijoy ancestor never decides a font a child sets to something else). The walk
+/// stops after 32 hops, so a `based_on` cycle ends.
+fn effective_style_fonts<'a>(
+    styles: &'a wordcraft_doc::StyleSheet,
+    index: &std::collections::HashMap<&'a str, &'a wordcraft_doc::Style>,
+    st: &'a wordcraft_doc::Style,
+) -> FontPair<'a> {
+    let mut latin = None;
+    let mut complex = None;
+    let mut current = Some(st);
+    let mut hops = 0usize;
+    while let Some(style) = current {
+        if latin.is_none() {
+            latin = style.chr.font.as_deref();
         }
-
-        // 3. If found an ancestor with an explicit font, use that; otherwise fall back to doc default.
-        let is_bijoy = resolved_bijoy.unwrap_or(default_is_bijoy);
-        if is_bijoy {
-            set.insert(st.id.clone());
+        if complex.is_none() {
+            complex = style.chr.font_cs.as_deref();
         }
+        hops += 1;
+        if (latin.is_some() && complex.is_some()) || hops > 32 {
+            break;
+        }
+        current = style.based_on.as_deref().and_then(|base| index.get(base).copied());
     }
-    set
+    (latin.or(styles.default_chr.font.as_deref()), complex.or(styles.default_chr.font_cs.as_deref()))
 }
 
 /// Automatically detects legacy Bijoy/ANSI fonts in the document, transparently
@@ -812,7 +841,8 @@ fn bijoy_style_set(styles: &wordcraft_doc::StyleSheet) -> std::collections::Hash
 /// sizing, bold styling, and document colors.
 pub fn normalize_bijoy_fonts(doc: &mut Document) {
     let default_is_bijoy = char_props_has_bijoy(&doc.styles.default_chr);
-    let bijoy_style_ids = bijoy_style_set(&doc.styles);
+    let fonts = StyleFonts::new(&doc.styles);
+    let bijoy_style_ids = fonts.bijoy_ids();
 
     let has_bijoy = default_is_bijoy
         || !bijoy_style_ids.is_empty()
@@ -824,19 +854,21 @@ pub fn normalize_bijoy_fonts(doc: &mut Document) {
     }
 
     // Decode all body blocks recursively (including tables)
-    normalize_blocks_bijoy(&mut doc.body, default_is_bijoy, &bijoy_style_ids, &doc.styles);
+    normalize_blocks_bijoy(&mut doc.body, default_is_bijoy, &bijoy_style_ids, &doc.styles, &fonts);
 
     // Decode all secondary parts (headers, footers, footnotes, endnotes, comments, text boxes)
     for part in doc.parts.values_mut() {
-        normalize_blocks_bijoy(&mut part.blocks, default_is_bijoy, &bijoy_style_ids, &doc.styles);
+        normalize_blocks_bijoy(&mut part.blocks, default_is_bijoy, &bijoy_style_ids, &doc.styles, &fonts);
     }
 
     // Update style sheet default font and any named styles that referenced Bijoy
-    if char_props_has_bijoy(&doc.styles.default_chr) {
+    if default_is_bijoy {
         normalize_bijoy_char_props(&mut doc.styles.default_chr);
     }
     for st in &mut doc.styles.styles {
-        if char_props_has_bijoy(&st.chr) {
+        // The same effective classification the paragraphs use: a style whose own font is Bijoy but
+        // whose nearest Latin font is not is English, and keeps its font.
+        if bijoy_style_ids.contains(&st.id) {
             normalize_bijoy_char_props(&mut st.chr);
             st.para.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
         }
@@ -1150,5 +1182,282 @@ mod tests {
         assert_eq!(p_out.runs[1].props.italic, Some(true));
         assert_eq!(p_out.runs[1].props.bold, None);
         assert_eq!(p_out.runs[1].props.font.as_deref(), Some("Kalpurush"));
+    }
+
+    /// A document whose styles are `styles` and whose one paragraph uses `style_id` with `text` as its
+    /// only run, carrying no direct formatting.
+    fn document_with_styled_paragraph(styles: Vec<wordcraft_doc::Style>, style_id: &str, text: &str) -> Document {
+        let mut doc = Document::new();
+        doc.styles.styles = styles;
+        let mut p = Paragraph::new();
+        p.props.style = Some(style_id.into());
+        p.text = text.into();
+        p.runs = vec![Run { len: text.len(), props: CharProps::default() }];
+        doc.body = vec![std::sync::Arc::new(Block::Para(p))];
+        doc
+    }
+
+    #[test]
+    fn explicit_latin_child_style_ignores_a_bijoy_ancestor() {
+        use wordcraft_doc::{Style, StyleKind};
+        // The parent sets both Latin and complex-script fonts to SutonnyMJ; the child overrides only
+        // the Latin font, so its complex-script font is inherited Bijoy. The Latin font still decides.
+        let parent = Style {
+            id: "Bijoy".into(),
+            name: "Bijoy".into(),
+            kind: StyleKind::Paragraph,
+            chr: CharProps { font: Some("SutonnyMJ".into()), font_cs: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        };
+        let child = Style {
+            id: "Latin".into(),
+            name: "Latin".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Bijoy".into()),
+            chr: CharProps { font: Some("Calibri".into()), ..Default::default() },
+            ..Default::default()
+        };
+        let mut doc = document_with_styled_paragraph(vec![parent, child], "Latin", "Hello world");
+        normalize_bijoy_fonts(&mut doc);
+        assert_eq!(body_text(&doc), "Hello world", "English under an explicit Latin font is not decoded");
+    }
+
+    #[test]
+    fn intervening_latin_style_overrides_a_bijoy_ancestor() {
+        use wordcraft_doc::{Style, StyleKind};
+        let bijoy = Style {
+            id: "Bijoy".into(),
+            name: "Bijoy".into(),
+            kind: StyleKind::Paragraph,
+            chr: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        };
+        let latin = Style {
+            id: "Latin".into(),
+            name: "Latin".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Bijoy".into()),
+            chr: CharProps { font: Some("Calibri".into()), ..Default::default() },
+            ..Default::default()
+        };
+        let grandchild = Style {
+            id: "Grandchild".into(),
+            name: "Grandchild".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Latin".into()),
+            ..Default::default()
+        };
+        let styles = vec![bijoy, latin, grandchild];
+        let mut doc = document_with_styled_paragraph(styles.clone(), "Grandchild", "Hello world");
+        normalize_bijoy_fonts(&mut doc);
+        assert_eq!(body_text(&doc), "Hello world", "the nearer Latin font wins over the Bijoy ancestor");
+        assert!(!bijoy_style_set(&wordcraft_doc::StyleSheet { styles, ..Default::default() }).contains("Grandchild"));
+    }
+
+    #[test]
+    fn style_without_its_own_font_still_inherits_bijoy_from_an_ancestor() {
+        use wordcraft_doc::{Style, StyleKind};
+        let bijoy = Style {
+            id: "Bijoy".into(),
+            name: "Bijoy".into(),
+            kind: StyleKind::Paragraph,
+            chr: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        };
+        let child =
+            Style { id: "Child".into(), name: "Child".into(), kind: StyleKind::Paragraph, based_on: Some("Bijoy".into()), ..Default::default() };
+        let styles = vec![bijoy, child];
+        let mut doc = document_with_styled_paragraph(styles.clone(), "Child", "evsjv‡`k");
+        normalize_bijoy_fonts(&mut doc);
+        assert_eq!(
+            body_text(&doc),
+            crate::cmd::bangla::ansi_to_unicode("evsjv‡`k"),
+            "a child with no font of its own keeps its Bijoy ancestor's font"
+        );
+        assert!(bijoy_style_set(&wordcraft_doc::StyleSheet { styles, ..Default::default() }).contains("Child"));
+    }
+
+    #[test]
+    fn run_setting_only_a_complex_font_under_an_english_style_is_not_decoded() {
+        use wordcraft_doc::{Style, StyleKind};
+        let english = Style {
+            id: "English".into(),
+            name: "English".into(),
+            kind: StyleKind::Paragraph,
+            chr: CharProps { font: Some("Calibri".into()), ..Default::default() },
+            ..Default::default()
+        };
+        let mut doc = Document::new();
+        doc.styles.styles = vec![english];
+        let mut p = Paragraph::new();
+        p.props.style = Some("English".into());
+        p.text = "Hello world".into();
+        p.runs = vec![Run { len: "Hello world".len(), props: CharProps { font_cs: Some("SutonnyMJ".into()), ..Default::default() } }];
+        doc.body = vec![std::sync::Arc::new(Block::Para(p))];
+        normalize_bijoy_fonts(&mut doc);
+        assert_eq!(body_text(&doc), "Hello world", "the paragraph's Latin font makes the run English");
+    }
+
+    #[test]
+    fn style_whose_own_font_is_bijoy_but_whose_nearest_latin_font_is_english_keeps_its_font() {
+        use wordcraft_doc::{Style, StyleKind};
+        let parent = Style {
+            id: "English".into(),
+            name: "English".into(),
+            kind: StyleKind::Paragraph,
+            chr: CharProps { font: Some("Calibri".into()), ..Default::default() },
+            ..Default::default()
+        };
+        let child = Style {
+            id: "Mixed".into(),
+            name: "Mixed".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("English".into()),
+            chr: CharProps { font_cs: Some("SutonnyMJ".into()), ..Default::default() },
+            ..Default::default()
+        };
+        let mut doc = document_with_styled_paragraph(vec![parent, child], "English", "evsjv");
+        // A Bijoy run elsewhere makes the document Bijoy, so the style sheet is rewritten.
+        doc.body.push(std::sync::Arc::new(Block::Para(Paragraph {
+            text: "evsjv".into(),
+            runs: vec![Run { len: 5, props: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() } }],
+            ..Default::default()
+        })));
+        normalize_bijoy_fonts(&mut doc);
+        let mixed = doc.styles.styles.iter().find(|st| st.id == "Mixed");
+        assert_eq!(mixed.and_then(|st| st.chr.font.clone()), None, "the style's nearest Latin font is Calibri, so it is not rewritten");
+    }
+
+    #[test]
+    fn formatting_change_at_a_neutral_boundary_inside_a_word_keeps_its_runs() {
+        let bold = CharProps { bold: Some(true), font: Some("SutonnyMJ".into()), ..Default::default() };
+        let plain = CharProps { font: Some("SutonnyMJ".into()), ..Default::default() };
+        let text = "evsjv:";
+        let mut doc = Document::new();
+        let mut p = Paragraph::new();
+        p.text = text.into();
+        p.runs = vec![Run { len: "evsjv".len(), props: bold }, Run { len: ":".len(), props: plain }];
+        doc.body = vec![std::sync::Arc::new(Block::Para(p))];
+        normalize_bijoy_fonts(&mut doc);
+        let out = doc.body[0].as_para().cloned().unwrap_or_default();
+        assert_eq!(out.text, crate::cmd::bangla::ansi_to_unicode(text));
+        assert_eq!(out.runs.len(), 2, "a colon cannot change the converted text, so the formatting stays split");
+        assert_eq!(out.runs.first().and_then(|r| r.props.bold), Some(true));
+        assert_eq!(out.runs.get(1).and_then(|r| r.props.bold), None);
+    }
+
+    #[test]
+    fn formatting_inside_a_vowel_cluster_follows_each_character() {
+        let bold = CharProps { bold: Some(true), font: Some("SutonnyMJ".into()), ..Default::default() };
+        let plain = CharProps { font: Some("SutonnyMJ".into()), ..Default::default() };
+        let text = "wK";
+        let mut doc = Document::new();
+        let mut p = Paragraph::new();
+        p.text = text.into();
+        p.runs = vec![Run { len: "w".len(), props: bold }, Run { len: "K".len(), props: plain }];
+        doc.body = vec![std::sync::Arc::new(Block::Para(p))];
+        normalize_bijoy_fonts(&mut doc);
+        let out = doc.body[0].as_para().cloned().unwrap_or_default();
+        assert_eq!(out.text, "কি", "the pre-base vowel reorders across the formatting change");
+        let bold_of: Vec<Option<bool>> = out.runs.iter().map(|r| r.props.bold).collect();
+        assert_eq!(bold_of, vec![None, Some(true)], "the plain consonant comes first, then the bold vowel sign");
+        assert_eq!(out.runs.first().map(|r| r.len), Some("ক".len()));
+    }
+
+    fn sutonny(extra: CharProps) -> CharProps {
+        CharProps { font: Some("SutonnyMJ".into()), ..extra }
+    }
+
+    /// A document whose one paragraph is the pieces joined, one run per piece, with no style.
+    fn document_in_runs(pieces: &[(&str, CharProps)]) -> Document {
+        let mut doc = Document::new();
+        doc.styles.default_chr = CharProps::default();
+        let text: String = pieces.iter().map(|(t, _)| *t).collect();
+        let runs = pieces.iter().map(|(t, props)| Run { len: t.len(), props: props.clone() }).collect();
+        doc.body = vec![std::sync::Arc::new(Block::Para(Paragraph { text, runs, ..Default::default() }))];
+        doc
+    }
+
+    /// The first paragraph's runs as (text, run).
+    fn runs_of(doc: &Document) -> Vec<(String, Run)> {
+        let p = doc.body.first().and_then(|b| b.as_para()).cloned().unwrap_or_default();
+        let mut at = 0usize;
+        p.runs
+            .iter()
+            .map(|r| {
+                let text = p.text.get(at..at + r.len).unwrap_or("").to_string();
+                at += r.len;
+                (text, r.clone())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn split_bijoy_word_with_identical_formatting_opens_as_one_run() {
+        let mut doc = document_in_runs(&[("w", sutonny(CharProps::default())), ("K", sutonny(CharProps::default()))]);
+        normalize_bijoy_fonts(&mut doc);
+        let runs = runs_of(&doc);
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!(runs.first().map(|r| r.0.as_str()), Some("কি"));
+    }
+
+    #[test]
+    fn english_run_inside_a_bijoy_paragraph_ends_the_bijoy_group() {
+        let calibri = CharProps { font: Some("Calibri".into()), ..Default::default() };
+        let mut doc = document_in_runs(&[("Avwg ", sutonny(CharProps::default())), ("w and ", calibri), ("evsjv", sutonny(CharProps::default()))]);
+        normalize_bijoy_fonts(&mut doc);
+        let runs = runs_of(&doc);
+        let texts: Vec<&str> = runs.iter().map(|r| r.0.as_str()).collect();
+        // The English `w` would become a pre-base ি if the groups on either side were joined through it.
+        assert_eq!(texts, vec!["আমি ", "w and ", "বাংলা"]);
+        assert_eq!(runs.get(1).and_then(|r| r.1.props.font.as_deref()), Some("Calibri"));
+    }
+
+    #[test]
+    fn tab_spaces_are_compacted_within_a_run_only() {
+        // In one run: spaces before a tab go, and a long space run after it shrinks to a quarter.
+        let mut doc = document_in_runs(&[("K   \t      L", sutonny(CharProps::default()))]);
+        normalize_bijoy_fonts(&mut doc);
+        assert_eq!(body_text(&doc), "ক\t খ");
+
+        // Spaces in one run are never shortened by a tab in another, as when runs were converted alone.
+        let bold = CharProps { bold: Some(true), ..Default::default() };
+        let mut doc = document_in_runs(&[("K   ", sutonny(bold)), ("\t      L", sutonny(CharProps::default()))]);
+        normalize_bijoy_fonts(&mut doc);
+        let texts: Vec<String> = runs_of(&doc).into_iter().map(|r| r.0).collect();
+        assert_eq!(texts, vec!["ক   ".to_string(), "\t খ".to_string()]);
+    }
+
+    #[test]
+    fn run_with_only_a_bijoy_complex_font_and_no_latin_font_is_decoded() {
+        let mut doc = document_in_runs(&[("evsjv", CharProps { font_cs: Some("SutonnyMJ".into()), ..Default::default() })]);
+        normalize_bijoy_fonts(&mut doc);
+        assert_eq!(body_text(&doc), "বাংলা", "with no Latin font set anywhere, the complex-script font decides");
+    }
+
+    #[test]
+    fn style_based_on_cycle_ends() {
+        use wordcraft_doc::{Style, StyleKind};
+        let a = Style { id: "A".into(), name: "A".into(), kind: StyleKind::Paragraph, based_on: Some("B".into()), ..Default::default() };
+        let b = Style { id: "B".into(), name: "B".into(), kind: StyleKind::Paragraph, based_on: Some("A".into()), ..Default::default() };
+        let mut doc = document_with_styled_paragraph(vec![a, b], "A", "Hello world");
+        doc.styles.default_chr = CharProps { font: Some("Calibri".into()), ..Default::default() };
+        doc.body.push(std::sync::Arc::new(Block::Para(Paragraph {
+            text: "evsjv".into(),
+            runs: vec![Run { len: 5, props: sutonny(CharProps::default()) }],
+            ..Default::default()
+        })));
+        normalize_bijoy_fonts(&mut doc);
+        assert_eq!(body_text(&doc), "Hello world");
+        assert!(bijoy_style_set(&doc.styles).is_empty());
+    }
+
+    #[test]
+    fn tracked_deletion_of_a_pre_base_glyph_deletes_only_its_vowel_sign() {
+        // wLª with the w deleted: the deletion moves with the vowel sign; খ্র stays live.
+        let mut doc = document_in_runs(&[("w", sutonny(CharProps { del: Some(0), ..Default::default() })), ("Lª", sutonny(CharProps::default()))]);
+        normalize_bijoy_fonts(&mut doc);
+        let marks: Vec<(String, Option<u32>)> = runs_of(&doc).into_iter().map(|r| (r.0, r.1.props.del)).collect();
+        assert_eq!(marks, vec![("খ্র".to_string(), None), ("ি".to_string(), Some(0))]);
     }
 }
