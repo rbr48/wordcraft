@@ -129,6 +129,15 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
         })
         .pure(),
+        CommandSpec::new("layout.sectionDirection", "Section Direction", "Layout › Page Setup", |s, v| {
+            let rtl = match p::str(v, "value") {
+                Some("rtl") | Some("rightToLeft") => true,
+                Some("ltr") | Some("leftToRight") => false,
+                _ => p::bool(v, "rtl").unwrap_or(!sect(s).rtl),
+            };
+            with_sect(s, |x| x.rtl = rtl)
+        })
+        .params(r#"{"value"?: "ltr|rtl", "rtl"?: bool}"#),
     ]
 }
 

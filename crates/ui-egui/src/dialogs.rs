@@ -203,7 +203,9 @@ pub enum Dialog {
         bottom: f32,
         left: f32,
         right: f32,
+        gutter: f32,
         landscape: bool,
+        rtl: bool,
     },
     Link {
         url: String,
@@ -1117,7 +1119,9 @@ impl Dialog {
                     bottom: sp.margin_bottom / 72.0,
                     left: sp.margin_left / 72.0,
                     right: sp.margin_right / 72.0,
+                    gutter: sp.gutter / 72.0,
                     landscape: sp.landscape,
+                    rtl: sp.rtl,
                 }
             }
             "link" => Dialog::Link { url: "https://".into(), text: app.session.selected_text() },
@@ -2140,7 +2144,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::PageSetup { top, bottom, left, right, landscape } => {
+        Dialog::PageSetup { top, bottom, left, right, gutter, landscape, rtl } => {
             ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
             egui::Grid::new("ps").num_columns(4).show(ui, |ui| {
                 ui.label(tl!("Top:"));
@@ -2153,17 +2157,28 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label(tl!("Right:"));
                 ui.add(egui::DragValue::new(right).speed(0.05).suffix("\"").max_decimals(2));
                 ui.end_row();
+                ui.label(tl!("Gutter:"));
+                ui.add(egui::DragValue::new(gutter).speed(0.05).suffix("\"").max_decimals(2));
+                ui.end_row();
             });
             ui.label(egui::RichText::new(tl!("Orientation")).font(semibold(12.5)));
             ui.horizontal(|ui| {
                 ui.radio_value(landscape, false, tl!("Portrait"));
                 ui.radio_value(landscape, true, tl!("Landscape"));
             });
+            ui.label(egui::RichText::new(tl!("Section direction")).font(semibold(12.5)));
+            ui.horizontal(|ui| {
+                ui.radio_value(rtl, false, tl!("Left-to-right"));
+                ui.radio_value(rtl, true, tl!("Right-to-left"));
+            });
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
+                let _ = app.run("layout.sectionDirection", json!({"rtl": *rtl}));
                 let _ = app.run("layout.orientation", json!({"value": if *landscape { "landscape" } else { "portrait" }}));
-                let _ =
-                    app.run("layout.margins", json!({"top": *top * 72.0, "bottom": *bottom * 72.0, "left": *left * 72.0, "right": *right * 72.0}));
+                let _ = app.run(
+                    "layout.margins",
+                    json!({"top": *top * 72.0, "bottom": *bottom * 72.0, "left": *left * 72.0, "right": *right * 72.0, "gutter": *gutter * 72.0}),
+                );
             }
             ok || cancel
         }

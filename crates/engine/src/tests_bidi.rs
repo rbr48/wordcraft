@@ -203,3 +203,24 @@ fn typing_kurdish_in_new_document_advances_caret_smoothly() {
     assert!(last_x < first_x.unwrap(), "caret should advance leftwards overall");
     assert_eq!(props(&s, 0).bidi, Some(true), "paragraph auto-detected as right-to-left");
 }
+
+#[test]
+fn section_direction_command_and_layout_flow() {
+    let mut s = session("", false);
+    assert!(!s.doc.last_section.rtl);
+
+    // Toggle or set section direction to RTL:
+    run(&mut s, "layout.sectionDirection", json!({"value": "rtl"}));
+    assert!(s.doc.last_section.rtl, "section direction is now rtl");
+
+    // Caret at paragraph start is at right margin (540 pt) because section is RTL:
+    run(&mut s, "caret.docStart", json!({}));
+    let cx = caret_x(&mut s);
+    assert!((cx - 540.0).abs() < 1.0, "caret starts at right margin in RTL section: {cx}");
+
+    // Set back to LTR:
+    run(&mut s, "layout.sectionDirection", json!({"value": "ltr"}));
+    assert!(!s.doc.last_section.rtl, "section direction reverted to ltr");
+    let cx_ltr = caret_x(&mut s);
+    assert!((cx_ltr - 72.0).abs() < 1.0, "caret starts at left margin in LTR section: {cx_ltr}");
+}
