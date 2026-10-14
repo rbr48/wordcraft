@@ -10,7 +10,8 @@ use vello_cpu::{Pixmap, RenderContext, Resources};
 use wordcraft_doc::Document;
 use wordcraft_doc::para::ShapeKind;
 use wordcraft_doc::props::Rgb;
-use wordcraft_fonts::FontDb;
+use wordcraft_doc::text_effects::TextGradient;
+use wordcraft_fonts::{FaceRef, FontDb};
 use wordcraft_layout::Page;
 use wordcraft_layout::display::{DisplayOptions, Draw, Stroke, page_display};
 use wordcraft_metafile::{Item, Picture, PlacedItem, Seg};
@@ -377,6 +378,57 @@ impl Default for RenderOptions {
     }
 }
 
+/// The glyph outlines of a run in pixels, and the linear gradient that paints them, along the
+/// gradient's angle through the centre of their bounds. `None` (solid text) when nothing is on the
+/// page or the bounds have no area.
+#[allow(clippy::too_many_arguments)]
+fn gradient_glyphs(
+    db: &FontDb,
+    face: &FaceRef,
+    glyphs: &[(u32, f32, f32)],
+    on_page: &dyn Fn(f64, f64) -> bool,
+    skew: Affine,
+    k: f64,
+    view: Affine,
+    g: &TextGradient,
+    opts: &RenderOptions,
+    alpha: f32,
+) -> Option<(Vec<BezPath>, peniko::Gradient)> {
+    let mut paths = Vec::new();
+    let mut bounds: Option<kurbo::Rect> = None;
+    for &(gid, x, y) in glyphs {
+        let (gx, gy) = (x as f64, y as f64);
+        if !on_page(gx, gy) {
+            continue;
+        }
+        let o = db.outline(face, gid);
+        if o.elements().is_empty() {
+            continue;
+        }
+        let mut p = (*o).clone();
+        p.apply_affine(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
+        let b = p.bounding_box();
+        bounds = Some(bounds.map_or(b, |u| u.union(b)));
+        paths.push(p);
+    }
+    let b = bounds?;
+    if b.width().is_nan() || b.height().is_nan() || b.width() <= 0.0 || b.height() <= 0.0 {
+        return None;
+    }
+    // DrawingML's angle: 0 runs left to right, 90 top to bottom (the page's y axis points down).
+    let theta = (g.angle as f64).to_radians();
+    let (dx, dy) = (theta.cos(), theta.sin());
+    let half = (b.width() * dx.abs() + b.height() * dy.abs()) / 2.0;
+    if half.is_nan() || half <= 0.0 {
+        return None;
+    }
+    let c = b.center();
+    let start = kurbo::Point::new(c.x - dx * half, c.y - dy * half);
+    let end = kurbo::Point::new(c.x + dx * half, c.y + dy * half);
+    let stops: Vec<peniko::ColorStop> = g.used_stops().iter().map(|st| (st.pos, color(opts.ink(st.color), alpha)).into()).collect();
+    Some((paths, peniko::Gradient::new_linear(start, end).with_stops(stops.as_slice())))
+}
+
 /// Render a whole page at `scale` pixels per point.
 pub fn render_page(doc: &Document, page: &Page, scale: f32, opts: &RenderOptions) -> Rendered {
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
@@ -556,21 +608,41 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
                 ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
             }
-            for (gid, x, y) in glyphs {
-                let (gx, gy) = (*x as f64, *y as f64);
-                // Written so a NaN position is skipped too.
-                let near = gx >= visible.x0 - 100.0 && gx <= visible.x1 && gy >= visible.y0 && gy <= visible.y1 + 200.0;
-                if !near {
-                    continue;
+            // A gradient fill (Word's Text Fill) paints the glyphs in page pixels, so the gradient
+            // runs across the whole run. Without one, each glyph is filled in its own transform.
+            if let Some((paths, grad)) =
+                effects.active_fill().and_then(|g| gradient_glyphs(db, face, glyphs, &on_page, skew, k, view, &g, opts, *alpha))
+            {
+                ctx.set_transform(Affine::IDENTITY);
+                ctx.set_paint(grad);
+                for p in &paths {
+                    ctx.fill_path(p);
                 }
-                let o = db.outline(face, *gid);
-                if o.elements().is_empty() {
-                    continue;
-                }
-                ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
-                ctx.fill_path(&o);
                 if outline_stroke > 0.0 {
-                    ctx.stroke_path(&o);
+                    // The synthetic-bold stroke, in pixels now (font units times `k`, times the page scale).
+                    let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
+                    ctx.set_stroke(kurbo::Stroke::new(outline_stroke * k * px_per_pt).with_join(join));
+                    for p in &paths {
+                        ctx.stroke_path(p);
+                    }
+                }
+            } else {
+                for (gid, x, y) in glyphs {
+                    let (gx, gy) = (*x as f64, *y as f64);
+                    // Written so a NaN position is skipped too.
+                    let near = gx >= visible.x0 - 100.0 && gx <= visible.x1 && gy >= visible.y0 && gy <= visible.y1 + 200.0;
+                    if !near {
+                        continue;
+                    }
+                    let o = db.outline(face, *gid);
+                    if o.elements().is_empty() {
+                        continue;
+                    }
+                    ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
+                    ctx.fill_path(&o);
+                    if outline_stroke > 0.0 {
+                        ctx.stroke_path(&o);
+                    }
                 }
             }
             // The text outline is stroked over the fill. Its width is in points, the glyph paths are in
@@ -981,14 +1053,42 @@ mod tests {
         let black = |p: &[u8]| p[0] < 60 && p[1] < 60 && p[2] < 60;
         let plain = effect_text(TextEffects::default());
         assert_eq!(ink_box(&plain, red).0, 0, "no shadow, no red");
-        let shadowed = effect_text(TextEffects { outline: None, shadow: Some(TextShadow { on: true, color: Rgb(255, 0, 0), dx: 6.0, dy: 6.0 }) });
+        let shadowed =
+            effect_text(TextEffects { outline: None, shadow: Some(TextShadow { on: true, color: Rgb(255, 0, 0), dx: 6.0, dy: 6.0 }), fill: None });
         let (n, red_box) = ink_box(&shadowed, red);
         let (_, black_box) = ink_box(&shadowed, black);
         let (rb, bb) = (red_box.expect("red shadow"), black_box.expect("black text"));
         assert!(n > 200, "shadow pixels {n}");
         assert!(rb.2 > bb.2 && rb.3 > bb.3, "shadow {rb:?} not offset down-right of text {bb:?}");
-        let off = effect_text(TextEffects { outline: None, shadow: Some(TextShadow { on: false, color: Rgb(255, 0, 0), dx: 6.0, dy: 6.0 }) });
+        let off =
+            effect_text(TextEffects { outline: None, shadow: Some(TextShadow { on: false, color: Rgb(255, 0, 0), dx: 6.0, dy: 6.0 }), fill: None });
         assert_eq!(ink_box(&off, red).0, 0, "an off shadow draws nothing");
+    }
+
+    /// Text Effects (WordArt): a gradient fill paints the text in place of the run's colour, across
+    /// the whole run: red at the left, blue at the right, and no black left over.
+    #[test]
+    fn text_gradient_fill_replaces_the_run_colour() {
+        use wordcraft_doc::text_effects::{GradientStop, MAX_GRADIENT_STOPS, TextEffects, TextGradient};
+        let mut stops = [GradientStop { pos: 0.0, color: Rgb::BLACK }; MAX_GRADIENT_STOPS];
+        stops[0] = GradientStop { pos: 0.0, color: Rgb(255, 0, 0) };
+        stops[1] = GradientStop { pos: 1.0, color: Rgb(0, 0, 255) };
+        let fill = TextGradient { on: true, stops, count: 2, angle: 0.0 };
+        let img = effect_text(TextEffects { outline: None, shadow: None, fill: Some(fill) });
+        let black = |p: &[u8]| p[0] < 60 && p[1] < 60 && p[2] < 60;
+        assert_eq!(ink_box(&img, black).0, 0, "the run's black is replaced");
+        let (_, text) = ink_box(&img, |p| p[0] < 250 || p[1] < 250 || p[2] < 250);
+        let (x0, _, x1, _) = text.expect("text on the page");
+        let mid = (x0 + x1) / 2;
+        let red_left = (x0..mid)
+            .flat_map(|x| (0..img.height).map(move |y| (x, y)))
+            .filter(|(x, y)| matches!(img.pixel(*x, *y), [r, g, b, _] if r > 200 && g < 90 && b < 90))
+            .count();
+        let blue_right = (mid..x1)
+            .flat_map(|x| (0..img.height).map(move |y| (x, y)))
+            .filter(|(x, y)| matches!(img.pixel(*x, *y), [r, g, b, _] if b > 200 && r < 90 && g < 90))
+            .count();
+        assert!(red_left > 20 && blue_right > 20, "red left {red_left}, blue right {blue_right}");
     }
 
     /// Text Effects (WordArt): an outline is stroked over the glyphs, and only when on.
@@ -998,10 +1098,11 @@ mod tests {
         let green = |p: &[u8]| p[0] < 60 && p[1] > 200 && p[2] < 60;
         let plain = effect_text(TextEffects::default());
         assert_eq!(ink_box(&plain, green).0, 0);
-        let outlined = effect_text(TextEffects { outline: Some(TextOutline { on: true, color: Rgb(0, 255, 0), width: 3.0 }), shadow: None });
+        let outlined =
+            effect_text(TextEffects { outline: Some(TextOutline { on: true, color: Rgb(0, 255, 0), width: 3.0 }), shadow: None, fill: None });
         let (n, _) = ink_box(&outlined, green);
         assert!(n > 100, "outline pixels {n}");
-        let off = effect_text(TextEffects { outline: Some(TextOutline { on: false, color: Rgb(0, 255, 0), width: 3.0 }), shadow: None });
+        let off = effect_text(TextEffects { outline: Some(TextOutline { on: false, color: Rgb(0, 255, 0), width: 3.0 }), shadow: None, fill: None });
         assert_eq!(ink_box(&off, green).0, 0, "an off outline draws nothing");
     }
 

@@ -917,8 +917,9 @@ fn text_effects_round_trip() {
     let fx = TextEffects {
         outline: Some(TextOutline { on: true, color: Rgb(0, 0x80, 0), width: 1.5 }),
         shadow: Some(TextShadow { on: true, color: Rgb(0, 0, 255), dx: 3.0, dy: 2.0 }),
+        fill: None,
     };
-    let off = TextEffects { outline: Some(TextOutline { on: false, color: Rgb(0, 0, 0), width: 1.0 }), shadow: None };
+    let off = TextEffects { outline: Some(TextOutline { on: false, color: Rgb(0, 0, 0), width: 1.0 }), shadow: None, fill: None };
     let p = para_runs(&[
         ("both ", CharProps { text_effects: Some(fx), ..Default::default() }),
         ("none", CharProps { text_effects: Some(off), ..Default::default() }),
@@ -932,6 +933,8 @@ fn text_effects_round_trip() {
     assert!(xml.contains(r#"<w14:textOutline w14:w="19050""#), "{xml}");
     assert!(xml.contains(r#"<w14:shadow w14:blurRad="0" w14:dist="#), "{xml}");
     assert!(xml.contains("<w14:noFill/>"), "{xml}");
+    // The schema order (MS-DOCX EG_RPrTextEffects): shadow, then outline.
+    assert!(xml.find("<w14:shadow").unwrap() < xml.find("<w14:textOutline").unwrap(), "{xml}");
     let r = wordcraft_docx::read(&bytes).expect("read");
     let got = paras(&r)[0];
     let first = got.runs.first().and_then(|c| c.props.text_effects).expect("effects on the first run");
@@ -942,6 +945,49 @@ fn text_effects_round_trip() {
     assert!((shadow.dx - 3.0).abs() < 0.01 && (shadow.dy - 2.0).abs() < 0.01, "{shadow:?}");
     let last = got.runs.last().and_then(|c| c.props.text_effects).expect("effects on the last run");
     assert!(!last.outline.expect("outline").on && last.shadow.is_none());
+}
+
+#[test]
+fn text_gradient_fill_round_trips_in_docx() {
+    // Word's Text Fill, gradient: `w14:textFill` holding `w14:gradFill` (MS-DOCX). Positions are in
+    // 1000ths of a percent and angles in 60000ths of a degree. An off gradient is written as the
+    // run's own colour, so it overrides an inherited gradient.
+    use wordcraft_doc::props::TextColor;
+    use wordcraft_doc::text_effects::{GradientStop, MAX_GRADIENT_STOPS, TextEffects, TextGradient};
+    let mut stops = [GradientStop { pos: 0.0, color: Rgb(0, 0, 0) }; MAX_GRADIENT_STOPS];
+    stops[0] = GradientStop { pos: 0.0, color: Rgb(255, 0, 0) };
+    stops[1] = GradientStop { pos: 0.5, color: Rgb(0, 0, 255) };
+    stops[2] = GradientStop { pos: 1.0, color: Rgb(0, 128, 0) };
+    let grad = TextGradient { on: true, stops, count: 3, angle: 90.0 };
+    let off = CharProps {
+        color: Some(TextColor::Rgb(Rgb(0, 255, 0))),
+        text_effects: Some(TextEffects { outline: None, shadow: None, fill: Some(TextGradient::off()) }),
+        ..Default::default()
+    };
+    let p = para_runs(&[
+        ("gradient", CharProps { text_effects: Some(TextEffects { outline: None, shadow: None, fill: Some(grad) }), ..Default::default() }),
+        ("solid", off),
+    ]);
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w14:textFill><w14:gradFill><w14:gsLst><w14:gs w14:pos="0"><w14:srgbClr w14:val="FF0000"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w14:gs w14:pos="50000">"#) && xml.contains(r#"<w14:gs w14:pos="100000">"#), "{xml}");
+    assert!(xml.contains(r#"<w14:lin w14:ang="5400000" w14:scaled="0"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w14:textFill><w14:solidFill><w14:srgbClr w14:val="00FF00"/>"#), "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r)[0];
+    let fill = got.runs[0].props.text_effects.and_then(|e| e.fill).expect("the gradient");
+    assert!(fill.on && fill.count == 3 && (fill.angle - 90.0).abs() < 0.01, "{fill:?}");
+    let pos: Vec<f32> = fill.used_stops().iter().map(|s| s.pos).collect();
+    assert_eq!(pos, [0.0, 0.5, 1.0]);
+    assert_eq!(fill.used_stops()[1].color, Rgb(0, 0, 255));
+    let solid = &got.runs[1].props;
+    assert_eq!(solid.color, Some(TextColor::Rgb(Rgb(0, 255, 0))));
+    assert!(!solid.text_effects.and_then(|e| e.fill).expect("the off gradient").on);
 }
 
 #[test]

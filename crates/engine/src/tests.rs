@@ -3332,3 +3332,31 @@ fn caption_command_supports_above_below_and_exclude_label() {
     let plain2 = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
     assert!(plain2.contains("2: Second Table"), "Caption with excludeLabel should omit Table prefix: {plain2}");
 }
+
+#[test]
+fn text_fill_command_sets_a_gradient_and_rejects_bad_stops() {
+    let mut s = Session::new(Document::from_text("WordArt"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.textFill", json!({"stops": [{"pos": 0, "color": "FF0000"}, {"pos": 100, "color": "0000FF"}], "angle": 0}));
+    let g = first_run_effects(&s).fill.expect("the gradient");
+    assert!(g.on && g.count == 2 && g.angle == 0.0, "{g:?}");
+    assert_eq!(g.used_stops()[1].color, wordcraft_doc::props::Rgb(0, 0, 255));
+    run(&mut s, "format.textFill", json!({"off": true}));
+    assert!(!first_run_effects(&s).fill.expect("off").on, "the gradient is off");
+    let ok = json!({"color": "000000"});
+    let two = |a: &str, b: &str| json!({"stops": [{"pos": 0, "color": a}, {"pos": 100, "color": b}]});
+    let nine: Vec<serde_json::Value> = (0..9).map(|i| json!({"pos": i * 12, "color": "000000"})).collect();
+    let bad = [
+        json!({"stops": [{"pos": 0, "color": "FF0000"}]}),
+        json!({"stops": [{"pos": 150, "color": "FF0000"}, {"pos": 0, "color": "000000"}]}),
+        json!({"stops": [{"pos": 0, "color": "zz"}, {"pos": 1, "color": "000000"}]}),
+        json!({"stops": "x"}),
+        json!({"stops": nine}),
+        json!({"stops": [{"pos": 0, "color": "000000"}, {"pos": 1, "color": "000000"}], "angle": 400}),
+        two("nope", "000000"),
+    ];
+    for b in bad {
+        assert!(s.run("format.textFill", &b).is_err(), "{b}");
+    }
+    assert!(s.run("format.textFill", &ok).is_err(), "no stops is not a gradient");
+}

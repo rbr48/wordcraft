@@ -37,7 +37,7 @@ use krilla::metadata::{DateTime, Metadata};
 use krilla::num::NormalizedF32;
 use krilla::outline::{Outline, OutlineNode};
 use krilla::page::PageSettings;
-use krilla::paint::{Fill, FillRule, LineCap, LineJoin, Stroke, StrokeDash};
+use krilla::paint::{Fill, FillRule, LineCap, LineJoin, LinearGradient, SpreadMethod, Stop, Stroke, StrokeDash};
 use krilla::surface::Surface;
 use krilla::tagging::{Artifact, ArtifactType, ContentTag, Identifier, Node, SpanTag, Tag, TagGroup, TagKind, TagTree};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
@@ -186,6 +186,57 @@ fn write(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], ou
         }
         Err(e) => Err(PdfError::Write(format!("{e:?}"))),
     }
+}
+
+/// The bounds of `glyphs` (glyph id, pen position) at `size`, in page points.
+fn glyph_bounds(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)]) -> Option<kurbo::Rect> {
+    let db = wordcraft_fonts::FontDb::global();
+    let scale = f64::from(size) / face.upem.max(1.0);
+    let mut out: Option<kurbo::Rect> = None;
+    for &(g, x, y) in glyphs {
+        let mut outline = (*db.outline(face, g)).clone();
+        outline.apply_affine(kurbo::Affine::translate((f64::from(x), f64::from(y))) * kurbo::Affine::scale(scale));
+        let b = kurbo::Shape::bounding_box(&outline);
+        out = Some(out.map_or(b, |u| u.union(b)));
+    }
+    out
+}
+
+/// A linear gradient fill for text, across the bounds of its glyphs in page points, along the
+/// gradient's angle (DrawingML's: 0 left to right, 90 top to bottom). `None` (solid text) when the
+/// bounds have no area.
+fn gradient_fill(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], g: &wordcraft_doc::text_effects::TextGradient, alpha: f32) -> Option<Fill> {
+    let b = glyph_bounds(face, size, glyphs)?;
+    if b.width().is_nan() || b.height().is_nan() || b.width() <= 0.0 || b.height() <= 0.0 {
+        return None;
+    }
+    let theta = f64::from(g.angle).to_radians();
+    let (dx, dy) = (theta.cos(), theta.sin());
+    let half = (b.width() * dx.abs() + b.height() * dy.abs()) / 2.0;
+    if half.is_nan() || half <= 0.0 {
+        return None;
+    }
+    let c = b.center();
+    let stops: Vec<Stop> = g
+        .used_stops()
+        .iter()
+        .map(|st| Stop {
+            offset: NormalizedF32::new(st.pos).unwrap_or(NormalizedF32::ZERO),
+            color: rgb::Color::new(st.color.0, st.color.1, st.color.2).into(),
+            opacity: NormalizedF32::ONE,
+        })
+        .collect();
+    let lg = LinearGradient {
+        x1: (c.x - dx * half) as f32,
+        y1: (c.y - dy * half) as f32,
+        x2: (c.x + dx * half) as f32,
+        y2: (c.y + dy * half) as f32,
+        transform: Transform::identity(),
+        spread_method: SpreadMethod::Pad,
+        stops,
+        anti_alias: false,
+    };
+    Some(Fill { paint: lg.into(), opacity: norm(alpha), rule: FillRule::NonZero })
 }
 
 /// The outlines of `glyphs` (glyph id, pen position) at `size`, as one path in page coordinates.
@@ -795,6 +846,8 @@ impl Exporter<'_> {
                 }
             }
             Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, effects } => {
+                // A gradient (Word's Text Fill) paints the text itself: the text stays text.
+                let paint = effects.active_fill().and_then(|g| gradient_fill(face, *size, glyphs, &g, *alpha));
                 // Text effects are vector paths beside the real text, so the text stays extractable: a
                 // shadow (the glyphs offset) behind it, and an outline stroke over it.
                 if let Some(sh) = effects.active_shadow() {
@@ -806,7 +859,7 @@ impl Exporter<'_> {
                         s.set_fill(None);
                     }
                 }
-                self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges);
+                self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges, paint);
                 if let Some(l) = link {
                     self.link_rect(face, *size, glyphs, l);
                 }
@@ -1118,6 +1171,7 @@ impl Exporter<'_> {
         italic: bool,
         text: &str,
         known: &[std::ops::Range<usize>],
+        paint: Option<Fill>,
     ) {
         if !size.is_finite() || size <= 0.0 || size > 5000.0 {
             return;
@@ -1152,7 +1206,7 @@ impl Exporter<'_> {
         if italic {
             s.push_transform(&Transform::from_row(1.0, 0.0, -0.21, 1.0, 0.21 * y0, 0.0));
         }
-        s.set_fill(Some(fill(color, alpha)));
+        s.set_fill(Some(paint.unwrap_or_else(|| fill(color, alpha))));
         s.set_stroke(if bold {
             Some(Stroke { paint: rgb::Color::new(color.0, color.1, color.2).into(), width: size * 0.03, opacity: norm(alpha), ..Default::default() })
         } else {

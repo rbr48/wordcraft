@@ -882,7 +882,28 @@ fn text_effects_are_extra_vector_paths_beside_the_text() {
     let fx = make(TextEffects {
         outline: Some(TextOutline { on: true, color: wordcraft_doc::props::Rgb(0, 255, 0), width: 1.5 }),
         shadow: Some(TextShadow { on: true, color: wordcraft_doc::props::Rgb(255, 0, 0), dx: 2.0, dy: 2.0 }),
+        fill: None,
     });
     assert!(fx.len() > plain.len(), "effects add paths: {} vs {}", fx.len(), plain.len());
     assert!(squash(&extract_text(&fx).join(" ")).contains("WordArt"), "text stays extractable");
+}
+
+#[test]
+fn text_gradient_fill_keeps_the_text_and_paints_it_with_a_shading() {
+    // A gradient paints the text itself, so the text stays extractable; the file carries a shading.
+    use wordcraft_doc::text_effects::{GradientStop, MAX_GRADIENT_STOPS, TextEffects, TextGradient};
+    let make = |fx: TextEffects| {
+        let mut d = Document::new();
+        let props = CharProps { size: Some(40.0), text_effects: Some(fx), ..Default::default() };
+        d.body = vec![para_block(Paragraph::with_text("WordArt", props))];
+        export(&d, &PdfOptions::default()).expect("pdf")
+    };
+    let mut stops = [GradientStop { pos: 0.0, color: wordcraft_doc::props::Rgb(0, 0, 0) }; MAX_GRADIENT_STOPS];
+    stops[0] = GradientStop { pos: 0.0, color: wordcraft_doc::props::Rgb(255, 0, 0) };
+    stops[1] = GradientStop { pos: 1.0, color: wordcraft_doc::props::Rgb(0, 0, 255) };
+    let plain = make(TextEffects::default());
+    let grad = make(TextEffects { outline: None, shadow: None, fill: Some(TextGradient { on: true, stops, count: 2, angle: 0.0 }) });
+    assert!(!String::from_utf8_lossy(&plain).contains("ShadingType"), "no gradient, no shading");
+    assert!(String::from_utf8_lossy(&grad).contains("ShadingType"), "the gradient is a PDF shading");
+    assert!(squash(&extract_text(&grad).join(" ")).contains("WordArt"), "the text stays extractable");
 }

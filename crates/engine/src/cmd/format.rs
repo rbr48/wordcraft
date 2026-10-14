@@ -4,7 +4,9 @@ use serde_json::{Value, json};
 use wordcraft_doc::Pos;
 use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
-use wordcraft_doc::text_effects::{MAX_OUTLINE_WIDTH, MAX_SHADOW_OFFSET, TextEffects, TextOutline, TextShadow};
+use wordcraft_doc::text_effects::{
+    GradientStop, MAX_GRADIENT_STOPS, MAX_OUTLINE_WIDTH, MAX_SHADOW_OFFSET, TextEffects, TextGradient, TextOutline, TextShadow,
+};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -95,6 +97,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("format.shadow", "Shadow", "Home › Font › Text Effects", |s, v| toggle(s, v, |r| r.shadow, |c, on| c.shadow = Some(on))),
         CommandSpec::new("format.textOutline", "Text Outline", "WordArt Styles › Text Outline", text_outline)
             .params(r#"{"color"?: "RRGGBB", "width"?: points (0 to 10), "off"?: bool}"#),
+        CommandSpec::new("format.textFill", "Text Fill", "WordArt Styles › Text Fill", text_fill)
+            .params(r#"{"stops": [{"pos": 0 to 100 (percent), "color": "RRGGBB"}] (2 to 8 stops), "angle"?: degrees (0 left to right, 90 top to bottom), "off"?: bool}"#),
         CommandSpec::new("format.textShadow", "Text Shadow", "WordArt Styles › Text Effects", text_shadow)
             .params(r#"{"color"?: "RRGGBB", "dx"?: points (-50 to 50), "dy"?: points (-50 to 50), "off"?: bool}"#),
         CommandSpec::new("format.emboss", "Emboss", "Home › Font › Font", |s, v| toggle(s, v, |r| r.emboss, |c, on| c.emboss = Some(on))),
@@ -355,8 +359,41 @@ fn text_outline(s: &mut Session, v: &Value) -> CmdResult {
     if !width.is_finite() || !(0.0..=MAX_OUTLINE_WIDTH).contains(&width) {
         return Err(CmdError::Params("width must be 0 to 10 points".into()));
     }
-    let patch = TextEffects { outline: Some(TextOutline { on, color, width }), shadow: None };
+    let patch = TextEffects { outline: Some(TextOutline { on, color, width }), shadow: None, fill: None };
     // The closure runs on each run's own properties, so it merges the one effect it sets.
+    apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
+}
+
+/// Text Fill, gradient: the selected text is painted with a linear gradient through its stops, in
+/// direction `angle` (degrees: 0 runs left to right, 90 top to bottom). `off` removes it.
+fn text_fill(s: &mut Session, v: &Value) -> CmdResult {
+    let on = !p::bool(v, "off").unwrap_or(false);
+    let mut stops = [GradientStop { pos: 0.0, color: Rgb::BLACK }; MAX_GRADIENT_STOPS];
+    let mut count = 0usize;
+    if on {
+        let list = v.get("stops").and_then(Value::as_array).ok_or_else(|| CmdError::Params("stops must be a list of {pos, color}".into()))?;
+        if !(2..=MAX_GRADIENT_STOPS).contains(&list.len()) {
+            return Err(CmdError::Params(format!("a gradient needs 2 to {MAX_GRADIENT_STOPS} stops")));
+        }
+        for (i, st) in list.iter().enumerate() {
+            let pct = st.get("pos").and_then(Value::as_f64).ok_or_else(|| CmdError::Params("each stop needs a pos, 0 to 100".into()))?;
+            if !pct.is_finite() || !(0.0..=100.0).contains(&pct) {
+                return Err(CmdError::Params("stop positions are 0 to 100 percent".into()));
+            }
+            let color = st
+                .get("color")
+                .and_then(Value::as_str)
+                .and_then(Rgb::parse)
+                .ok_or_else(|| CmdError::Params("each stop needs a color, RRGGBB".into()))?;
+            stops[i] = GradientStop { pos: (pct / 100.0) as f32, color };
+        }
+        count = list.len();
+    }
+    let angle = p::f32(v, "angle").unwrap_or(90.0);
+    if !angle.is_finite() || !(0.0..=360.0).contains(&angle) {
+        return Err(CmdError::Params("angle must be 0 to 360 degrees".into()));
+    }
+    let patch = TextEffects { outline: None, shadow: None, fill: Some(TextGradient { on, stops, count: count as u8, angle }) };
     apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
 }
 
@@ -372,7 +409,7 @@ fn text_shadow(s: &mut Session, v: &Value) -> CmdResult {
     if !ok(dx) || !ok(dy) {
         return Err(CmdError::Params("dx and dy must be -50 to 50 points".into()));
     }
-    let patch = TextEffects { outline: None, shadow: Some(TextShadow { on, color, dx, dy }) };
+    let patch = TextEffects { outline: None, shadow: Some(TextShadow { on, color, dx, dy }), fill: None };
     apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
 }
 
