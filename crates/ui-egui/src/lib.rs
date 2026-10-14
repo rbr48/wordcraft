@@ -1306,6 +1306,8 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Define New Multilevel List and Track Changes Options without settings show their dialogs.
         "list.define" if params.get("levels").is_none() => Some("defineList"),
         "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
+        // Insert Caption without text or label shows its dialog.
+        "references.caption" if !has("text") && !has("label") => Some("caption"),
         _ => None,
     }
 }

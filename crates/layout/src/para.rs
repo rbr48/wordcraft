@@ -994,7 +994,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         displays,
         left_out: Vec::new(),
     };
-    pl.hyph_after = hyphenation_points(&text, to_para, &pl, env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens);
+    pl.hyph_after =
+        hyphenation_points(&text, to_para, &pl, env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens, env.doc.settings.hyphenate_caps);
     pl.left_out = left;
     for k in pl.hyph_after.clone() {
         if let Some(c) = pl.clusters.get_mut(k as usize) {
@@ -1715,7 +1716,7 @@ fn hyphen_glyph(pl: &ParaLayout, style: u16, cache: &mut Vec<(u16, u32, f32)>) -
 /// pattern hyphenation points of each word when automatic hyphenation is on. Both are found in
 /// `text`, the paragraph as laid out (without what the layout leaves out, [`left_out`]), and
 /// `to_para` maps the end of a char there to the paragraph's text.
-fn hyphenation_points(text: &str, to_para: impl Fn(usize) -> Option<usize>, pl: &ParaLayout, auto: bool) -> Vec<u32> {
+fn hyphenation_points(text: &str, to_para: impl Fn(usize) -> Option<usize>, pl: &ParaLayout, auto: bool, hyph_caps: bool) -> Vec<u32> {
     let mut bytes: Vec<usize> = text.char_indices().filter(|(_, c)| *c == SOFT_HYPHEN).map(|(i, c)| i + c.len_utf8()).collect();
     if auto {
         let lim = wordcraft_proof::hyphen::Limits::default();
@@ -1729,6 +1730,7 @@ fn hyphenation_points(text: &str, to_para: impl Fn(usize) -> Option<usize>, pl: 
                     if let Some(w) = text.get(a..i)
                         && w.chars().count() >= lim.min_word
                         && !w.chars().any(wordcraft_fonts::is_rtl)
+                        && (hyph_caps || !w.chars().all(|c| c.is_uppercase() || !c.is_alphabetic()))
                     {
                         let offs: Vec<usize> = w.char_indices().map(|(o, _)| o).collect();
                         for pt in wordcraft_proof::hyphen::hyphen_points(w, &lim) {

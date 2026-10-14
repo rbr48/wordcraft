@@ -56,7 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("references.caption", "Insert Caption", "References › Captions", caption)
-            .params(r#"{"label"?: "Figure|Table|Equation", "text"?: string}"#),
+            .params(r#"{"label"?: "Figure|Table|Equation", "text"?: string, "position"?: "below|above", "excludeLabel"?: bool}"#),
         CommandSpec::new("references.updateFields", "Update Field", "References", |s, _| {
             update_fields(s)?;
             sel_result(s)
@@ -232,6 +232,8 @@ fn note_refs(s: &Session) -> Vec<Pos> {
 fn caption(s: &mut Session, v: &Value) -> CmdResult {
     let label = p::str(v, "label").unwrap_or("Figure").to_string();
     let text = p::str(v, "text").unwrap_or("").to_string();
+    let exclude_label = p::bool(v, "excludeLabel").or_else(|| p::bool(v, "exclude_label")).unwrap_or(false);
+    let position = p::str(v, "position").unwrap_or("below");
     // Number = existing captions with this label before the caret + 1.
     let caret = s.sel.focus.clone();
     let n = s
@@ -242,26 +244,51 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
         .filter(|q| s.doc.para(StoryRef::Body, q).is_some_and(|p| p.props.style.as_deref() == Some("Caption") && p.text.starts_with(&label)))
         .count()
         + 1;
-    let f = s.sel.focus.clone();
-    let len = s.doc.para_at(&f).map(|p| p.len()).unwrap_or(0);
-    let at = Pos { off: len, ..f };
-    let new = s.doc.split_paragraph(&at)?;
-    let para = s.doc.para_mut(new.story, &new.path)?;
-    para.props = wordcraft_doc::ParaProps { style: Some("Caption".into()), ..Default::default() };
-    para.mark = CharProps::default();
-    let base = format!("{label} ");
-    para.insert_text(0, &base, &CharProps::default())?;
+    let mut para = Paragraph::new().styled("Caption");
+    let base = if exclude_label { String::new() } else { format!("{label} ") };
+    if !base.is_empty() {
+        para.insert_text(0, &base, &CharProps::default())?;
+    }
+    let seq_off = para.len();
     para.insert_object(
-        base.len(),
+        seq_off,
         InlineObject::Field { instr: format!("SEQ {label} \\* ARABIC"), result: n.to_string(), locked: false },
         &CharProps::default(),
     )?;
-    let end = para.len();
     if !text.is_empty() {
+        let end = para.len();
         para.insert_text(end, &format!(": {text}"), &CharProps::default())?;
     }
-    let off = para.len();
-    s.sel = Selection::caret(Pos { off, ..new });
+
+    if caret.path.depth() > 0 {
+        let top_idx = caret.path.0.first().copied().unwrap_or(0) as usize;
+        let target_idx = if position == "above" { top_idx } else { top_idx + 1 };
+        let target_path = Path::top(target_idx);
+        s.doc.insert_block(StoryRef::Body, &target_path, Block::Para(para))?;
+        let off = s.doc.para(StoryRef::Body, &target_path).map(|p| p.len()).unwrap_or(0);
+        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: target_path, off });
+    } else if position == "above" {
+        let top_idx = caret.path.0.first().copied().unwrap_or(0) as usize;
+        let target_path = Path::top(top_idx);
+        s.doc.insert_block(StoryRef::Body, &target_path, Block::Para(para))?;
+        let off = s.doc.para(StoryRef::Body, &target_path).map(|p| p.len()).unwrap_or(0);
+        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: target_path, off });
+    } else {
+        let len = s.doc.para_at(&caret).map(|p| p.len()).unwrap_or(0);
+        if len == 0 {
+            let p = s.doc.para_mut(caret.story, &caret.path)?;
+            *p = para;
+            let off = p.len();
+            s.sel = Selection::caret(Pos { off, ..caret });
+        } else {
+            let at = Pos { off: len, ..caret };
+            let new = s.doc.split_paragraph(&at)?;
+            let p = s.doc.para_mut(new.story, &new.path)?;
+            *p = para;
+            let off = p.len();
+            s.sel = Selection::caret(Pos { off, ..new });
+        }
+    }
     sel_result(s)
 }
 
