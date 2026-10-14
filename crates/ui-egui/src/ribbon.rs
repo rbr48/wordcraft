@@ -1886,7 +1886,7 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
     let row = t.rows.get(r).map(|x| x.props.clone()).unwrap_or_default();
     let stored_w = t.grid.get(t.grid_col(r, c)).copied();
     let laid = app.session.layout().pages.iter().flat_map(|pg| pg.items.iter()).find_map(|it| match it {
-        wordcraft_layout::Placed::Cell { rect, table, row, cell, story: st } if *table == tp && *row == r && *cell == c && *st == story => {
+        wordcraft_layout::Placed::Cell { rect, table, row, cell, story: st, .. } if *table == tp && *row == r && *cell == c && *st == story => {
             Some(*rect)
         }
         _ => None,

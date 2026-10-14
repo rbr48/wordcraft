@@ -66,7 +66,7 @@ fn cell_boxes(l: &DocLayout, page: usize) -> Vec<CellBox> {
     pg.items
         .iter()
         .filter_map(|it| match it {
-            Placed::Cell { rect, table, row, cell, story } => {
+            Placed::Cell { rect, table, row, cell, story, .. } => {
                 Some(CellBox { rect: *rect, table: table.clone(), story: *story, row: *row, cell: *cell })
             }
             _ => None,

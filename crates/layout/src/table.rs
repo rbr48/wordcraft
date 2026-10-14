@@ -588,6 +588,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     let mut out = Vec::with_capacity(rows.len());
     for (ri, cells) in rows.into_iter().enumerate() {
         let rh = heights.get(ri).copied().unwrap_or(0.0);
+        let exact = t.rows.get(ri).is_some_and(|r| r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0));
         let mut items = lower.get_mut(ri).map(std::mem::take).unwrap_or_default();
         for (ci, c) in cells.into_iter().enumerate() {
             // A restart cell spans several rows: its content is aligned over their heights (the gaps
@@ -682,6 +683,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     row: ri,
                     cell: ci,
                     story,
+                    clip: exact && c.h > span_h + 0.01,
                 });
             }
         }
@@ -814,9 +816,9 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                 a.extend(above.map(|rect| Placed::Fill { rect, color: *color }));
                 b.extend(below.map(|rect| Placed::Fill { rect, color: *color }));
             }
-            Placed::Cell { rect, table, row: r, cell, story } => {
+            Placed::Cell { rect, table, row: r, cell, story, clip } => {
                 let (above, below) = split_rect(*rect, cut, shift);
-                let cell_at = |rect| Placed::Cell { rect, table: table.clone(), row: *r, cell: *cell, story: *story };
+                let cell_at = |rect| Placed::Cell { rect, table: table.clone(), row: *r, cell: *cell, story: *story, clip: *clip };
                 a.extend(above.map(cell_at));
                 b.extend(below.map(cell_at));
             }

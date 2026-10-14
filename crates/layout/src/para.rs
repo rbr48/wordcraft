@@ -439,6 +439,27 @@ impl SegKey {
     }
 }
 
+/// Whether `c`'s capital is more than one character (ß → SS), so All Caps draws more
+/// characters than the document holds.
+fn caps_expands(c: char) -> bool {
+    c.to_uppercase().nth(1).is_some()
+}
+
+fn is_symbol_font(family: &str) -> bool {
+    let s = family.trim().to_ascii_lowercase();
+    matches!(s.as_str(), "symbol" | "wingdings" | "wingdings 2" | "wingdings 3" | "webdings")
+}
+
+/// Map a byte range of capital-expanded display text back to the original text.
+pub(crate) fn remap_range(map_starts: &[usize], orig_of: &[usize], orig_len: usize, ms: usize, me: usize) -> (usize, usize) {
+    let n = map_starts.len();
+    let i = map_starts.partition_point(|&b| b < ms).min(n);
+    let j = map_starts.partition_point(|&b| b < me).min(n);
+    let s = orig_of.get(i).copied().unwrap_or(orig_len);
+    let e = orig_of.get(j).copied().unwrap_or(orig_len);
+    (s.min(e), s.max(e))
+}
+
 /// Combining marks and joiners (bidi classes NSM, BN: harakat, ZWNJ, ZWJ) belong to the
 /// character before them: same font, same shaping run, so Arabic joining isn't broken.
 fn is_mark(c: char) -> bool {
@@ -607,6 +628,23 @@ impl<'a> Builder<'a> {
             let si = self.style(rc, key.face, small);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
+            // All Caps and Small Caps draw a letter's full capital, which can be several
+            // characters (ß → SS, ﬀ → FF, ŉ → ʼN), as Word does (#1581). A symbol-font run
+            // draws its codes as symbols, never as expanded capitals.
+            let expands = !is_symbol_font(&rc.font) && upper && sub.chars().any(caps_expands);
+            let mut mapped = String::new();
+            let mut map_starts: Vec<usize> = Vec::new();
+            let mut orig_of: Vec<usize> = Vec::new();
+            if expands {
+                mapped = String::with_capacity(sub.len().saturating_add(8));
+                for (i, c) in sub.char_indices() {
+                    map_starts.push(mapped.len());
+                    orig_of.push(i);
+                    mapped.extend(c.to_uppercase());
+                }
+                orig_of.push(sub.len());
+            }
+            let shape_text = if expands { mapped.as_str() } else { sub };
             let mut feats = Vec::new();
             if let Some(f) = wordcraft_fonts::feature("liga") {
                 feats.push(f);
@@ -627,17 +665,22 @@ impl<'a> Builder<'a> {
             }
             let map = |c: char| if upper { c.to_uppercase().next().unwrap_or(c) } else { c };
             let shaped = if use_levels {
-                wordcraft_fonts::shape_run(&st.face, sub, &feats, map, key.rtl)
+                wordcraft_fonts::shape_run(&st.face, shape_text, &feats, map, key.rtl)
             } else {
-                wordcraft_fonts::shape(&st.face, sub, &feats, map)
+                wordcraft_fonts::shape(&st.face, shape_text, &feats, map)
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
             // Group glyphs by cluster byte offset; graphemes may span several shaper clusters.
-            let bounds: Vec<usize> = unicode_segmentation::UnicodeSegmentation::grapheme_indices(sub, true).map(|(i, _)| i).collect();
+            let mut bounds: Vec<usize> = unicode_segmentation::UnicodeSegmentation::grapheme_indices(shape_text, true).map(|(i, _)| i).collect();
+            if expands {
+                // The capitals drawn for one character (the two S of ß) are one cluster: the
+                // caret, selection and line breaking never stop inside the character.
+                bounds.retain(|b| map_starts.binary_search(b).is_ok());
+            }
             let mut gi = 0usize;
             for (bi, &gs) in bounds.iter().enumerate() {
-                let ge = bounds.get(bi + 1).copied().unwrap_or(sub.len());
+                let ge = bounds.get(bi + 1).copied().unwrap_or(shape_text.len());
                 let g0 = self.glyphs.len() as u32;
                 let mut adv = 0.0f32;
                 while let Some(g) = shaped.get(gi) {
@@ -649,7 +692,7 @@ impl<'a> Builder<'a> {
                     gi += 1;
                 }
                 let g1 = self.glyphs.len() as u32;
-                let s = sub.get(gs..ge).unwrap_or("");
+                let s = shape_text.get(gs..ge).unwrap_or("");
                 let ch = s.chars().next().unwrap_or(' ');
                 let kind = kind_override.unwrap_or(if ch == ' ' || ch == '\u{3000}' {
                     ClKind::Space
@@ -659,9 +702,10 @@ impl<'a> Builder<'a> {
                     ClKind::Text
                 });
                 let adv = if kind == ClKind::Marker { 0.0 } else { adv + rc.spacing };
+                let (cs, ce) = if expands { remap_range(&map_starts, &orig_of, sub.len(), gs, ge) } else { (gs, ge) };
                 self.clusters.push(Cluster {
-                    start: base + a + gs,
-                    end: base + a + ge,
+                    start: base + a + cs,
+                    end: base + a + ce,
                     adv,
                     kind,
                     style: si,

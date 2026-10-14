@@ -390,6 +390,15 @@ fn page_break_char_starts_new_page() {
 }
 
 #[test]
+fn page_numbers_can_restart_at_zero() {
+    // `w:pgNumType w:start="0"`: a cover page numbered 0, so the page after it reads 1.
+    let mut d = Document::from_text("Cover\u{000C}Contents");
+    d.last_section.page_num_start = Some(0);
+    let numbers: Vec<u32> = lay(&d).pages.iter().map(|p| p.number).collect();
+    assert_eq!(numbers, [0, 1]);
+}
+
+#[test]
 fn center_and_right_alignment() {
     let mut d = Document::from_text("abc\nabc\nabc");
     d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| p.align = Some(Align::Center)).unwrap();
@@ -3589,4 +3598,145 @@ fn turned_text_box_layout_produces_rotated_lines() {
     }
     assert!(found_down, "must find Placed::Lines with Down turn");
     assert!(found_up, "must find Placed::Lines with Up turn");
+}
+
+#[test]
+fn text_overflowing_an_exact_row_is_clipped_to_it() {
+    use wordcraft_doc::props::HeightRule;
+    // An exactly 12 pt row holding three lines: Word shows what fits and cuts the rest at the row's
+    // edge, rather than drawing it over the rows below.
+    let mut t = Table::new(2, 1, 200.0);
+    t.rows[0].props.height = Some(12.0);
+    t.rows[0].props.height_rule = HeightRule::Exact;
+    t.rows[0].cells[0].blocks =
+        ["one", "two", "three"].iter().map(|s| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()))).collect();
+    t.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("below", Default::default()))];
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let draws = display::page_display(&d, &lay(&d).pages[0], &Default::default());
+    let clipped = |want: &str| {
+        draws.iter().any(|x| match x {
+            display::Draw::Clip { items, .. } => {
+                flat(items.clone()).iter().any(|i| matches!(i, display::Draw::Glyphs { text, .. } if text.contains(want)))
+            }
+            _ => false,
+        })
+    };
+    assert!(clipped("three"), "the overflowing row's text is drawn inside a clip");
+    assert!(!clipped("below"), "a row that fits isn't clipped");
+}
+
+#[test]
+fn a_row_with_less_room_than_its_minimum_height_moves_on_whole() {
+    use wordcraft_doc::props::HeightRule;
+    // Measured in Word: with 49 pt left on the page, a row of eight lines splits, but the same row
+    // with an at-least height of 63.6 pt goes to the next page whole.
+    let first_row_line_page = |min: Option<f32>| {
+        let lines: Vec<String> = (1..=200).map(|i| format!("Filler {i}")).collect();
+        let one_page = lay(&Document::from_text(&lines.join("\n"))).pages[0].items.iter().filter(|i| matches!(i, Placed::Lines { .. })).count();
+        let mut t = Table::new(1, 1, 400.0);
+        t.rows[0].props.height = min;
+        t.rows[0].props.height_rule = HeightRule::AtLeast;
+        t.rows[0].cells[0].blocks =
+            (1..=8).map(|k| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row line {k}"), Default::default()))).collect();
+        // Fill the page, leaving two filler paragraphs' room (less than 63.6 pt) for the row.
+        let mut d = Document::from_text(&lines[..one_page - 2].join("\n"));
+        let end = d.body.len();
+        d.insert_block(StoryRef::Body, &Path::top(end), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        l.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Placed::Lines { path, .. } if path.0.first() == Some(&(end as u32)))))
+    };
+    assert_eq!(first_row_line_page(None), Some(0), "a row without a minimum height splits");
+    assert_eq!(first_row_line_page(Some(63.6)), Some(1), "a row with a minimum height that doesn't fit moves on");
+}
+
+/// (start, end, glyph ids, cluster x, cluster advance) of each text cluster laid out.
+fn text_clusters(pl: &ParaLayout) -> Vec<(usize, usize, Vec<u32>, f32, f32)> {
+    let mut xs = Vec::new();
+    for l in &pl.lines {
+        for (k, &x) in (l.c0..l.c1).zip(&l.xs) {
+            xs.push((k, x));
+        }
+    }
+    pl.clusters
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.kind == para::ClKind::Text)
+        .map(|(k, c)| {
+            let g = (c.g0..c.g1).filter_map(|i| pl.glyphs.get(i as usize).map(|g| g.gid)).collect();
+            let x = xs.iter().find_map(|(i, x)| (*i == k).then_some(*x)).unwrap_or(0.0);
+            (c.start, c.end, g, x, c.adv)
+        })
+        .collect()
+}
+
+fn strasse_with(f: &dyn Fn(&mut wordcraft_doc::props::CharProps)) -> ParaLayout {
+    let mut cp = wordcraft_doc::props::CharProps::default();
+    f(&mut cp);
+    let mut d = Document::from_text("Straße");
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 7), &|c| *c = cp.clone()).unwrap();
+    let l = lay(&d);
+    let Placed::Lines { para, .. } = l.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { .. })).unwrap() else { panic!() };
+    (**para).clone()
+}
+
+/// Word draws German ß in All Caps and Small Caps as SS (#1581). The two capitals drawn for
+/// it are one cluster, so the caret and selection treat it as the single character it is.
+#[test]
+fn caps_draw_sharp_s_as_two_capitals_in_one_cluster() {
+    let width = |pl: &ParaLayout| pl.lines[0].xs.last().copied().unwrap_or(0.0);
+    let plain_strase = {
+        let d = Document::from_text("STRASE");
+        let l = lay(&d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some((**para).clone()) } else { None }).unwrap();
+        width(&pl)
+    };
+    let caps: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| c.caps = Some(true);
+    let small: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| c.small_caps = Some(true);
+    for (name, f) in [("All Caps", caps), ("Small Caps", small)] {
+        let pl = strasse_with(f);
+        let cl = text_clusters(&pl);
+        let glyphs: usize = cl.iter().map(|c| c.2.len()).sum();
+        assert_eq!(glyphs, 7, "{name}: S T R A S S E is seven glyphs: {cl:?}");
+        assert_eq!(cl.len(), 6, "{name}: six source characters, six clusters: {cl:?}");
+        let ss = cl.iter().find(|c| c.0 == 4).expect("a cluster for ß");
+        assert_eq!(ss.1, 6, "{name}: the ß cluster covers exactly the ß");
+        // Both glyphs drawn for ß are the S that starts the word.
+        let s_gid = cl.first().and_then(|c| c.2.first().copied());
+        assert_eq!(ss.2.len(), 2, "{name}: ß draws two glyphs");
+        assert!(ss.2.iter().all(|g| Some(*g) == s_gid), "{name}: both glyphs are S");
+        if name == "All Caps" {
+            assert!(width(&pl) > plain_strase + 1.0, "All Caps: STRASSE is wider than STRASE: {} vs {plain_strase}", width(&pl));
+        }
+        // Caret stops: one before each source character, and the end; none inside ß.
+        assert_eq!(pl.line_offsets(0), vec![0, 1, 2, 3, 4, 6, 7], "{name}");
+        // A click on the first S lands before the ß, on the second S after it.
+        assert_eq!(pl.off_at_x(0, ss.3 + ss.4 * 0.25), 4, "{name}: click on the first S");
+        assert_eq!(pl.off_at_x(0, ss.3 + ss.4 * 0.75), 6, "{name}: click on the second S");
+        if name == "Small Caps" {
+            // The ß is a lowercase letter: drawn at the small-caps size, like the "t", not
+            // at the size of the capital S that starts the word.
+            let style = |off: usize| pl.clusters.iter().find(|c| c.start == off).map(|c| c.style);
+            assert_eq!(style(4), style(1), "Small Caps: ß is scaled like t");
+            assert_ne!(style(4), style(0), "Small Caps: ß is not the size of the first S");
+        }
+    }
+    // Without caps, ß is one glyph of its own.
+    let pl = strasse_with(&|c| c.bold = Some(false));
+    let cl = text_clusters(&pl);
+    assert_eq!(cl.len(), 6);
+    assert_eq!(cl.iter().map(|c| c.2.len()).sum::<usize>(), 6, "{cl:?}");
+}
+
+/// A caps run in a symbol font draws each code as its symbol: ß never becomes two glyphs (#1581).
+#[test]
+fn caps_in_a_symbol_font_never_expand_characters() {
+    let pl = strasse_with(&|c| {
+        c.caps = Some(true);
+        c.font = Some("Wingdings".into());
+    });
+    let cl = text_clusters(&pl);
+    assert_eq!(cl.len(), 6, "{cl:?}");
+    let ss = cl.iter().find(|c| c.0 == 4).expect("a cluster for the ß code");
+    assert_eq!((ss.1, ss.2.len()), (6, 1), "the ß code is one symbol: {cl:?}");
 }

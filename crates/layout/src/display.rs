@@ -125,6 +125,11 @@ pub enum Draw {
         size: f32,
         text: String,
     },
+    /// Items clipped to a rectangle (such as lines overflowing an exact-height table row).
+    Clip {
+        rect: Rect,
+        items: Vec<Draw>,
+    },
 }
 
 impl Draw {
@@ -313,19 +318,44 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
     let mut out = Vec::new();
     let ha = if opts.dim_header { 0.45 } else { 1.0 };
     let ba = if opts.dim_body { 0.45 } else { 1.0 };
-    for it in &page.header {
-        item(doc, it, opts, ha, &mut out);
-    }
-    for it in &page.footer {
-        item(doc, it, opts, ha, &mut out);
-    }
-    for it in &page.items {
-        item(doc, it, opts, ba, &mut out);
+    for (items, a) in [(&page.header, ha), (&page.footer, ha), (&page.items, ba)] {
+        let clips = clipped_cells(items);
+        for it in items.iter() {
+            match it {
+                Placed::Lines { story, path, .. } if let Some(rect) = cell_clip(&clips, *story, &path.0) => {
+                    let mut inner = Vec::new();
+                    item(doc, it, opts, a, &mut inner);
+                    out.push(Draw::Clip { rect, items: inner });
+                }
+                _ => item(doc, it, opts, a, &mut out),
+            }
+        }
     }
     if opts.markup && (opts.revisions.insertions_deletions || opts.revisions.formatting) && opts.revisions.changed_lines != ChangeBar::None {
         change_bars(doc, page, &opts.revisions, ba, &mut out);
     }
     out
+}
+
+/// The cells among `items` whose content is cut off at their edge (see [`Placed::Cell`]'s
+/// `clip`): their story, the path of their content (table, row, cell) and their area.
+fn clipped_cells(items: &[Placed]) -> Vec<(StoryRef, Vec<u32>, Rect)> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Cell { rect, table, row, cell, story, clip: true, .. } => {
+                let mut prefix = table.0.clone();
+                prefix.extend([u32::try_from(*row).ok()?, u32::try_from(*cell).ok()?]);
+                Some((*story, prefix, *rect))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The area to clip a line at `path` of `story` to: its cell's, when that cell is clipped.
+fn cell_clip(clips: &[(StoryRef, Vec<u32>, Rect)], story: StoryRef, path: &[u32]) -> Option<Rect> {
+    clips.iter().find(|(s, prefix, _)| *s == story && path.starts_with(prefix)).map(|(_, _, r)| *r)
 }
 
 /// The automatic colour of the bars beside changed lines.

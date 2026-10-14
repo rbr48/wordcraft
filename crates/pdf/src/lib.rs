@@ -828,7 +828,9 @@ impl Exporter<'_> {
                     let idx = self.entry(*story, path, para);
                     for d in &draws {
                         match d {
-                            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            Draw::Glyphs { .. } | Draw::Turned { .. } | Draw::Clip { .. } => {
+                                self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d))
+                            }
                             Draw::Image { .. } => self.tagged(s, Role::Figure, None, |me, s| me.draw(s, d)),
                             // A rotated inline picture.
                             Draw::Rotated { items, .. } if items.iter().any(|i| matches!(i, Draw::Image { .. })) => {
@@ -877,8 +879,14 @@ impl Exporter<'_> {
 
     /// Display items for one placed item.
     fn draws(&self, page: &Page, it: &Placed, dopts: &DisplayOptions) -> Vec<Draw> {
-        let one =
-            Page { w: page.w, h: page.h, section: page.section, number: page.number, items: vec![it.clone()], body: page.body, ..Default::default() };
+        let mut items = vec![it.clone()];
+        // Lines in a cell cut off at its edge are drawn inside its clip: `page_display` finds the
+        // cell among the items (cells themselves draw nothing).
+        if matches!(it, Placed::Lines { .. }) {
+            let clipped = page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. }));
+            items.extend(clipped.cloned());
+        }
+        let one = Page { w: page.w, h: page.h, section: page.section, number: page.number, items, body: page.body, ..Default::default() };
         page_display(self.doc, &one, dopts)
     }
 
@@ -1091,6 +1099,14 @@ impl Exporter<'_> {
                 s.set_stroke(None);
             }
             Draw::Mark { .. } | Draw::MarkText { .. } => {}
+            Draw::Clip { rect, items } => {
+                let Some(clip) = rect_path(rect) else { return };
+                s.push_clip_path(&clip, &FillRule::NonZero);
+                for it in items {
+                    self.draw(s, it);
+                }
+                s.pop();
+            }
             Draw::Turned { x, y, turn, items } => {
                 if !ok(*x) || !ok(*y) {
                     return;

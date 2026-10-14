@@ -68,6 +68,10 @@ font can't match Word's metrics.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | trivial | All Caps and Small Caps draw ß as SS, as Word does, kept one cluster for the caret and selection (#1583) |
+| 2026-10-14 | trivial | Text that doesn't fit an exact-height table row is cut off at the cell's edge, as in Word, instead of drawn over rows below (#1617) |
+| 2026-10-14 | trivial | A table row with an at-least height doesn't split where less than that height is left on the page; it starts the next page whole, as measured in Word (#1618) |
+| 2026-10-14 | trivial | A section can restart its page numbers at 0 (`w:pgNumType w:start="0"`), as a cover page numbered 0 does; the restart was read but laid out from 1 (#1601) |
 | 2026-10-14 | minor | Footnote and endnote continuation separators, continuation notices, and restart parity landed: custom OOXML continuation separator and notice parts, split note carry notices, `Continuous`/`EachSection`/`EachPage` restarts with custom number starts, `references.noteOptions` command expansion, and `Dialog::NoteOptions` |
 | 2026-10-14 | minor | RTL sections (`<w:bidi/>`), mirrored right-hand gutter, right-to-left multi-column flow, right-margin line numbering, and right-aligned footnote separator rules landed |
 | 2026-10-14 | minor | Contour Text Wrap Polygon (`wrapPolygon`) landed with ECMA-376 DrawingML `<wp:wrapPolygon>` round-trip in DOCX, scanline polygon edge intersection rasterization in layout, and automated tight wrapping for non-rectangular shapes (stars, hearts, hexagons, octagons, freeforms) |

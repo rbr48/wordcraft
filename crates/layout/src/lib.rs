@@ -123,6 +123,9 @@ pub enum Placed {
         row: usize,
         cell: usize,
         story: StoryRef,
+        /// Its row is exactly as tall as it says and the content is taller: what runs past the
+        /// cell is cut off when drawn, as in Word.
+        clip: bool,
     },
     /// The area of a picture, shape or text box, for hit testing, selection handles and dragging
     /// (drawn by `Image`/`Shape`/`Lines`). The object is the U+FFFC at byte `off` of paragraph
@@ -874,6 +877,9 @@ struct PageBuilder<'a> {
     /// The previous paragraph ended with a page break (its mark stayed with the break): the next
     /// paragraph, first on the new page, gets no space before (Word).
     after_break_mark: bool,
+    /// The number the next page takes instead of counting on: a section restarting its
+    /// numbering, possibly at 0 (a cover page numbered 0).
+    restart_at: Option<u32>,
     /// Wrap areas of floating objects on this page (see [`wrap_area`]).
     excl: Vec<(Rect, bool, ContourKind)>,
     /// Wrap areas of the floating tables on this page, which others may not overlap.
@@ -1132,7 +1138,7 @@ impl PageBuilder<'_> {
             self.line_no = 0;
         }
         let s = self.sect;
-        self.number = self.number.saturating_add(1);
+        self.number = self.restart_at.take().unwrap_or_else(|| self.number.saturating_add(1));
         let (w, h) = if self.web { (s.page_w, f32::MAX / 4.0) } else { (s.page_w, s.page_h) };
         let body = Rect::new(s.text_left(), body_top, s.text_width(), (s.page_h - s.margin_bottom - body_top).max(36.0));
         let mut decor = Vec::new();
@@ -1451,6 +1457,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         orig_bottom: 0.0,
         prev: None,
         after_break_mark: false,
+        restart_at: None,
         excl: Vec::new(),
         float_tables: Vec::new(),
         line_no: 0,
@@ -1476,8 +1483,8 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         if web && si > 0 {
             // one long page
         } else if pb.pages.is_empty() || start != SectionStart::Continuous {
-            if let Some(n) = restart {
-                pb.number = n.saturating_sub(1);
+            if restart.is_some() {
+                pb.restart_at = restart;
             }
             pb.new_page(block, first_top);
             if !web && matches!(start, SectionStart::EvenPage | SectionStart::OddPage) {
@@ -2334,7 +2341,14 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
             if pb.y + cur.height <= pb.bottom + 0.01 {
                 break;
             }
-            let split = if splittable { table::split_row(cur, pb.bottom - pb.y) } else { None };
+            // Measured in Word: a row with an at-least height doesn't split where less than that
+            // height is left; it starts the next page whole.
+            let room = pb.bottom - pb.y;
+            let short_of_min = rest.is_none()
+                && t.rows.get(ri).is_some_and(|r| {
+                    r.props.height_rule == wordcraft_doc::props::HeightRule::AtLeast && r.props.height.is_some_and(|h| h > room + 0.01)
+                });
+            let split = if splittable && !short_of_min { table::split_row(cur, room) } else { None };
             match split {
                 Some((a, b)) => {
                     place(pb, &a);

@@ -58,6 +58,8 @@ impl NoteRestart {
     }
 }
 
+pub const MAX_NOTE_START: u32 = 32_767;
+
 impl NumFormat {
     pub fn ooxml(self) -> &'static str {
         match self {

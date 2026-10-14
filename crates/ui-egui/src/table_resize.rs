@@ -124,7 +124,7 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
 
         // 3. Check column header selection band (zone just above top row).
         for item in &page.items {
-            if let Placed::Cell { rect, table, row, cell, story: cell_story } = item {
+            if let Placed::Cell { rect, table, row, cell, story: cell_story, .. } = item {
                 if *cell_story != story || *row != 0 {
                     continue;
                 }
@@ -139,7 +139,7 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
 
         // 4. Check row left margin selection band (zone just outside column 0 left border).
         for item in &page.items {
-            if let Placed::Cell { rect, table, row, cell, story: cell_story } = item {
+            if let Placed::Cell { rect, table, row, cell, story: cell_story, .. } = item {
                 if *cell_story != story || *cell != 0 {
                     continue;
                 }
@@ -156,7 +156,7 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
         let mut best: Option<(TableGrab, f32)> = None;
 
         for item in &page.items {
-            if let Placed::Cell { rect, table, row, cell, story: cell_story } = item {
+            if let Placed::Cell { rect, table, row, cell, story: cell_story, .. } = item {
                 if *cell_story != story {
                     continue;
                 }

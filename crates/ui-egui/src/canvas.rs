@@ -590,7 +590,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     let mut crs = Vec::new();
                     for (pi, page) in layout.pages.iter().enumerate() {
                         for it in &page.items {
-                            if let Placed::Cell { rect, table, row, cell, story } = it
+                            if let Placed::Cell { rect, table, row, cell, story, .. } = it
                                 && *table == tp
                                 && *row == r
                                 && *cell == c
@@ -874,7 +874,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     crate::table_pen::cursor(app, ui, &resp);
     // While "Save changes?" is up, keys answer it rather than edit the document behind it.
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    if (app.canvas.focused || app.canvas.want_focus) && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     }
     let _ = origin;
@@ -1533,7 +1533,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
                     let p = layout.pages.get(page)?;
                     let mut best: Option<(usize, usize, f32)> = None;
                     for it in &p.items {
-                        if let Placed::Cell { rect, table, row, cell, story: cs } = it
+                        if let Placed::Cell { rect, table, row, cell, story: cs, .. } = it
                             && *table == tp_a
                             && *cs == story
                         {
@@ -1820,7 +1820,7 @@ fn table_column_marks(
         .items
         .iter()
         .filter_map(|it| match it {
-            wordcraft_layout::Placed::Cell { rect, table, row: r, cell, story: st } if table == tp && *r == row && *st == story => {
+            wordcraft_layout::Placed::Cell { rect, table, row: r, cell, story: st, .. } if table == tp && *r == row && *st == story => {
                 Some((*cell, *rect))
             }
             _ => None,

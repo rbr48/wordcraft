@@ -190,17 +190,25 @@ fn parse_txbx_plc(
     let n = ((plc.len() - 4) / 26).min(2048);
     // The last entry in PlcfTxbxTxt is the sentinel guard; entries 0..n-1 are 1-based txids.
     let count = n.saturating_sub(1);
+    let mut kept_to = 0u32;
     for i in 0..count {
         if doc.parts.len() >= MAX_PARTS {
             break;
         }
         let Some(cp_a) = u32_at(plc, i * 4) else { break };
         let Some(cp_b) = u32_at(plc, (i + 1) * 4) else { break };
+        // The CPs of a well-formed PLC ascend, so stories are disjoint. A story starting before
+        // the end of the last one kept (a hostile table pointing many text boxes at the same text)
+        // is dropped: every subdocument CP becomes at most one story.
+        if cp_a < kept_to {
+            continue;
+        }
         // Each textbox story ends with a 1-CP guard paragraph mark separator.
         let story_end = cp_b.saturating_sub(1);
         if story_end <= cp_a {
             continue;
         }
+        kept_to = cp_b;
         let Some((abs_a, abs_b)) = story(sub_base, sub_len, (cp_a, story_end)) else {
             continue;
         };

@@ -994,6 +994,19 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 draw(ctx, doc, it, view * m, &local, opts);
             }
         }
+        Draw::Clip { rect, items } => {
+            let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
+            if !r.is_finite() || !r.overlaps(*visible) {
+                return;
+            }
+            ctx.set_transform(view);
+            ctx.push_clip_layer(&r.to_path(0.1));
+            let local = r.intersect(*visible);
+            for it in items {
+                draw(ctx, doc, it, view, &local, opts);
+            }
+            ctx.pop_layer();
+        }
     }
 }
 

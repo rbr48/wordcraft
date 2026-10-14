@@ -1546,6 +1546,7 @@ fn hostile_params_never_panic() {
         json!({}),
         json!({"text": 5, "size": "x", "path": [], "pos": {"block": 9999, "off": 99999}}),
         json!({"value": -1e308, "rows": 1e9}),
+        json!({"section": {"pageW": -1e308, "pageH": 0, "marginTop": 1e30, "header": -5, "columns": {"count": 1000000, "space": -1e300, "widths": [[0, 0]]}}}),
     ];
     for spec in reg.all() {
         // These reach outside the session (files). Read Aloud (`review.readAloud`, `readAloud.*`)

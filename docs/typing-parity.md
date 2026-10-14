@@ -1,6 +1,6 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (text typed next to a hyperlink stays outside it, #413) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (Paste without formatting: Ctrl+Shift+V / Cmd+Shift+V pastes clipboard text as plain text / Keep Text Only, #1544; Escape selects text box or WordArt, #1538) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
@@ -49,6 +49,13 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
 - Enter after `---` `===` `***` `___` `~~~` `###` → a bottom border on the paragraph above
   (single, double, dotted, thick, wave, triple) (`border_line_autoformat`).
 
+## Clipboard and keyboard shortcuts
+
+| Keys | Word's result | Test |
+|---|---|---|
+| Ctrl+Shift+V (⌘⇧V) | Paste: Keep Text Only — pastes clipboard text stripping source formatting so it matches surrounding text style | `keys::tests::mod_shift_v_pastes_plain_text_without_formatting` |
+| Escape in text box / WordArt | Selects the text box or WordArt shape itself, so Delete removes the entire box | `tests::escape_selects_a_wordart_box_and_delete_removes_it` |
+
 ## Layout
 
 - No line break right after a slash (`and/or`, URLs) unless the word can't fit a line
@@ -76,6 +83,7 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Paste without formatting: Ctrl+Shift+V / Cmd+Shift+V pastes plain text / Keep Text Only (#1544); Escape selects text box or WordArt (#1538) |
 | 2026-10-11 | minor | Hyperlinks: text typed at either end of a link or after Enter stays outside it (#413) |
 | 2026-10-10 | trivial | Status line, revision history and cross-links added (progress-docs standard) |
 | 2026-10-10 | minor | Track Changes rows: tracked Enter, Backspace and Delete on paragraph marks (#244) |

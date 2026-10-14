@@ -1403,6 +1403,17 @@ mod tests {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
     }
 
+    fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+        egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        )
+    }
+
     /// Table Layout › Properties (#44) opens the dialog from the ribbon; OK sends only what
     /// changed, as one `table.properties` step. Scripts with settings never see the dialog.
     #[test]
@@ -3674,5 +3685,32 @@ mod tests {
         });
         crate::keys::canvas_events(&mut a, &ctx);
         assert_eq!(a.session.bangla_mode, wordcraft_engine::cmd::bangla::BanglaMode::Jatiya);
+    }
+
+    /// #1538: inserting WordArt leaves its text selected, so Delete erased only the text and the
+    /// empty box stayed. Escape now selects the box itself, Delete removes it, and a second Escape
+    /// is back to a caret in the body.
+    #[test]
+    fn escape_selects_a_wordart_box_and_delete_removes_it() {
+        let mut a = app();
+        let id = a.run("insert.wordArt", json!({})).unwrap()["story"].as_u64().unwrap() as u32;
+        assert!(canvas::in_text_box(&a), "the WordArt's text is selected after inserting it");
+        let mut h = harness(a);
+        h.run_steps(4);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_some(), "Escape selects the box");
+        h.key_press(egui::Key::Delete);
+        h.run_steps(2);
+        assert_eq!(h.state().session.doc.text_box_anchor(id), None, "Delete removed the WordArt");
+        assert!(h.state_mut().session.undo(), "one undo brings it back");
+        assert!(h.state().session.doc.text_box_anchor(id).is_some());
+        h.run_steps(2);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        let s = &h.state().session;
+        assert!(s.sel.is_collapsed() && s.sel.focus.story == wordcraft_doc::StoryRef::Body, "a second Escape leaves a caret in the body");
     }
 }
