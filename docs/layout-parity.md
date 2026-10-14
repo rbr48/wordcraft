@@ -20,7 +20,7 @@ font can't match Word's metrics.
 |---|---|---|---|
 | Line breaking (UAX #14 with Word's exceptions: no break after `/`) | ✅ | `layout::tests::no_line_break_right_after_a_slash` | — |
 | Justification, Word 2013+ space shrinking (compat mode 15) | ✅ | #109 | — |
-| Kashida justification (Arabic) | ❌ | no kashida in `crates/layout` | 3–5 |
+| Kashida justification (Arabic) | ✅ | UAX #9 Arabic elongation (tatweel U+0640) at valid cursive joining points in `crates/layout` (2026-10-14) | — |
 | Distributed / Thai distributed alignment | 🟡 | read; layout untested | 1–2 |
 | Default font metrics (Aptos, Calibri, Cambria…) | 🟡 | Carlito/Caladea/Liberation are metric-compatible for Calibri/Cambria/Arial/Times/Courier; **Aptos (Word's default since 2024) has no metric-compatible open substitute**, so new Word documents wrap differently ([typing-parity.md](typing-parity.md) Known gaps). Needs an owner decision (commission or license a metric-matched font) | 6–10 + owner |
 | Line spacing (single, 1.5, double, at least, exactly, multiple), spacing before/after, contextual spacing | 🟡 | Word puts multiple-spacing extra below the text and collapses spacing differently (#135, #108 open) | 3–5 |

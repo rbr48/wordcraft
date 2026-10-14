@@ -11,6 +11,7 @@
 pub mod display;
 pub mod fields;
 pub mod hit;
+pub mod kashida;
 pub mod kinsoku;
 pub mod math;
 pub mod para;
@@ -29,6 +30,7 @@ use wordcraft_geom::{Point, Rect, Spin};
 
 pub use fields::FieldCtx;
 pub use hit::VisualStep;
+pub use kashida::Kashida;
 pub use para::{ContourKind, LineEnd, ParaLayout};
 pub use table::{autofit_widths, measure_table_columns};
 
