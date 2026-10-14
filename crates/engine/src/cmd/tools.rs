@@ -371,6 +371,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.language", "Language", "Review › Language", |s, v| {
             let lang = p::str(v, "lang").unwrap_or("en-US").to_string();
             let no_proof = p::bool(v, "noProof");
+            let set_default = p::bool(v, "default").unwrap_or(false);
+            if set_default
+                && let Some(normal) = s.doc.styles.get_mut("Normal")
+            {
+                normal.chr.lang = Some(lang.clone());
+                if let Some(np) = no_proof {
+                    normal.chr.no_proof = Some(np);
+                }
+            }
             super::format::apply(s, &|c| {
                 c.lang = Some(lang.clone());
                 if let Some(np) = no_proof {
@@ -378,7 +387,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
             })
         })
-        .params(r#"{"lang": "en-US|en-GB|fr-FR|…", "noProof"?: bool}"#),
+        .params(r#"{"lang": "en-US|en-GB|fr-FR|…", "noProof"?: bool, "default"?: bool}"#),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
             s.relayout();

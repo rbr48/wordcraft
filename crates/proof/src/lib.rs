@@ -317,6 +317,18 @@ fn known_core(w: &str) -> bool {
 /// Is `word` spelled correctly? Numbers, single letters, ALL-CAPS acronyms, URLs and words with
 /// digits are accepted.
 pub fn is_correct(word: &str) -> bool {
+    is_correct_for_lang(word, None)
+}
+
+/// Is `word` spelled correctly for the specified BCP-47 language?
+/// When `lang` is non-English, English spellchecking is skipped to prevent false-positive errors.
+pub fn is_correct_for_lang(word: &str, lang: Option<&str>) -> bool {
+    if let Some(l) = lang
+        && !l.starts_with("en")
+        && !l.is_empty()
+    {
+        return true;
+    }
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
     let w = w.trim_matches('\'');
     if w.chars().count() <= 1 || w.chars().any(|c| c.is_ascii_digit()) || !w.chars().any(char::is_alphabetic) {
@@ -517,6 +529,17 @@ pub fn words(text: &str) -> Vec<(usize, usize)> {
 
 /// Spelling issues in a paragraph of text (no suggestions; ask [`suggest`] on demand).
 pub fn check_spelling(text: &str) -> Vec<Issue> {
+    check_spelling_for_lang(text, None)
+}
+
+/// Spelling issues in a paragraph of text for a specific BCP-47 language.
+pub fn check_spelling_for_lang(text: &str, lang: Option<&str>) -> Vec<Issue> {
+    if let Some(l) = lang
+        && !l.starts_with("en")
+        && !l.is_empty()
+    {
+        return Vec::new();
+    }
     let mut v = Vec::new();
     for (a, b) in words(text) {
         let Some(w) = text.get(a..b) else { continue };
@@ -527,7 +550,7 @@ pub fn check_spelling(text: &str) -> Vec<Issue> {
         if token.contains("://") || token.contains('@') || token.starts_with("www.") {
             continue;
         }
-        if !is_correct(w) {
+        if !is_correct_for_lang(w, lang) {
             v.push(Issue { start: a, end: b, kind: IssueKind::Spelling, message: "Possible spelling mistake".into(), suggestions: Vec::new() });
         }
     }
@@ -878,6 +901,30 @@ mod tests {
     fn hyphenation() {
         let l = hyphen::Limits::default();
         assert!(hyphen::hyphenate_word("hyphenation", &l).matches('-').count() >= 2);
+    }
+
+    #[test]
+    fn language_scoped_proofing_suppresses_non_english() {
+        let spanish = "Buenos días amigo cómo estás";
+        // Default English check flags non-English words:
+        let en_issues = check_spelling(spanish);
+        assert!(!en_issues.is_empty(), "English spellcheck flags Spanish text");
+
+        // Language-scoped check for Spanish suppresses English false errors:
+        let es_issues = check_spelling_for_lang(spanish, Some("es-ES"));
+        assert!(es_issues.is_empty(), "Spanish language tag suppresses English false-positives");
+
+        // French text:
+        let french = "Bonjour tout le monde";
+        assert!(check_spelling_for_lang(french, Some("fr-FR")).is_empty());
+
+        // German text:
+        let german = "Guten Morgen";
+        assert!(check_spelling_for_lang(german, Some("de-DE")).is_empty());
+
+        // is_correct_for_lang:
+        assert!(is_correct_for_lang("estás", Some("es-ES")));
+        assert!(!is_correct_for_lang("estás", Some("en-US")));
     }
 
     proptest::proptest! {

@@ -210,7 +210,14 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
                     st(ui, tl!("Editing header/footer"));
                 }
-                st(ui, tl!("English (United States)"));
+                let cur_lang = {
+                    let focus = &app.session.sel.focus;
+                    app.session.doc.para_at(focus).and_then(|p| p.props_of_char(focus.off).lang.clone())
+                };
+                let lang_display = crate::dialogs::language_name(cur_lang.as_deref().unwrap_or("en-US"));
+                if st(ui, lang_display).on_hover_text(tl!("Set Proofing Language")).clicked() {
+                    let _ = app.run("ui.dialog", json!({"name": "language"}));
+                }
                 let bn_badge = app.session.bangla_mode.badge();
                 let bn_label = format!("[{bn_badge}]");
                 let is_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;

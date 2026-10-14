@@ -2758,6 +2758,35 @@ mod tests {
         assert!(b.dialog.is_none());
     }
 
+    #[test]
+    fn language_dialog_opens_and_sets_proofing_language() {
+        let mut a = app();
+        a.run("text.insert", json!({"text": "Hello world"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+
+        // Opening the language dialog:
+        a.run("ui.dialog", json!({"name": "language"})).unwrap();
+        assert_eq!(dialog_name(&a), Some("language"));
+        if let Some(dialogs::Dialog::Language { lang, no_proof, .. }) = &a.dialog {
+            assert_eq!(lang, "en-US");
+            assert!(!*no_proof);
+        } else {
+            panic!("expected Dialog::Language");
+        }
+
+        // Setting language to Spanish with noProof:
+        a.run("review.language", json!({"lang": "es-ES", "noProof": true})).unwrap();
+        let focus = &a.session.sel.focus;
+        let props = a.session.doc.para_at(focus).map(|p| p.props_of_char(focus.off).clone()).unwrap_or_default();
+        assert_eq!(props.lang.as_deref(), Some("es-ES"));
+        assert_eq!(props.no_proof, Some(true));
+
+        // Language name lookup matches:
+        assert_eq!(dialogs::language_name("es-ES"), "Spanish (Spain)");
+        assert_eq!(dialogs::language_name("bn-BD"), "Bengali (Bangladesh)");
+        assert_eq!(dialogs::language_name("fr-FR"), "French (France)");
+    }
+
     /// Rules › If…Then…Else… asks for its condition and inserts the IF field it describes; Next
     /// Record has nothing to ask. Match Fields and Check for Errors show what they found.
     #[test]

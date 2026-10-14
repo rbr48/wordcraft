@@ -214,5 +214,15 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **Engine & Ribbon UI**:
       - `insert.shape` defaults connector height to 36pt and fill to `None`. Tested via `insert_connectors_elbow_and_curved` in `crates/engine/src/cmd/objects.rs`.
       - Added "Elbow Connector" (`elbowConnector`) and "Curved Connector" (`curvedConnector`) to the Shapes palette dropdown on the Insert ribbon tab.
+  - **M13.2: Set Proofing Language Dialog & Multilingual Run Scoping (Gap #7 & Gap #8 Advancement)**:
+    - **Language Dialog (`Dialog::Language`)**: Built Word's official Set Proofing Language modal dialog in `crates/ui-egui/src/dialogs.rs` with 34 standard world languages (`PROOFING_LANGUAGES`), "Do not check spelling or grammar" (`no_proof`), "Detect language automatically", and "Set As Default" buttons.
+    - **Status Bar Integration**: Converted the hardcoded English label in `crates/ui-egui/src/chrome.rs` into a live caret run language indicator (`language_name(cur_lang)`) with click-to-open `ui.dialog language`.
+    - **Ribbon Review Tab**: Wired the "Language" button on the Review tab to open `ui.dialog` with `name: "language"`.
+    - **Multilingual Proofing Engine (`crates/proof` & `crates/layout`)**:
+      - Added `is_correct_for_lang` and `check_spelling_for_lang` in `crates/proof`.
+      - Excluded non-English runs (`c.lang.starts_with("en") == false`) from English spellchecker in `crates/layout/src/para.rs` and `crates/engine/src/cmd/review.rs`, eliminating false-positive red squiggly underlines across foreign text.
+      - Supported `default: bool` in `review.language` to update document default language in the `Normal` style.
+      - Tested via `language_dialog_opens_and_sets_proofing_language` in `crates/ui-egui/src/lib.rs` and `language_scoped_proofing_suppresses_non_english` in `crates/proof/src/lib.rs`.
+
 
 

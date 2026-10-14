@@ -393,6 +393,66 @@ pub enum Dialog {
     TrackOptions {
         form: Box<crate::dialogs_lists::TrackForm>,
     },
+    /// Review › Language: Set Proofing Language.
+    Language {
+        lang: String,
+        no_proof: bool,
+        detect_auto: bool,
+    },
+}
+
+/// Standard world languages matching Microsoft Word proofing language list (name, BCP-47 tag).
+pub const PROOFING_LANGUAGES: &[(&str, &str)] = &[
+    ("English (United States)", "en-US"),
+    ("English (United Kingdom)", "en-GB"),
+    ("English (Canada)", "en-CA"),
+    ("English (Australia)", "en-AU"),
+    ("Bengali (Bangladesh)", "bn-BD"),
+    ("Bengali (India)", "bn-IN"),
+    ("Spanish (Spain)", "es-ES"),
+    ("Spanish (Mexico)", "es-MX"),
+    ("French (France)", "fr-FR"),
+    ("French (Canada)", "fr-CA"),
+    ("German (Germany)", "de-DE"),
+    ("German (Austria)", "de-AT"),
+    ("German (Switzerland)", "de-CH"),
+    ("Italian (Italy)", "it-IT"),
+    ("Portuguese (Brazil)", "pt-BR"),
+    ("Portuguese (Portugal)", "pt-PT"),
+    ("Russian (Russia)", "ru-RU"),
+    ("Chinese (Simplified, China)", "zh-CN"),
+    ("Chinese (Traditional, Taiwan)", "zh-TW"),
+    ("Japanese (Japan)", "ja-JP"),
+    ("Korean (Korea)", "ko-KR"),
+    ("Arabic (Saudi Arabia)", "ar-SA"),
+    ("Arabic (Egypt)", "ar-EG"),
+    ("Hindi (India)", "hi-IN"),
+    ("Dutch (Netherlands)", "nl-NL"),
+    ("Polish (Poland)", "pl-PL"),
+    ("Swedish (Sweden)", "sv-SE"),
+    ("Turkish (Turkey)", "tr-TR"),
+    ("Ukrainian (Ukraine)", "uk-UA"),
+    ("Greek (Greece)", "el-GR"),
+    ("Hebrew (Israel)", "he-IL"),
+    ("Indonesian (Indonesia)", "id-ID"),
+    ("Vietnamese (Vietnam)", "vi-VN"),
+    ("Thai (Thailand)", "th-TH"),
+];
+
+/// Human-readable language name for a BCP-47 code.
+pub fn language_name(code: &str) -> &'static str {
+    for &(name, c) in PROOFING_LANGUAGES {
+        if c.eq_ignore_ascii_case(code) {
+            return name;
+        }
+    }
+    let prefix = code.split('-').next().unwrap_or(code);
+    for &(name, c) in PROOFING_LANGUAGES {
+        if c.split('-').next().unwrap_or(c).eq_ignore_ascii_case(prefix) {
+            return name;
+        }
+    }
+    "English (United States)"
 }
 
 /// The Table Properties dialog's fields. Lengths are in the interface unit
@@ -820,6 +880,7 @@ impl Dialog {
             Dialog::EncryptPassword { .. } => "encryptPassword",
             Dialog::DefineList { .. } => "defineList",
             Dialog::TrackOptions { .. } => "trackChangesOptions",
+            Dialog::Language { .. } => "language",
         }
     }
 
@@ -1049,6 +1110,19 @@ impl Dialog {
             }
             "defineList" => Dialog::DefineList { form: Box::new(crate::dialogs_lists::ListForm::read(app)) },
             "trackChangesOptions" => Dialog::TrackOptions { form: Box::new(crate::dialogs_lists::TrackForm::read(app)) },
+            "language" => {
+                let focus = &app.session.sel.focus;
+                let (lang, no_proof) = app
+                    .session
+                    .doc
+                    .para_at(focus)
+                    .map(|p| {
+                        let c = p.props_of_char(focus.off);
+                        (c.lang.clone().unwrap_or_else(|| "en-US".into()), c.no_proof.unwrap_or(false))
+                    })
+                    .unwrap_or_else(|| ("en-US".into(), false));
+                Dialog::Language { lang, no_proof, detect_auto: true }
+            }
             _ => return None,
         })
     }
@@ -1181,6 +1255,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::EncryptPassword { .. } => "Encrypt with Password",
         Dialog::DefineList { .. } => "Define New Multilevel List",
         Dialog::TrackOptions { .. } => "Track Changes Options",
+        Dialog::Language { .. } => "Language",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -2371,6 +2446,61 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::DefineList { form } => crate::dialogs_lists::define_list(app, ui, form),
         Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
+        Dialog::Language { lang, no_proof, detect_auto } => {
+            ui.label(tl!("Mark selected text as:"));
+            ui.add_space(4.0);
+            let frame = egui::Frame::NONE
+                .fill(ui.visuals().extreme_bg_color)
+                .stroke(Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                .inner_margin(4);
+            frame.show(ui, |ui| {
+                ui.set_min_width(280.0);
+                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                    for &(name, code) in PROOFING_LANGUAGES {
+                        let selected = lang.eq_ignore_ascii_case(code);
+                        if ui.selectable_label(selected, name).clicked() {
+                            *lang = code.to_string();
+                        }
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            ui.checkbox(no_proof, tl!("Do not check spelling or grammar"));
+            ui.checkbox(detect_auto, tl!("Detect language automatically"));
+            ui.add_space(8.0);
+            let mut set_default = false;
+            let mut ok = false;
+            let mut cancel = false;
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Set As Default")).clicked() {
+                    set_default = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        cancel = true;
+                    }
+                    let okb = ui.add(egui::Button::new(egui::RichText::new(tl!("OK")).color(egui::Color32::WHITE)).fill(crate::theme::APP_COLOR));
+                    if okb.clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        ok = true;
+                    }
+                });
+            });
+            if ok || set_default {
+                let _ = app.run(
+                    "review.language",
+                    json!({
+                        "lang": lang,
+                        "noProof": *no_proof,
+                        "default": set_default,
+                    }),
+                );
+                if set_default {
+                    app.status(tl!("The default language has been set."));
+                }
+                return true;
+            }
+            cancel
+        }
         Dialog::FindRecipient { text, message } => {
             ui.horizontal(|ui| {
                 ui.label(tl!("Find:"));
