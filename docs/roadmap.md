@@ -1,6 +1,6 @@
 # WordCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (M7: formatting revisions landed, #41; previously trivial: M5: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** trivial (M7: formatting revisions landed, #41; previously trivial: M5: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is
 [`gaps.md`](gaps.md); the numbers are in [`target-app-parity.md`](target-app-parity.md). Hours are
@@ -13,13 +13,13 @@ Opus 5.5 agent wall-clock.
    fixes #155–#164) or add languages (de, nb, nn, he). Owner review needed.
 2. **DOCX real-world corpus** (gap #1, 30–50 h): collect openly licensed real-world .docx files,
    open/render/round-trip them, compare with Word locally, fix what breaks.
-3. **Preserve what we can't render** (gap #2, 10–15 h): charts, SmartArt, OLE, ink, group shapes
+3. **Preserve what we can't render** (gap #2, 4–15 h): charts, SmartArt, OLE, ink, group shapes
    survive a round trip and show their fallback pictures.
 4. **Stability sweep** (gap #3, 20–30 h): the open crash, hang and write-failure issues, plus an
    autosave/recovery soak test.
 5. **Pagination fidelity** (gap #4, 30–50 h): column balancing, footnote continuation, compat
    options, a local page-by-page comparison harness; an owner decision on an Aptos-metric font.
-6. **Formatting revisions and content controls** (gap #5, 12–18 h), **native printing** (gap #6,
+6. **Content controls and move ranges** (gap #5, 8–12 h; move tracking landed 2026-10-14), **native printing** (gap #6,
    6–10 h), **dialog depth** (gap #7, 20–30 h).
 
 ## Alpha gate (core workflows)
@@ -71,6 +71,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Gap #5: move tracking landed (`w:moveTo`/`w:moveFrom`); gap #2 hours reconciled to 4–15 h with `gaps.md` |
 | 2026-10-11 | trivial | M6: the eight missing bibliography styles landed (#383) |
 | 2026-10-11 | trivial | M7: formatting revisions landed (#41) |
 | 2026-10-10 | trivial | M5: Draw Table and Eraser landed (#303) |
