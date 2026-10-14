@@ -3296,3 +3296,18 @@ fn caption_command_supports_above_below_and_exclude_label() {
     let plain2 = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
     assert!(plain2.contains("2: Second Table"), "Caption with excludeLabel should omit Table prefix: {plain2}");
 }
+
+#[test]
+fn insert_drawing_canvas_creates_group_with_is_canvas() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.canvas", json!({"width": 350.0, "height": 200.0, "fill": "F5F5F5", "stroke": "BBBBBB"}));
+    let p = s.doc.body[0].as_para().expect("paragraph");
+    assert_eq!(p.objects.len(), 1);
+    let wordcraft_doc::InlineObject::Group { w, h, children, is_canvas, .. } = &p.objects[0] else {
+        panic!("expected group: {:?}", p.objects);
+    };
+    assert!(*is_canvas, "must have is_canvas: true");
+    assert_eq!((*w, *h), (350.0, 200.0));
+    assert_eq!(children.len(), 1, "has background shape");
+    assert!(p.objects[0].is_canvas());
+}

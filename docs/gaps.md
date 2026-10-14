@@ -1,6 +1,6 @@
 # Where WordCraft falls short of Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Gap #7: Drop Cap, Format Page Numbers, AutoCorrect Options, Cross-reference dialogs landed; 32 modal dialogs total) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Gap #2: Drawing Canvas (wpc) round-trip & Ink AlternateContent fallback preservation landed) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The work list. One entry per shortfall, ranked by how much it stops a Word user from switching
 (**B** = blocks beta). Each says what's missing, the evidence, who it hurts, an Opus 5.5 agent
@@ -12,7 +12,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | # | Gap | B | Evidence | Impact | Hours | Doc |
 |---|---|---|---|---|---|---|
 | 1 | **DOCX never tested on real-world files.** No corpus of files from Word, Google Docs, LibreOffice and Pages has been opened, rendered and round-tripped and compared with Word page by page | B | No corpus in the repo; `crates/docx/tests` are synthetic fixtures; "DOCX fidelity corpus: not started" since 2026-10-06 | Everyone: the files people receive are the files that break | 30–50 | [file-format-parity.md](file-format-parity.md) |
-| 2 | **Ink and drawing canvases are dropped on open and lost on save, silently**; OLE objects show only their picture | B | No ink or drawing-canvas (`wpc`) handling in `crates/docx`; group shapes (`wpg`) read and written (#267). Charts and SmartArt are drawn (#292) and, with OLE objects, written back with all their parts on save (#319) | Documents with diagrams drawn in Word or pen notes lose content without warning | 4–8 to preserve ink and drawing canvases; 45–70 to render and edit charts and SmartArt (#13) | [file-format-parity.md](file-format-parity.md) |
+| 2 | **Ink and drawing canvases**: Drawing Canvas (`wpc:wordprocessingCanvas`) round-trip and Word ink preservation via `mc:AlternateContent` fallback landed (2026-10-14); OLE objects show picture and write back whole (#319); chart and SmartArt editing tracked in #13 | | Drawing Canvas (`wpc`) read and written with member shapes/pictures/background; ink fallback pictures visually preserved; group shapes (`wpg`) read and written (#267) | Eliminates silent data loss on documents with Word drawing canvases or ink strokes | 0 (preservation landed; chart/SmartArt editing in #13) | [file-format-parity.md](file-format-parity.md) |
 | 3 | **Crashes and freezes in the field**: startup crash on Intel UHD Graphics (#170) (lag on GPUs without a DirectX 12 driver fixed, #316), freezes (#77, #59 Thai fonts, #31 font selector), no writes without admin on Windows 11 (#218), broken shape tool (#142), images can't be moved (#82) | B | 62 open issues, ~15 of them crashes, hangs or data-path failures | Anyone hit loses work or trust; the never-crash standard covers panics, not hangs or GPU driver faults | 20–30 | [target-app-parity.md](target-app-parity.md) (Stability) |
 | 4 | **Pagination differs from Word**: Aptos has no metric-matched substitute; columns don't balance; custom footnote continuation separators and notices aren't read; legacy compatibility options ignored; no page-by-page comparison harness | B | [layout-parity.md](layout-parity.md); [typing-parity.md](typing-parity.md) Known gaps | Page counts and line breaks differ, which matters for forms, legal and academic work | 30–50 + owner (font) | [layout-parity.md](layout-parity.md) |
 | 5 | **Move tracking and content controls**: landed (2026-10-14): `w:moveFrom`/`w:moveTo` round-trip for text runs and paragraph marks with full author/date attribution; inline content controls (`w:sdt`) round-trip with `w:id`, `w:tag`, `w:alias`, `w:lock`, and inner `w:sdtPr` extensions | | Issue #41; `crates/docx/tests/roundtrip.rs` | Legal and editorial review workflows; templates with form controls | 0 | [file-format-parity.md](file-format-parity.md) |
@@ -41,7 +41,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 28 | **Dictate** | | `tools.dictate` missing | Dictation users | 8–15 + owner (speech model) | [hardware-parity.md](hardware-parity.md) |
 | 29 | **Equations**: ink equations | | #191 notes; long display equations wrap at operators (#326) | Maths-heavy documents | 2–3 | [layout-parity.md](layout-parity.md) |
 
-**Beta needs #1–#5, #7** (~145–222 h with the stability and layout work they imply): they are the
+**Beta needs #1, #3, #4, #7** (~60–108 h with the stability and layout work they imply): they are the
 blocking gaps, and closing them lifts file formats, layout, stability and UI enough to take the
 full number from ~60% to ~75%. Everything else is depth on the way to full parity.
 
@@ -64,6 +64,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | #2: Drawing Canvas (`wpc:wordprocessingCanvas`) round-trip and Word ink preservation via `mc:AlternateContent` fallback landed |
 | 2026-10-14 | minor | #7: Drop Cap (`Dialog::DropCap`), Format Page Numbers (`Dialog::PageNumbers`), AutoCorrect Options (`Dialog::AutoCorrect`), and Cross-reference (`Dialog::CrossReference`) dialogs landed (32 total modal dialogs) |
 | 2026-10-14 | minor | #23: PDF Reflow and editable import landed in `crates/formats/src/pdf_import.rs` with ISO 32000-1 parsing, Flate stream decompression, Adobe ToUnicode CMap decoding, positioned operator extraction, line/paragraph reflow, heading/list detection, and page breaks |
 | 2026-10-14 | minor | #7 & #8: Set Proofing Language dialog (`Dialog::Language`), status bar interactive language indicator, and language-scoped proofing in `crates/proof` & layout |

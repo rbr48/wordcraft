@@ -126,8 +126,15 @@ fn clean_text(s: &str) -> String {
 
 fn children_of_choice(ac: &El) -> Option<&El> {
     // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
-    const KNOWN: &[&str] = &["wps", "wpg", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v"];
-    let ok = |c: &El| c.attr("Requires").unwrap_or("").split_whitespace().all(|r| KNOWN.contains(&r));
+    const KNOWN: &[&str] = &["wps", "wpg", "wpc", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v"];
+    let ok = |c: &El| {
+        let req = c.attr("Requires").unwrap_or("");
+        // If it requires w14 and contains contentPart without an inline blip, and Fallback exists, use Fallback
+        if req.split_whitespace().any(|r| r == "w14") && c.find("w14:contentPart").is_some() && ac.child("mc:Fallback").is_some() {
+            return false;
+        }
+        req.split_whitespace().all(|r| KNOWN.contains(&r))
+    };
     ac.children("mc:Choice").find(|c| ok(c)).or_else(|| ac.child("mc:Fallback")).or_else(|| ac.child("mc:Choice"))
 }
 
@@ -426,6 +433,10 @@ impl Reader<'_> {
                 let props = self.run_props_none(ctx);
                 self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
             }
+            "w14:contentPart" => {
+                let props = self.run_props_none(ctx);
+                self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
+            }
             _ => {}
         }
     }
@@ -581,6 +592,18 @@ impl Reader<'_> {
                     for x in c.els() {
                         self.read_run_child(sc, pb, x, props, rels, note, depth + 1);
                     }
+                }
+            }
+            "w14:contentPart" => {
+                if let Some(id) = k.attr("r:id")
+                    && let Some(media) = self.media_for(rels, id)
+                {
+                    self.emit_obj(
+                        sc,
+                        pb,
+                        InlineObject::Image { media, w: 100.0, h: 50.0, alt: "Ink".into(), float: Float::default(), crop: [0.0; 4], ole: None },
+                        props,
+                    );
                 }
             }
             _ => {}
@@ -743,6 +766,8 @@ impl Reader<'_> {
         }
         let mut obj = if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
+        } else if let Some(canvas) = gd.child("wpc:wordprocessingCanvas") {
+            self.read_canvas(sc, canvas, rels, w, h, float)?
         } else if gd.find("a:blip").is_some() {
             self.read_pic(gd, rels, w, h, alt, float)?
         } else {
@@ -837,7 +862,48 @@ impl Reader<'_> {
         if children.is_empty() {
             return None;
         }
-        Some(InlineObject::Group { w, h, float, ch_w, ch_h, children })
+        Some(InlineObject::Group { w, h, float, ch_w, ch_h, children, is_canvas: false })
+    }
+
+    /// A `wpc:wordprocessingCanvas` drawing canvas (`w` × `h`): its shapes, pictures, connectors
+    /// and text boxes.
+    fn read_canvas(&mut self, sc: &mut StoryCtx, canvas: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> Option<InlineObject> {
+        float.set_spin(xfrm_spin(canvas.child("wpc:whole")));
+        let mut children = Vec::new();
+        if let Some(bg) = canvas.child("wpc:bg")
+            && let Some(sppr) = bg.child("wps:spPr").or_else(|| bg.child("wpc:spPr"))
+        {
+            let solid = |e: Option<&El>| {
+                e.and_then(|f| f.child("a:solidFill")).and_then(|f| f.child("a:srgbClr")).and_then(|c| c.attr("val")).and_then(Rgb::parse)
+            };
+            let fill = solid(Some(sppr));
+            let ln = sppr.child("a:ln");
+            let stroke = solid(ln);
+            let stroke_width = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0);
+            if fill.is_some() || stroke.is_some() {
+                children.push(wordcraft_doc::para::GroupChild {
+                    x: 0.0,
+                    y: 0.0,
+                    obj: InlineObject::Shape {
+                        kind: ShapeKind::Rectangle,
+                        w,
+                        h,
+                        fill,
+                        stroke,
+                        stroke_width,
+                        float: Float::default(),
+                        story: None,
+                        freeform: None,
+                        effects: Default::default(),
+                    },
+                });
+            }
+        }
+        self.group_members(sc, canvas, rels, (0.0, 0.0, 1.0, 1.0), 0, &mut children);
+        if children.is_empty() {
+            return None;
+        }
+        Some(InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, is_canvas: true })
     }
 
     /// The members of group `g` into `out`, mapped into the outermost group's space by `t`

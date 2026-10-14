@@ -294,6 +294,9 @@ pub enum InlineObject {
         ch_w: f32,
         ch_h: f32,
         children: Vec<GroupChild>,
+        /// Whether this group was created as or loaded from a Drawing Canvas (`wpc:wordprocessingCanvas`).
+        #[serde(default, skip_serializing_if = "is_false")]
+        is_canvas: bool,
     },
     /// A field: `instr` is the field code (`PAGE`, `NUMPAGES`, `DATE \@ "M/d/yyyy"`, `TOC \o "1-3"`…);
     /// `result` the cached display text.
@@ -389,6 +392,10 @@ impl InlineObject {
     /// A picture, chart or diagram, shape, text box or group: something drawn with a frame, sized and wrapped.
     pub fn is_drawing(&self) -> bool {
         matches!(self, InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })
+    }
+    /// Whether this object is a Drawing Canvas (`wpc:wordprocessingCanvas`).
+    pub fn is_canvas(&self) -> bool {
+        matches!(self, InlineObject::Group { is_canvas: true, .. })
     }
     /// A drawing's size and placement.
     pub fn frame(&self) -> Option<(f32, f32, &Float)> {

@@ -1050,6 +1050,7 @@ fn groups_round_trip() {
             GroupChild { x: 150.0, y: 10.0, obj: oval.clone() },
             GroupChild { x: 50.0, y: 60.0, obj: tb },
         ],
+        is_canvas: false,
     };
     let mut p = Paragraph::with_text("grouped ", CharProps::default());
     let end = p.len();
@@ -1057,7 +1058,7 @@ fn groups_round_trip() {
     d.body = vec![para_block(p)];
     let r = rt(&d);
     let got = paras(&r);
-    let InlineObject::Group { w, h, float: f, ch_w, ch_h, children } = &got[0].objects[0] else { panic!("{:?}", got[0].objects) };
+    let InlineObject::Group { w, h, float: f, ch_w, ch_h, children, .. } = &got[0].objects[0] else { panic!("{:?}", got[0].objects) };
     assert_eq!((*w, *h, *ch_w, *ch_h), (240.0, 120.0, 200.0, 100.0));
     assert_eq!(*f, float);
     assert_eq!(children.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>(), [(0.0, 0.0), (150.0, 10.0), (50.0, 60.0)]);
@@ -1509,6 +1510,7 @@ fn rotation_and_flips_round_trip() {
         ch_w: 120.0,
         ch_h: 60.0,
         children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::Ellipse, Float { rot: 10.0, ..Default::default() }) }],
+        is_canvas: false,
     };
     let mut p = Paragraph::with_text("turned ", CharProps::default());
     for o in [pic, tri, flipped, group] {
@@ -1564,6 +1566,7 @@ fn rotated_group_and_shadow_rotation_round_trip() {
             wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: member(true) },
             wordcraft_doc::para::GroupChild { x: 60.0, y: 0.0, obj: member(false) },
         ],
+        is_canvas: false,
     };
     let mut p = Paragraph::with_text("g", CharProps::default());
     p.insert_object(1, group, &CharProps::default()).unwrap();
@@ -1584,4 +1587,64 @@ fn rotated_group_and_shadow_rotation_round_trip() {
         })
         .collect();
     assert_eq!(got, [(20.0, Some(true)), (20.0, Some(false))]);
+}
+
+/// Gap #2: A Drawing Canvas (`wpc:wordprocessingCanvas`) comes back as it was saved: its
+/// size, placement, and members inside it survive, and Word's canvas markup is written.
+#[test]
+fn drawing_canvas_round_trip() {
+    use wordcraft_doc::para::GroupChild;
+    let mut d = Document::new();
+    let rect = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 80.0,
+        h: 40.0,
+        fill: Some(Rgb(10, 20, 30)),
+        stroke: Some(Rgb(100, 100, 100)),
+        stroke_width: 1.0,
+        float: Float::default(),
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    };
+    let float = Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 15.0, y: 25.0, ..Default::default() };
+    let canvas = InlineObject::Group {
+        w: 300.0,
+        h: 150.0,
+        float,
+        ch_w: 300.0,
+        ch_h: 150.0,
+        children: vec![GroupChild { x: 10.0, y: 10.0, obj: rect }],
+        is_canvas: true,
+    };
+    let mut p = Paragraph::with_text("Canvas paragraph: ", CharProps::default());
+    let end = p.len();
+    p.insert_object(end, canvas, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("wpc:wordprocessingCanvas"), "should contain wpc:wordprocessingCanvas: {xml}");
+    assert!(xml.contains("http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"), "should declare wpc namespace: {xml}");
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r);
+    let InlineObject::Group { w, h, float: f, ch_w, ch_h, children, is_canvas } = &got[0].objects[0] else {
+        panic!("expected group: {:?}", got[0].objects);
+    };
+    assert!(*is_canvas, "is_canvas must be true");
+    assert_eq!((*w, *h, *ch_w, *ch_h), (300.0, 150.0, 300.0, 150.0));
+    assert_eq!(f.wrap, Wrap::TopAndBottom);
+    assert_eq!(children.len(), 1);
+    assert_eq!((children[0].x, children[0].y), (10.0, 10.0));
+    match &children[0].obj {
+        InlineObject::Shape { kind, w, h, fill, .. } => {
+            assert_eq!(*kind, ShapeKind::Rectangle);
+            assert_eq!((*w, *h), (80.0, 40.0));
+            assert_eq!(*fill, Some(Rgb(10, 20, 30)));
+        }
+        o => panic!("unexpected child: {o:?}"),
+    }
 }

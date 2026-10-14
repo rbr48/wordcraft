@@ -518,46 +518,74 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children } => {
+            InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children, is_canvas } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
-                let name = format!("Group {docpr}");
+                let name = if *is_canvas { format!("Canvas {docpr}") } else { format!("Group {docpr}") };
                 self.drawing_open(w, float, *gw, *gh, &docpr, &name, "");
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
-                w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup")]);
-                // ECMA-376 §20.1.7.6 (`a:xfrm` of a group): the members' space `a:chOff`/`a:chExt`
-                // maps onto the group's `a:off`/`a:ext`.
-                w.open("wpg:wgp", &[]);
-                w.empty("wpg:cNvGrpSpPr", &[]);
-                w.open("wpg:grpSpPr", &[]);
-                w.open("a:xfrm", &spin_attrs(float.spin()).iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
-                w.empty("a:off", &[("x", "0"), ("y", "0")]);
-                w.empty("a:ext", &[("cx", &emu(gw.max(0.0))), ("cy", &emu(gh.max(0.0)))]);
-                w.empty("a:chOff", &[("x", "0"), ("y", "0")]);
-                w.empty("a:chExt", &[("cx", &emu(ch_w.max(0.0))), ("cy", &emu(ch_h.max(0.0)))]);
-                w.close("a:xfrm");
-                w.close("wpg:grpSpPr");
-                for c in children.iter().take(wordcraft_doc::para::MAX_GROUP_CHILDREN) {
-                    let at = (c.x, c.y);
-                    match &c.obj {
-                        InlineObject::Image { media, .. } => {
-                            if let Some(file) = self.media_files.get(media).cloned() {
-                                self.pic(w, &c.obj, &file, at, rels);
+                if *is_canvas {
+                    w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas")]);
+                    w.open("wpc:wordprocessingCanvas", &[]);
+                    w.open("wpc:bg", &[]);
+                    w.open("wpc:spPr", &[]);
+                    w.empty("a:noFill", &[]);
+                    w.close("wpc:spPr");
+                    w.close("wpc:bg");
+                    w.empty("wpc:whole", &[]);
+                    for c in children.iter().take(wordcraft_doc::para::MAX_GROUP_CHILDREN) {
+                        let at = (c.x, c.y);
+                        match &c.obj {
+                            InlineObject::Image { media, .. } => {
+                                if let Some(file) = self.media_files.get(media).cloned() {
+                                    self.pic(w, &c.obj, &file, at, rels);
+                                }
                             }
+                            InlineObject::Shape { .. } => {
+                                let id = self.next_docpr();
+                                self.wsp(w, &c.obj, Some(&id), at, rels, depth);
+                            }
+                            _ => {}
                         }
-                        InlineObject::Shape { .. } => {
-                            let id = self.next_docpr();
-                            self.wsp(w, &c.obj, Some(&id), at, rels, depth);
-                        }
-                        _ => {}
                     }
+                    w.close("wpc:wordprocessingCanvas");
+                    w.close("a:graphicData");
+                } else {
+                    w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup")]);
+                    // ECMA-376 §20.1.7.6 (`a:xfrm` of a group): the members' space `a:chOff`/`a:chExt`
+                    // maps onto the group's `a:off`/`a:ext`.
+                    w.open("wpg:wgp", &[]);
+                    w.empty("wpg:cNvGrpSpPr", &[]);
+                    w.open("wpg:grpSpPr", &[]);
+                    w.open("a:xfrm", &spin_attrs(float.spin()).iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+                    w.empty("a:off", &[("x", "0"), ("y", "0")]);
+                    w.empty("a:ext", &[("cx", &emu(gw.max(0.0))), ("cy", &emu(gh.max(0.0)))]);
+                    w.empty("a:chOff", &[("x", "0"), ("y", "0")]);
+                    w.empty("a:chExt", &[("cx", &emu(ch_w.max(0.0))), ("cy", &emu(ch_h.max(0.0)))]);
+                    w.close("a:xfrm");
+                    w.close("wpg:grpSpPr");
+                    for c in children.iter().take(wordcraft_doc::para::MAX_GROUP_CHILDREN) {
+                        let at = (c.x, c.y);
+                        match &c.obj {
+                            InlineObject::Image { media, .. } => {
+                                if let Some(file) = self.media_files.get(media).cloned() {
+                                    self.pic(w, &c.obj, &file, at, rels);
+                                }
+                            }
+                            InlineObject::Shape { .. } => {
+                                let id = self.next_docpr();
+                                self.wsp(w, &c.obj, Some(&id), at, rels, depth);
+                            }
+                            _ => {}
+                        }
+                    }
+                    w.close("wpg:wgp");
+                    w.close("a:graphicData");
                 }
-                w.close("wpg:wgp");
-                w.close("a:graphicData");
                 w.close("a:graphic");
                 w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
                 w.close("w:drawing");

@@ -798,9 +798,36 @@ fn smart_art(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 fn drawing_canvas(s: &mut Session, v: &Value) -> CmdResult {
-    let w = p::f32(v, "width").unwrap_or(400.0);
-    let h = p::f32(v, "height").unwrap_or(250.0);
-    shape(s, &json!({"kind": "rectangle", "width": w, "height": h, "fill": "FAFAFA", "stroke": "CCCCCC"}))
+    let w = p::f32(v, "width").unwrap_or(400.0).clamp(10.0, 2000.0);
+    let h = p::f32(v, "height").unwrap_or(250.0).clamp(10.0, 2000.0);
+    let fill = p::str(v, "fill").and_then(Rgb::parse).or(Some(Rgb(0xFA, 0xFA, 0xFA)));
+    let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0xCC, 0xCC, 0xCC)));
+    let props = s.typing_props();
+    let at = delete_selection(s)?;
+    let bg_shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w,
+        h,
+        fill,
+        stroke,
+        stroke_width: 1.0,
+        float: Float::default(),
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    };
+    let obj = InlineObject::Group {
+        w,
+        h,
+        float: Float { wrap: Wrap::TopAndBottom, ..Default::default() },
+        ch_w: w,
+        ch_h: h,
+        children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: bg_shape }],
+        is_canvas: true,
+    };
+    let end = s.doc.insert_object(&at, obj, &props)?;
+    s.sel = Selection { anchor: at, focus: end };
+    sel_result(s)
 }
 
 fn online_video(s: &mut Session, v: &Value) -> CmdResult {

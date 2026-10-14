@@ -3072,6 +3072,7 @@ fn rotated_group_turns_its_members_and_their_shadows() {
         ch_w: 120.0,
         ch_h: 40.0,
         children: vec![GroupChild { x: 0.0, y: 0.0, obj: member(false, 0.0) }, GroupChild { x: 60.0, y: 0.0, obj: member(true, 10.0) }],
+        is_canvas: false,
     };
     let mut d = Document::from_text("Text under the group.");
     d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
@@ -3285,6 +3286,7 @@ fn group_text_boxes_are_placed_and_hit_testable() {
         ch_w: 300.0,
         ch_h: 100.0,
         children: vec![wordcraft_doc::para::GroupChild { x: 10.0, y: 10.0, obj: child_box }],
+        is_canvas: false,
     };
     let mut host = wordcraft_doc::Paragraph::new();
     host.insert_object(0, group, &Default::default()).unwrap();

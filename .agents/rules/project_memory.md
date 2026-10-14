@@ -291,3 +291,20 @@ description: Comprehensive project memory, architecture guide, and operational r
     - **Test Coverage & Verification**:
       - 4 dedicated unit tests in `crates/ui-egui/src/dialogs.rs`: `drop_cap_dialog_opens_and_sets_options`, `page_numbers_dialog_opens_and_sets_format`, `autocorrect_dialog_opens_and_manages_entries`, `cross_reference_dialog_opens_and_inserts_ref`.
       - All 6 CI quality gates pass cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **Drawing Canvas (`wpc:wordprocessingCanvas`) Roundtrip & Ink Preservation (M15.1 / Gap #2)**:
+    - **Document AST Distinction (`crates/doc/src/para.rs`)**:
+      - Added `is_canvas: bool` to `InlineObject::Group` with `#[serde(default, skip_serializing_if = "is_false")]` and helper `is_canvas(&self) -> bool`.
+      - Differentiates Word drawing canvases (`wpc:wordprocessingCanvas`) from standard DrawingML group shapes (`wpg:wgp`) without duplicating layout or hit-test logic.
+    - **OOXML Namespace & Fallback Support (`crates/docx/src/xml.rs`, `crates/docx/src/read/story.rs`)**:
+      - Registered `wpc` (`http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas`) in `NAMESPACES` and `body_ns()`.
+      - Enhanced `children_of_choice` fallback routing: when an `mc:Choice` element requires `w14` containing `w14:contentPart` (Word ink) and an `mc:Fallback` exists, routes to the Fallback element to extract the rendered ink picture, preventing ink notes and handwriting from being silently discarded.
+      - Implemented `read_canvas`: parses canvas background (`wpc:bg`) solid fill and stroke, reading member shapes, pictures, textboxes, connectors, and child groups into `GroupChild` structures with `is_canvas = true`.
+    - **OOXML Writer (`crates/docx/src/write/story.rs`)**:
+      - When writing `InlineObject::Group`: writes `<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"><wpc:wordprocessingCanvas>` with background (`wpc:bg`) and child shapes/pictures when `is_canvas == true`; writes standard `wpg:wgp` when `is_canvas == false`.
+    - **Drawing Canvas Command (`crates/engine/src/cmd/insert.rs`)**:
+      - Updated `drawing.canvas` (`insert.drawingCanvas`) command to generate native `InlineObject::Group` with `is_canvas: true` and an initial background rectangle child.
+    - **Test Coverage & Verification**:
+      - Added `word_drawing_canvas_fixture` and `word_ink_alternate_content_fallback` in `crates/docx/tests/fixtures.rs` (36/36 tests passing).
+      - Added `drawing_canvas_round_trip` in `crates/docx/tests/roundtrip.rs` (39/39 tests passing).
+      - Added `insert_drawing_canvas_creates_group_with_is_canvas` in `crates/engine/src/tests.rs`.
+      - All 6 CI quality gates pass cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).

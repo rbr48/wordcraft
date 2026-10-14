@@ -1027,7 +1027,7 @@ fn group(s: &mut Session, _: &Value) -> CmdResult {
         .collect();
     let mut float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| *f).unwrap_or_default();
     float.set_spin(Spin::default());
-    let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children };
+    let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, is_canvas: false };
     // Take the members out, last first so the earlier positions hold, and put the group where
     // the first one was.
     let len = wordcraft_doc::para::OBJ.len_utf8();
