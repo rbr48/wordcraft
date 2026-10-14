@@ -106,6 +106,69 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
         (None, Some(b)) => w.empty("w:lang", &[("w:bidi", b)]),
         (None, None) => {}
     }
+    // Word 2010 text effects (`w14`, MS-DOCX). They follow the standard properties, and `w14` is
+    // declared ignorable, so older readers skip them.
+    if let Some(fx) = &c.text_effects {
+        text_effects(w, fx, c.color);
+    }
+}
+
+/// `w14` text effects for a run, in the order of MS-DOCX's `EG_RPrTextEffects`: shadow, outline,
+/// then fill. An outline that is off is written as `noFill`, and an off shadow is left out. An off
+/// gradient is written as the run's own colour, so it overrides an inherited gradient.
+fn text_effects(w: &mut W, fx: &wordcraft_doc::text_effects::TextEffects, color: Option<TextColor>) {
+    if let Some(sh) = fx.shadow.filter(|s| s.on) {
+        // DrawingML measures the distance in EMU and the direction in 60000ths of a degree,
+        // clockwise from the positive x axis, so straight down is 90 degrees.
+        let max = wordcraft_doc::text_effects::MAX_SHADOW_OFFSET;
+        let (dx, dy) = (sh.dx.clamp(-max, max), sh.dy.clamp(-max, max));
+        let dist = wordcraft_geom::to_emu(dx.hypot(dy)).to_string();
+        let dir = ((dy.atan2(dx).to_degrees().rem_euclid(360.0)) * 60_000.0).round() as i64;
+        w.open("w14:shadow", &[("w14:blurRad", "0"), ("w14:dist", &dist), ("w14:dir", &dir.to_string())]);
+        w.empty("w14:srgbClr", &[("w14:val", &sh.color.hex())]);
+        w.close("w14:shadow");
+    }
+    if let Some(o) = fx.outline {
+        let width = wordcraft_geom::to_emu(o.width.clamp(0.0, wordcraft_doc::text_effects::MAX_OUTLINE_WIDTH)).to_string();
+        if o.on {
+            w.open("w14:textOutline", &[("w14:w", &width), ("w14:cap", "flat"), ("w14:cmpd", "sng"), ("w14:algn", "ctr")]);
+            w.open("w14:solidFill", &[]);
+            w.empty("w14:srgbClr", &[("w14:val", &o.color.hex())]);
+            w.close("w14:solidFill");
+            w.empty("w14:round", &[]);
+            w.close("w14:textOutline");
+        } else {
+            w.open("w14:textOutline", &[]);
+            w.empty("w14:noFill", &[]);
+            w.close("w14:textOutline");
+        }
+    }
+    if let Some(g) = fx.fill {
+        if g.on && g.count >= 2 {
+            w.open("w14:textFill", &[]);
+            w.open("w14:gradFill", &[]);
+            w.open("w14:gsLst", &[]);
+            for st in g.used_stops() {
+                // Stop positions are in 1000ths of a percent: 100000 is the end.
+                let pos = (f64::from(st.pos.clamp(0.0, 1.0)) * 100_000.0).round() as i64;
+                w.open("w14:gs", &[("w14:pos", &pos.to_string())]);
+                w.empty("w14:srgbClr", &[("w14:val", &st.color.hex())]);
+                w.close("w14:gs");
+            }
+            w.close("w14:gsLst");
+            // Angles are in 60000ths of a degree, in [0, 360).
+            let ang = ((f64::from(g.angle.rem_euclid(360.0)) * 60_000.0).round() as i64) % 21_600_000;
+            w.empty("w14:lin", &[("w14:ang", &ang.to_string()), ("w14:scaled", "0")]);
+            w.close("w14:gradFill");
+            w.close("w14:textFill");
+        } else if let (false, Some(TextColor::Rgb(c))) = (g.on, color) {
+            w.open("w14:textFill", &[]);
+            w.open("w14:solidFill", &[]);
+            w.empty("w14:srgbClr", &[("w14:val", &c.hex())]);
+            w.close("w14:solidFill");
+            w.close("w14:textFill");
+        }
+    }
 }
 
 /// Does `c` produce any `w:rPr` content (besides a tracked change)?

@@ -39,6 +39,8 @@ pub struct ResolvedChar {
     pub shadow: bool,
     pub emboss: bool,
     pub engrave: bool,
+    /// Text effects (outline and shadow), already clamped.
+    pub text_effects: crate::text_effects::TextEffects,
     pub link: Option<String>,
     pub ins: Option<u32>,
     pub del: Option<u32>,
@@ -84,6 +86,7 @@ impl ResolvedChar {
             shadow: c.shadow.unwrap_or(false),
             emboss: c.emboss.unwrap_or(false),
             engrave: c.engrave.unwrap_or(false),
+            text_effects: c.text_effects.unwrap_or_default().clamped(),
             link: c.link.clone(),
             ins: c.ins,
             del: c.del,

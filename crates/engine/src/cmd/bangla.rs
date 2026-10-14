@@ -67,6 +67,27 @@ pub fn phonetic_transliterate(input: &str) -> String {
     transliterate_with(input, false)
 }
 
+/// Whole-word overrides that take precedence over the dictionary and the rules: conjunct and
+/// word spellings the rules do not produce. `kotha` and `bishwo` are here because the dictionary
+/// entry for kotha is কোঠা and the rules give বিশ্বো for bishwo.
+fn phonetic_override(lower: &str) -> Option<&'static str> {
+    match lower {
+        "jng" => Some("জ্ঞ"),
+        "kkh" => Some("ক্ষ"),
+        "sonar" => Some("সোনার"),
+        "shonar" => Some("সোনার"),
+        "du:kh" | "du:kho" | "dukho" => Some("দুঃখ"),
+        "du:khi" | "dukkhi" => Some("দুঃখী"),
+        "ut`sob" | "utsob" => Some("উৎসব"),
+        "hot`hat" | "hothat" => Some("হঠাৎ"),
+        "ki" => Some("কি"),
+        "koi" => Some("কই"),
+        "kotha" => Some("কথা"),
+        "bishwo" => Some("বিশ্ব"),
+        _ => None,
+    }
+}
+
 /// Transliterates with an explicit reading of a medial lowercase `o` after a consonant: `true`
 /// makes it the inherent vowel (`somoy` -> সময়), `false` makes it the vowel sign (`somoy` -> সোমোয়).
 fn transliterate_with(input: &str, inherent_medial_o: bool) -> String {
@@ -143,19 +164,8 @@ fn phonetic_word(word: &str, inherent_medial_o: bool) -> String {
 
     let lower = word.to_ascii_lowercase();
 
-    // Specific conjunct and word overrides
-    match lower.as_str() {
-        "jng" => return "জ্ঞ".into(),
-        "kkh" => return "ক্ষ".into(),
-        "sonar" => return "সোনার".into(),
-        "shonar" => return "সোনার".into(),
-        "du:kh" | "du:kho" | "dukho" => return "দুঃখ".into(),
-        "du:khi" | "dukkhi" => return "দুঃখী".into(),
-        "ut`sob" | "utsob" => return "উৎসব".into(),
-        "hot`hat" | "hothat" => return "হঠাৎ".into(),
-        "ki" => return "কি".into(),
-        "koi" => return "কই".into(),
-        _ => {}
+    if let Some(v) = phonetic_override(&lower) {
+        return v.into();
     }
 
     // 1. Exact match in full vocabulary database
@@ -1723,6 +1733,11 @@ pub fn phonetic_candidates(prefix: &str) -> Vec<String> {
     let lower = p.to_ascii_lowercase();
     let mut candidates = Vec::with_capacity(6);
 
+    // 0. Whole-word override: it outranks the dictionary (kotha -> কথা, not the vocabulary's কোঠা).
+    if let Some(v) = phonetic_override(&lower) {
+        candidates.push(v.to_string());
+    }
+
     // 1. Exact match in vocabulary (Top Priority for instant typing & suggestions)
     for &(k, v) in BANGLA_VOCAB {
         if k == lower && !candidates.iter().any(|c| c == v) {
@@ -2073,6 +2088,9 @@ mod tests {
         assert_eq!(phonetic_transliterate("achho"), "আছো");
         // A medial `o` stays the vowel sign by default, so existing spellings do not move.
         assert_eq!(phonetic_transliterate("tomra"), "তোমরা");
+        // Whole-word overrides are the first candidate, ahead of the dictionary entry for kotha.
+        assert_eq!(phonetic_candidates("kotha").first().map(String::as_str), Some("কথা"));
+        assert_eq!(phonetic_candidates("bishwo").first().map(String::as_str), Some("বিশ্ব"));
         // `mosor` is not in the dictionary, so the rules decide. A medial `o` is the vowel sign by
         // default and the inherent vowel under the other reading, which is offered as a candidate.
         assert_eq!(transliterate_with("mosor", false), "ম\u{09CB}স\u{09CB}\u{09B0}");

@@ -38,6 +38,8 @@ pub enum Draw {
         /// Byte range of `text` each glyph shows (one per glyph; a ligature's range covers all
         /// its characters). Empty when unknown: the PDF writer then guesses from the font.
         ranges: Vec<std::ops::Range<usize>>,
+        /// Text effects (outline, shadow) of the run; empty for labels, marks and leaders.
+        effects: wordcraft_doc::text_effects::TextEffects,
     },
     Fill {
         rect: Rect,
@@ -524,6 +526,7 @@ fn lines(
                 text: lab.text.clone(),
                 link: None,
                 ranges: Vec::new(),
+                effects: Default::default(),
             });
         }
         // Hyphen at a hyphenated line end.
@@ -542,6 +545,7 @@ fn lines(
                 text: "-".into(),
                 link: None,
                 ranges: Vec::new(),
+                effects: Default::default(),
             });
         }
         // Kashida elongations for justified Arabic text.
@@ -571,6 +575,8 @@ fn lines(
                             text: "ـ".repeat(count),
                             link: None,
                             ranges: Vec::new(),
+                            // The elongation is part of the run's letters, so it takes the run's outline and shadow.
+                            effects: st.rc.text_effects,
                         });
                     }
                     let thick = (st.size * 0.06).clamp(0.5, 4.0);
@@ -725,6 +731,7 @@ fn lines(
                     text,
                     link: rc.link.clone(),
                     ranges,
+                    effects: rc.text_effects,
                 });
             }
             // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
@@ -823,6 +830,7 @@ fn lines(
                 text: String::new(),
                 link: None,
                 ranges: Vec::new(),
+                effects: Default::default(),
             });
         }
         // Inline objects.
@@ -895,6 +903,8 @@ fn lines(
                         text: ruby.ruby.clone(),
                         link: None,
                         ranges: Vec::new(),
+                        // A phonetic guide is drawn plain: the base text's WordArt effects do not reach it.
+                        effects: Default::default(),
                     });
                 } else {
                     let ruby_start_x = match ruby.align.as_str() {
@@ -915,6 +925,8 @@ fn lines(
                         text: ruby.ruby.clone(),
                         link: None,
                         ranges: Vec::new(),
+                        // A phonetic guide is drawn plain: the base text's WordArt effects do not reach it.
+                        effects: Default::default(),
                     });
                 }
             }
@@ -1058,6 +1070,7 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
                 link: None,
                 // Equation text maps back through the font (no per-glyph ranges from the math layout).
                 ranges: Vec::new(),
+                effects: Default::default(),
             }),
             MItem::Rect { x: rx, y, w, h, color } => out.push(Draw::Fill { rect: Rect::new(x + rx, base - y - h, *w, *h), color: *color, alpha }),
             MItem::Line { x0, y0, x1, y1, width, color, dotted } => out.push(Draw::Line {
@@ -1253,6 +1266,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
         text: text.clone(),
         link: None,
         ranges: Vec::new(),
+        effects: Default::default(),
     })
 }
 

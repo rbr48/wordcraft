@@ -3281,6 +3281,42 @@ fn pdf_reflow_opens_pdf_via_open_bytes() {
     assert_eq!(p.props.style.as_deref(), Some("Heading2"), "14pt font mapped to Heading2");
 }
 
+/// The text effects of the first run of the first paragraph.
+fn first_run_effects(s: &Session) -> wordcraft_doc::text_effects::TextEffects {
+    match &*s.doc.body[0] {
+        wordcraft_doc::Block::Para(p) => p.runs[0].props.text_effects.unwrap_or_default(),
+        _ => panic!("first block is not a paragraph"),
+    }
+}
+
+#[test]
+fn text_outline_and_shadow_merge_per_effect_and_switch_off() {
+    let mut s = Session::new(Document::from_text("WordArt"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.textShadow", json!({"color": "FF0000", "dx": 3, "dy": 3}));
+    run(&mut s, "format.textOutline", json!({"color": "00FF00", "width": 1.5}));
+    let fx = first_run_effects(&s);
+    let (o, sh) = (fx.outline.expect("outline"), fx.shadow.expect("shadow"));
+    assert!(o.on && o.color == wordcraft_doc::props::Rgb(0, 255, 0) && o.width == 1.5, "{o:?}");
+    assert!(sh.on && sh.color == wordcraft_doc::props::Rgb(255, 0, 0) && sh.dx == 3.0 && sh.dy == 3.0, "{sh:?}");
+    // Switching the outline off keeps the shadow that was set on its own.
+    run(&mut s, "format.textOutline", json!({"off": true}));
+    let fx = first_run_effects(&s);
+    assert!(!fx.outline.expect("outline").on, "the outline is off");
+    assert!(fx.shadow.expect("shadow").on, "the shadow is kept");
+}
+
+#[test]
+fn text_effect_commands_reject_bad_parameters() {
+    let mut s = Session::new(Document::from_text("x"));
+    run(&mut s, "select.all", json!({}));
+    assert!(s.run("format.textOutline", &json!({"width": 99})).is_err());
+    assert!(s.run("format.textOutline", &json!({"width": -1})).is_err());
+    assert!(s.run("format.textOutline", &json!({"color": "nope"})).is_err());
+    assert!(s.run("format.textShadow", &json!({"dx": 500})).is_err());
+    assert!(s.run("format.textShadow", &json!({"color": "xyz"})).is_err());
+}
+
 #[test]
 fn caption_command_supports_above_below_and_exclude_label() {
     let mut s = Session::new(wordcraft_doc::Document::new());
@@ -3295,6 +3331,60 @@ fn caption_command_supports_above_below_and_exclude_label() {
     run(&mut s, "references.caption", json!({"label": "Table", "text": "Second Table", "position": "below", "excludeLabel": true}));
     let plain2 = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
     assert!(plain2.contains("2: Second Table"), "Caption with excludeLabel should omit Table prefix: {plain2}");
+}
+
+#[test]
+fn text_fill_command_sets_a_gradient_and_rejects_bad_stops() {
+    let mut s = Session::new(Document::from_text("WordArt"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.textFill", json!({"stops": [{"pos": 0, "color": "FF0000"}, {"pos": 100, "color": "0000FF"}], "angle": 0}));
+    let g = first_run_effects(&s).fill.expect("the gradient");
+    assert!(g.on && g.count == 2 && g.angle == 0.0, "{g:?}");
+    assert_eq!(g.used_stops()[1].color, wordcraft_doc::props::Rgb(0, 0, 255));
+    run(&mut s, "format.textFill", json!({"off": true}));
+    assert!(!first_run_effects(&s).fill.expect("off").on, "the gradient is off");
+    let ok = json!({"color": "000000"});
+    let two = |a: &str, b: &str| json!({"stops": [{"pos": 0, "color": a}, {"pos": 100, "color": b}]});
+    let nine: Vec<serde_json::Value> = (0..9).map(|i| json!({"pos": i * 12, "color": "000000"})).collect();
+    let bad = [
+        json!({"stops": [{"pos": 0, "color": "FF0000"}]}),
+        json!({"stops": [{"pos": 150, "color": "FF0000"}, {"pos": 0, "color": "000000"}]}),
+        json!({"stops": [{"pos": 0, "color": "zz"}, {"pos": 1, "color": "000000"}]}),
+        json!({"stops": "x"}),
+        json!({"stops": nine}),
+        json!({"stops": [{"pos": 0, "color": "000000"}, {"pos": 1, "color": "000000"}], "angle": 400}),
+        two("nope", "000000"),
+    ];
+    for b in bad {
+        assert!(s.run("format.textFill", &b).is_err(), "{b}");
+    }
+    assert!(s.run("format.textFill", &ok).is_err(), "no stops is not a gradient");
+}
+
+#[test]
+fn text_warp_command_sets_a_preset_and_rejects_bad_parameters() {
+    use wordcraft_doc::text_effects::WarpPreset;
+    let mut s = Session::new(Document::from_text("WordArt"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.textWarp", json!({"preset": "textArchUp"}));
+    let w = first_run_effects(&s).warp.expect("the warp");
+    assert!(w.on && w.preset == WarpPreset::TextArchUp && w.amount == 1.0, "{w:?}");
+    run(&mut s, "format.textWarp", json!({"preset": "TEXTWAVE1", "amount": 0.25}));
+    let w = first_run_effects(&s).warp.expect("the warp");
+    assert_eq!((w.preset, w.amount), (WarpPreset::TextWave1, 0.25), "names ignore case");
+    run(&mut s, "format.textWarp", json!({"off": true}));
+    assert!(!first_run_effects(&s).warp.expect("off").on, "the warp is off");
+    let bad = [
+        json!({}),
+        json!({"preset": "textPlain"}),
+        json!({"preset": 3}),
+        json!({"preset": "textWave1", "amount": 2}),
+        json!({"preset": "textWave1", "amount": -0.5}),
+        json!({"preset": "textWave1", "amount": "x"}),
+    ];
+    for b in bad {
+        assert!(s.run("format.textWarp", &b).is_err(), "{b}");
+    }
 }
 
 #[test]

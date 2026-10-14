@@ -4,6 +4,9 @@ use serde_json::{Value, json};
 use wordcraft_doc::Pos;
 use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
+use wordcraft_doc::text_effects::{
+    GradientStop, MAX_GRADIENT_STOPS, MAX_OUTLINE_WIDTH, MAX_SHADOW_OFFSET, TextEffects, TextGradient, TextOutline, TextShadow, TextWarp, WarpPreset,
+};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -92,6 +95,15 @@ pub fn specs() -> Vec<CommandSpec> {
             toggle(s, v, |r| r.outline, |c, on| c.outline = Some(on))
         }),
         CommandSpec::new("format.shadow", "Shadow", "Home › Font › Text Effects", |s, v| toggle(s, v, |r| r.shadow, |c, on| c.shadow = Some(on))),
+        CommandSpec::new("format.textOutline", "Text Outline", "WordArt Styles › Text Outline", text_outline)
+            .params(r#"{"color"?: "RRGGBB", "width"?: points (0 to 10), "off"?: bool}"#),
+        CommandSpec::new("format.textFill", "Text Fill", "WordArt Styles › Text Fill", text_fill)
+            .params(r#"{"stops": [{"pos": 0 to 100 (percent), "color": "RRGGBB"}] (2 to 8 stops), "angle"?: degrees (0 left to right, 90 top to bottom), "off"?: bool}"#),
+        CommandSpec::new("format.textShadow", "Text Shadow", "WordArt Styles › Text Effects", text_shadow)
+            .params(r#"{"color"?: "RRGGBB", "dx"?: points (-50 to 50), "dy"?: points (-50 to 50), "off"?: bool}"#),
+        CommandSpec::new("format.textWarp", "Text Warp", "WordArt Styles › Transform", text_warp).params(
+            r#"{"preset": "textArchUp" | "textArchDown" | "textCircle" | "textChevron" | "textChevronInverted" | "textWave1" | "textDoubleWave1" | "textInflate" | "textDeflate" | "textSlantUp" | "textSlantDown", "amount"?: 0 to 1 (1 is the preset's full bend), "off"?: bool}"#,
+        ),
         CommandSpec::new("format.emboss", "Emboss", "Home › Font › Font", |s, v| toggle(s, v, |r| r.emboss, |c, on| c.emboss = Some(on))),
         CommandSpec::new("format.engrave", "Engrave", "Home › Font › Font", |s, v| toggle(s, v, |r| r.engrave, |c, on| c.engrave = Some(on))),
         CommandSpec::new("format.font", "Font", "Home › Font", font).key("Mod+Shift+F").params(r#"{"name": string}"#),
@@ -512,6 +524,93 @@ fn color(s: &mut Session, v: &Value) -> CmdResult {
     let c = p::req_str(v, "color")?;
     let tc = TextColor::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB or auto".into()))?;
     apply(s, &|x| x.color = Some(tc))
+}
+
+/// Text Outline: a stroke around the selected text. `off` removes it; `width` is in points.
+fn text_outline(s: &mut Session, v: &Value) -> CmdResult {
+    let on = !p::bool(v, "off").unwrap_or(false);
+    let color = match p::str(v, "color") {
+        Some(c) => Rgb::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB".into()))?,
+        None => Rgb::BLACK,
+    };
+    let width = p::f32(v, "width").unwrap_or(0.75);
+    if !width.is_finite() || !(0.0..=MAX_OUTLINE_WIDTH).contains(&width) {
+        return Err(CmdError::Params("width must be 0 to 10 points".into()));
+    }
+    let patch = TextEffects { outline: Some(TextOutline { on, color, width }), ..Default::default() };
+    // The closure runs on each run's own properties, so it merges the one effect it sets.
+    apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
+}
+
+/// Text Fill, gradient: the selected text is painted with a linear gradient through its stops, in
+/// direction `angle` (degrees: 0 runs left to right, 90 top to bottom). `off` removes it.
+fn text_fill(s: &mut Session, v: &Value) -> CmdResult {
+    let on = !p::bool(v, "off").unwrap_or(false);
+    let mut stops = [GradientStop { pos: 0.0, color: Rgb::BLACK }; MAX_GRADIENT_STOPS];
+    let mut count = 0usize;
+    if on {
+        let list = v.get("stops").and_then(Value::as_array).ok_or_else(|| CmdError::Params("stops must be a list of {pos, color}".into()))?;
+        if !(2..=MAX_GRADIENT_STOPS).contains(&list.len()) {
+            return Err(CmdError::Params(format!("a gradient needs 2 to {MAX_GRADIENT_STOPS} stops")));
+        }
+        for (i, st) in list.iter().enumerate() {
+            let pct = st.get("pos").and_then(Value::as_f64).ok_or_else(|| CmdError::Params("each stop needs a pos, 0 to 100".into()))?;
+            if !pct.is_finite() || !(0.0..=100.0).contains(&pct) {
+                return Err(CmdError::Params("stop positions are 0 to 100 percent".into()));
+            }
+            let color = st
+                .get("color")
+                .and_then(Value::as_str)
+                .and_then(Rgb::parse)
+                .ok_or_else(|| CmdError::Params("each stop needs a color, RRGGBB".into()))?;
+            stops[i] = GradientStop { pos: (pct / 100.0) as f32, color };
+        }
+        count = list.len();
+    }
+    let angle = p::f32(v, "angle").unwrap_or(90.0);
+    if !angle.is_finite() || !(0.0..=360.0).contains(&angle) {
+        return Err(CmdError::Params("angle must be 0 to 360 degrees".into()));
+    }
+    let patch = TextEffects { fill: Some(TextGradient { on, stops, count: count as u8, angle }), ..Default::default() };
+    apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
+}
+
+/// Text Shadow: a copy of the selected text offset behind it. `off` removes it.
+fn text_shadow(s: &mut Session, v: &Value) -> CmdResult {
+    let on = !p::bool(v, "off").unwrap_or(false);
+    let color = match p::str(v, "color") {
+        Some(c) => Rgb::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB".into()))?,
+        None => Rgb::BLACK,
+    };
+    let (dx, dy) = (p::f32(v, "dx").unwrap_or(2.0), p::f32(v, "dy").unwrap_or(2.0));
+    let ok = |d: f32| d.is_finite() && (-MAX_SHADOW_OFFSET..=MAX_SHADOW_OFFSET).contains(&d);
+    if !ok(dx) || !ok(dy) {
+        return Err(CmdError::Params("dx and dy must be -50 to 50 points".into()));
+    }
+    let patch = TextEffects { shadow: Some(TextShadow { on, color, dx, dy }), ..Default::default() };
+    apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
+}
+
+/// Text Warp (Word's Transform): bends the selected text along a preset, `amount` 0 to 1 of the
+/// preset's full bend. `off` makes the text flat again; it needs no preset.
+fn text_warp(s: &mut Session, v: &Value) -> CmdResult {
+    let on = !p::bool(v, "off").unwrap_or(false);
+    let preset = match p::str(v, "preset") {
+        Some(name) => WarpPreset::parse(name).ok_or_else(|| CmdError::Params(format!("unknown warp preset `{name}`")))?,
+        None if !on => WarpPreset::TextArchUp,
+        None => return Err(CmdError::Params(format!("preset is required: {}", WarpPreset::ALL.map(WarpPreset::name).join(", ")))),
+    };
+    // A given amount must be a number; left out, it is the full bend.
+    let amount = match v.get("amount") {
+        None => 1.0,
+        Some(a) => a
+            .as_f64()
+            .map(|x| x as f32)
+            .filter(|x| x.is_finite() && (0.0..=1.0).contains(x))
+            .ok_or_else(|| CmdError::Params("amount must be a number from 0 to 1".into()))?,
+    };
+    let patch = TextEffects { warp: Some(TextWarp { on, preset, amount }), ..Default::default() };
+    apply(s, &|c| c.text_effects = Some(c.text_effects.unwrap_or_default().merged(&patch)))
 }
 
 fn highlight(s: &mut Session, v: &Value) -> CmdResult {

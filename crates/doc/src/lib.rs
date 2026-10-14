@@ -29,6 +29,7 @@ pub mod resolve;
 pub mod section;
 pub mod styles;
 pub mod table;
+pub mod text_effects;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

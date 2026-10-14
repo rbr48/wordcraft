@@ -78,7 +78,7 @@ refused, so check the spelling. Lengths are points; `[r, g, b]` is a colour as t
 | `scale` | number | horizontal scale, percent (100 = normal) |
 | `position` | number | raised (positive) or lowered (negative), points |
 | `kern` | number | kern fonts at or above this size, points; 0 = off |
-| `textEffects` | object | WordArt `fill`, `outline`, `shadow`, `glow`, `reflection` (see `crates/doc/src/wordart.rs`) |
+| `textEffects` | object | WordArt `outline`, `shadow`, `fill` (a gradient), and `warp` (a preset from the DrawingML names, with an `amount` from 0 to 1) (see `crates/doc/src/text_effects.rs`) |
 | `lang` | string | BCP 47 language tag (proofing) |
 | `rtl` | bool | right-to-left run |
 | `cs` | bool | format the whole run with the complex-script properties |

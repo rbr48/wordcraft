@@ -170,6 +170,54 @@ impl PropCtx {
                     c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                     c.lang_bidi = k.attr("w:bidi").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                 }
+                // Word 2010 text effects (MS-DOCX). An outline is on unless it is `noFill`.
+                "w14:textOutline" => {
+                    let on = k.child("w14:noFill").is_none();
+                    let color = k
+                        .child("w14:solidFill")
+                        .and_then(|f| f.child("w14:srgbClr"))
+                        .and_then(|c| c.attr("w14:val"))
+                        .and_then(Rgb::parse)
+                        .unwrap_or(Rgb::BLACK);
+                    let width = k.attr("w14:w").and_then(|v| v.parse::<i64>().ok()).map(wordcraft_geom::emu).unwrap_or(0.75);
+                    c.text_effects.get_or_insert_with(Default::default).outline = Some(wordcraft_doc::text_effects::TextOutline { on, color, width });
+                }
+                "w14:shadow" => {
+                    let emu = |name: &str| k.attr(name).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+                    let dist = wordcraft_geom::emu(emu("w14:dist"));
+                    let dir = (emu("w14:dir") as f32 / 60_000.0).to_radians();
+                    let color = k.child("w14:srgbClr").and_then(|c| c.attr("w14:val")).and_then(Rgb::parse).unwrap_or(Rgb::BLACK);
+                    let (dx, dy) = (dist * dir.cos(), dist * dir.sin());
+                    c.text_effects.get_or_insert_with(Default::default).shadow =
+                        Some(wordcraft_doc::text_effects::TextShadow { on: true, color, dx, dy });
+                }
+                "w14:textFill" => {
+                    // A gradient is Word's Text Fill, gradient. A solid fill is the text's colour.
+                    use wordcraft_doc::text_effects::{GradientStop, MAX_GRADIENT_STOPS, TextGradient};
+                    // A path gradient (`w14:path`: radial and the like) is not modelled, so the run keeps its colour.
+                    let linear = k.child("w14:gradFill").filter(|g| g.child("w14:lin").is_some() || g.child("w14:path").is_none());
+                    if let Some(grad) = linear {
+                        let mut stops = [GradientStop { pos: 0.0, color: Rgb::BLACK }; MAX_GRADIENT_STOPS];
+                        let mut count = 0usize;
+                        for gs in k.child("w14:gradFill").and_then(|g| g.child("w14:gsLst")).into_iter().flat_map(|l| l.children("w14:gs")) {
+                            let pos = gs.attr("w14:pos").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) / 100_000.0;
+                            let col = gs.child("w14:srgbClr").and_then(|x| x.attr("w14:val")).and_then(Rgb::parse);
+                            if let (Some(col), true) = (col, count < MAX_GRADIENT_STOPS) {
+                                stops[count] = GradientStop { pos, color: col };
+                                count += 1;
+                            }
+                        }
+                        let angle =
+                            grad.child("w14:lin").and_then(|l| l.attr("w14:ang")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) / 60_000.0;
+                        let fill = TextGradient { on: count >= 2, stops, count: count as u8, angle };
+                        c.text_effects.get_or_insert_with(Default::default).fill = Some(fill);
+                    } else if let Some(col) =
+                        k.child("w14:solidFill").and_then(|f| f.child("w14:srgbClr")).and_then(|x| x.attr("w14:val")).and_then(Rgb::parse)
+                    {
+                        c.color = Some(TextColor::Rgb(col));
+                        c.text_effects.get_or_insert_with(Default::default).fill = Some(TextGradient::off());
+                    }
+                }
                 _ => {}
             }
         }

@@ -3464,6 +3464,27 @@ fn bare_code_wingdings_bullet_draws_its_square() {
     assert_eq!(label.text, expected);
 }
 
+#[test]
+fn text_effects_reach_the_glyph_draw_item() {
+    // A run's outline and shadow travel with its glyphs, so the renderers can draw them.
+    use wordcraft_doc::text_effects::{TextEffects, TextOutline, TextShadow};
+    let fx = TextEffects {
+        outline: Some(TextOutline { on: true, color: wordcraft_doc::props::Rgb(0, 255, 0), width: 1.5 }),
+        shadow: Some(TextShadow { on: true, color: wordcraft_doc::props::Rgb(255, 0, 0), dx: 2.0, dy: 2.0 }),
+        fill: None,
+        ..Default::default()
+    };
+    let mut d = Document::new();
+    let p = Paragraph::with_text("Effect", wordcraft_doc::CharProps { text_effects: Some(fx), ..Default::default() });
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let got = items
+        .iter()
+        .find_map(|i| if let display::Draw::Glyphs { text, effects, .. } = i { text.contains("Effect").then_some(*effects) } else { None });
+    assert_eq!(got, Some(fx));
+}
+
 /// M18.3 (Gap #10 & #17): A text box turned Down (rotate90) or Up (rotate270)
 /// places its paragraphs with `turn: TextDirection::Down` or `TextDirection::Up`.
 #[test]

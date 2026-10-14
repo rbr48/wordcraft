@@ -1160,6 +1160,22 @@ fn theme_font_wins_over_the_fixed_font() {
     assert_eq!(p[1].props_of_char(2).font.as_deref(), Some("Arial"));
 }
 
+#[test]
+fn path_gradient_text_fill_keeps_the_run_colour() {
+    // MS-DOCX `w14:path` gradients (radial and the like) are not modelled: the run keeps its own colour
+    // rather than being painted with a linear gradient through the same stops.
+    const ROOT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let doc = format!(
+        r#"<w:document {W_NS} xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body><w:p><w:r><w:rPr><w:color w:val="112233"/><w14:textFill><w14:gradFill><w14:gsLst><w14:gs w14:pos="0"><w14:srgbClr w14:val="FF0000"/></w14:gs><w14:gs w14:pos="100000"><w14:srgbClr w14:val="0000FF"/></w14:gs></w14:gsLst><w14:path w14:path="circle"><w14:fillToRect/></w14:path></w14:gradFill></w14:textFill></w:rPr><w:t>Path</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let bytes = zip(&[("_rels/.rels", ROOT.as_bytes()), ("word/document.xml", doc.as_bytes())]);
+    let d = wordcraft_docx::read(&bytes).expect("read");
+    let Block::Para(p) = &*d.body[0] else { panic!("expected a paragraph") };
+    let props = &p.runs[0].props;
+    assert_eq!(props.color, Some(TextColor::Rgb(Rgb(0x11, 0x22, 0x33))), "the run's own colour");
+    assert!(props.text_effects.and_then(|e| e.fill).is_none(), "no linear gradient from a path gradient");
+}
+
 /// Gap #2: Word saves ink in `mc:AlternateContent` with `mc:Choice Requires="w14"` containing
 /// `<w14:contentPart>` and `mc:Fallback` containing a drawing of the rendered ink shape.
 /// WordCraft selects the fallback drawing so ink is never lost or dropped.

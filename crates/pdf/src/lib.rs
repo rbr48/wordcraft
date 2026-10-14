@@ -37,7 +37,7 @@ use krilla::metadata::{DateTime, Metadata};
 use krilla::num::NormalizedF32;
 use krilla::outline::{Outline, OutlineNode};
 use krilla::page::PageSettings;
-use krilla::paint::{Fill, FillRule, LineCap, LineJoin, Stroke, StrokeDash};
+use krilla::paint::{Fill, FillRule, LineCap, LineJoin, LinearGradient, SpreadMethod, Stop, Stroke, StrokeDash};
 use krilla::surface::Surface;
 use krilla::tagging::{Artifact, ArtifactType, ContentTag, Identifier, Node, SpanTag, Tag, TagGroup, TagKind, TagTree};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
@@ -188,17 +188,152 @@ fn write(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], ou
     }
 }
 
-/// The outlines of `glyphs` (glyph id, pen position) at `size`, as one path in page coordinates.
-fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)]) -> Option<Path> {
+/// The bounds of `glyphs` (glyph id, pen position) at `size`, in page points.
+fn glyph_bounds(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)]) -> Option<kurbo::Rect> {
     let db = wordcraft_fonts::FontDb::global();
     let scale = f64::from(size) / face.upem.max(1.0);
-    let mut pb = PathBuilder::new();
+    let mut out: Option<kurbo::Rect> = None;
     for &(g, x, y) in glyphs {
-        // Outlines are in font units, y-down: scale to the size, move to the pen position.
-        let mut outline = (*db.outline(face, g)).clone();
+        let o = db.outline(face, g);
+        // A glyph with no outline (a space) has no bounds, and must not pull them to the origin.
+        if o.elements().is_empty() {
+            continue;
+        }
+        let mut outline = (*o).clone();
         outline.apply_affine(kurbo::Affine::translate((f64::from(x), f64::from(y))) * kurbo::Affine::scale(scale));
-        append_path(&mut pb, &outline);
+        let b = kurbo::Shape::bounding_box(&outline);
+        out = Some(out.map_or(b, |u| u.union(b)));
     }
+    out
+}
+
+/// A linear gradient fill for text, across the bounds of its glyphs in page points, along the
+/// gradient's angle (DrawingML's: 0 left to right, 90 top to bottom). `None` (solid text) when the
+/// bounds have no area.
+fn gradient_fill(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], g: &wordcraft_doc::text_effects::TextGradient, alpha: f32) -> Option<Fill> {
+    gradient_over(glyph_bounds(face, size, glyphs)?, g, alpha)
+}
+
+/// A linear gradient fill across `b` (page points), along the gradient's angle. `None` when `b` has
+/// no area.
+fn gradient_over(b: kurbo::Rect, g: &wordcraft_doc::text_effects::TextGradient, alpha: f32) -> Option<Fill> {
+    if b.width().is_nan() || b.height().is_nan() || b.width() <= 0.0 || b.height() <= 0.0 {
+        return None;
+    }
+    let theta = f64::from(g.angle).to_radians();
+    let (dx, dy) = (theta.cos(), theta.sin());
+    let half = (b.width() * dx.abs() + b.height() * dy.abs()) / 2.0;
+    if half.is_nan() || half <= 0.0 {
+        return None;
+    }
+    let c = b.center();
+    let stops: Vec<Stop> = g
+        .used_stops()
+        .iter()
+        .map(|st| Stop {
+            offset: NormalizedF32::new(st.pos).unwrap_or(NormalizedF32::ZERO),
+            color: rgb::Color::new(st.color.0, st.color.1, st.color.2).into(),
+            opacity: NormalizedF32::ONE,
+        })
+        .collect();
+    let lg = LinearGradient {
+        x1: (c.x - dx * half) as f32,
+        y1: (c.y - dy * half) as f32,
+        x2: (c.x + dx * half) as f32,
+        y2: (c.y + dy * half) as f32,
+        transform: Transform::identity(),
+        spread_method: SpreadMethod::Pad,
+        stops,
+        anti_alias: false,
+    };
+    Some(Fill { paint: lg.into(), opacity: norm(alpha), rule: FillRule::NonZero })
+}
+
+/// The outlines of `glyphs` (glyph id, pen position) at `size`, as one path in page coordinates. `shear`
+/// is the baseline of a synthetic italic run (see `italic_baseline`), or `None` for upright text.
+fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], shear: Option<f32>) -> Option<Path> {
+    bez_path(&glyph_bez(face, size, glyphs, shear))
+}
+
+/// The baseline a synthetic italic run leans about: `glyphs` shears the whole run about its first
+/// glyph's pen, so a shadow or outline must lean about the same point to sit on its letters.
+fn italic_baseline(glyphs: &[(u32, f32, f32)], italic: bool) -> Option<f32> {
+    if italic { glyphs.first().map(|&(_, _, y)| y) } else { None }
+}
+
+/// The outlines of `glyphs` (glyph id, pen position) at `size`, as one kurbo path in page coordinates,
+/// sheared about `shear` (a baseline, as `italic_baseline` gives) when it is set.
+fn glyph_bez(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], shear: Option<f32>) -> kurbo::BezPath {
+    let db = wordcraft_fonts::FontDb::global();
+    let scale = f64::from(size) / face.upem.max(1.0);
+    // The shear `glyphs` puts on the text: a point moves left by 0.21 for each point below the baseline, and right for each point above.
+    let run = shear.map_or(kurbo::Affine::IDENTITY, |y0| kurbo::Affine::new([1.0, 0.0, -0.21, 1.0, 0.21 * f64::from(y0), 0.0]));
+    let mut out = kurbo::BezPath::new();
+    for &(g, x, y) in glyphs {
+        // Outlines are in font units, y-down: scale to the size, move to the pen position, then shear.
+        let mut outline = (*db.outline(face, g)).clone();
+        outline.apply_affine(run * kurbo::Affine::translate((f64::from(x), f64::from(y))) * kurbo::Affine::scale(scale));
+        out.extend(outline.elements().iter().copied());
+    }
+    out
+}
+
+/// Flattening tolerance and piece length for warped outlines, as shares of the run's height. The
+/// renderer uses the same shares, so both bend a run the same way.
+const WARP_TOLERANCE_SHARE: f64 = 2.0e-4;
+const WARP_PIECE_SHARE: f64 = 0.125;
+
+/// A run larger than this, in points, is not warped.
+const WARP_MAX_EXTENT: f64 = 1.0e7;
+
+/// The glyphs of a run bent by `w` within the bounds of the whole run, in page points, as one path.
+/// Italic (`italic`) shears each glyph first, as the text is drawn. `None` when the run has no area, or
+/// its bounds are not finite or absurdly large.
+fn warped_outline(
+    face: &FaceRef,
+    size: f32,
+    glyphs: &[(u32, f32, f32)],
+    italic: bool,
+    w: &wordcraft_doc::text_effects::TextWarp,
+) -> Option<kurbo::BezPath> {
+    let db = wordcraft_fonts::FontDb::global();
+    let scale = f64::from(size) / face.upem.max(1.0);
+    let skew = if italic { kurbo::Affine::new([1.0, 0.0, -0.21, 1.0, 0.0, 0.0]) } else { kurbo::Affine::IDENTITY };
+    let mut paths = Vec::new();
+    let mut bounds: Option<kurbo::Rect> = None;
+    for &(g, x, y) in glyphs {
+        let o = db.outline(face, g);
+        if o.elements().is_empty() {
+            continue;
+        }
+        let mut p = (*o).clone();
+        p.apply_affine(kurbo::Affine::translate((f64::from(x), f64::from(y))) * skew * kurbo::Affine::scale(scale));
+        let b = kurbo::Shape::bounding_box(&p);
+        bounds = Some(bounds.map_or(b, |u| u.union(b)));
+        paths.push(p);
+    }
+    let b = bounds?;
+    let extent_ok = [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= WARP_MAX_EXTENT);
+    if !extent_ok || b.width() <= 0.0 || b.height() <= 0.0 {
+        return None;
+    }
+    let bx = wordcraft_doc::text_effects::WarpBox { x0: b.x0 as f32, y0: b.y0 as f32, w: b.width() as f32, h: b.height() as f32 };
+    let map = |x: f64, y: f64| {
+        let (nx, ny) = w.point(bx, x as f32, y as f32);
+        (f64::from(nx), f64::from(ny))
+    };
+    let (tolerance, piece) = (b.height() * WARP_TOLERANCE_SHARE, b.height() * WARP_PIECE_SHARE);
+    let mut out = kurbo::BezPath::new();
+    for p in &paths {
+        out.extend(wordcraft_fonts::outline::map_outline(p, tolerance, piece, map).elements().iter().copied());
+    }
+    Some(out)
+}
+
+/// A kurbo path as a krilla path, `None` when it has no segments.
+fn bez_path(path: &kurbo::BezPath) -> Option<Path> {
+    let mut pb = PathBuilder::new();
+    append_path(&mut pb, path);
     pb.finish()
 }
 
@@ -794,10 +929,76 @@ impl Exporter<'_> {
                     self.draw(s, d);
                 }
             }
-            Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges } => {
-                self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges);
+            Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, effects } => {
+                // A warp (Word's Transform) bends the glyphs, so a warped run is drawn as its bent outlines,
+                // as vector paths: its text is not extractable.
+                let warped = effects.active_warp().and_then(|w| warped_outline(face, *size, glyphs, *synth_italic, &w));
+                let warped_path = warped.as_ref().and_then(bez_path);
+                // A gradient (Word's Text Fill) paints the text itself: the text stays text.
+                let paint = effects.active_fill().and_then(|g| match &warped {
+                    Some(path) => gradient_over(kurbo::Shape::bounding_box(path), &g, *alpha),
+                    None => gradient_fill(face, *size, glyphs, &g, *alpha),
+                });
+                // Text effects are vector paths beside the real text, so the text stays extractable: a
+                // shadow (the glyphs offset) behind it, and an outline stroke over it. A warped run has no
+                // real text, so its shadow and outline come from its bent outlines.
+                if let Some(sh) = effects.active_shadow() {
+                    let shadow = match &warped {
+                        Some(path) => {
+                            let mut moved = path.clone();
+                            moved.apply_affine(kurbo::Affine::translate((f64::from(sh.dx), f64::from(sh.dy))));
+                            bez_path(&moved)
+                        }
+                        None => {
+                            let moved: Vec<(u32, f32, f32)> = glyphs.iter().map(|&(g, x, y)| (g, x + sh.dx, y + sh.dy)).collect();
+                            glyph_outlines(face, *size, &moved, italic_baseline(&moved, *synth_italic))
+                        }
+                    };
+                    if let Some(p) = shadow {
+                        s.set_stroke(None);
+                        s.set_fill(Some(fill(sh.color, *alpha)));
+                        s.draw_path(&p);
+                        s.set_fill(None);
+                    }
+                }
+                match &warped_path {
+                    Some(p) => {
+                        let bold_paint = paint.as_ref().map(|f| f.paint.clone());
+                        s.set_fill(Some(paint.unwrap_or_else(|| fill(*color, *alpha))));
+                        s.set_stroke(if *synth_bold {
+                            Some(Stroke {
+                                paint: bold_paint.unwrap_or_else(|| rgb::Color::new(color.0, color.1, color.2).into()),
+                                width: size * 0.03,
+                                opacity: norm(*alpha),
+                                ..Default::default()
+                            })
+                        } else {
+                            None
+                        });
+                        s.draw_path(p);
+                        s.set_fill(None);
+                        s.set_stroke(None);
+                    }
+                    None => self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges, paint),
+                }
                 if let Some(l) = link {
                     self.link_rect(face, *size, glyphs, l);
+                }
+                if let Some(ol) = effects.active_outline() {
+                    let plain =
+                        if warped_path.is_none() { glyph_outlines(face, *size, glyphs, italic_baseline(glyphs, *synth_italic)) } else { None };
+                    if let Some(p) = warped_path.as_ref().or(plain.as_ref()) {
+                        s.set_fill(None);
+                        s.set_stroke(Some(Stroke {
+                            paint: rgb::Color::new(ol.color.0, ol.color.1, ol.color.2).into(),
+                            width: ol.width,
+                            opacity: norm(*alpha),
+                            line_join: LineJoin::Round,
+                            ..Default::default()
+                        }));
+                        s.draw_path(p);
+                        s.set_stroke(None);
+                    }
                 }
             }
             Draw::Fill { rect, color, alpha } => {
@@ -1093,6 +1294,7 @@ impl Exporter<'_> {
         italic: bool,
         text: &str,
         known: &[std::ops::Range<usize>],
+        paint: Option<Fill>,
     ) {
         if !size.is_finite() || size <= 0.0 || size > 5000.0 {
             return;
@@ -1127,9 +1329,15 @@ impl Exporter<'_> {
         if italic {
             s.push_transform(&Transform::from_row(1.0, 0.0, -0.21, 1.0, 0.21 * y0, 0.0));
         }
-        s.set_fill(Some(fill(color, alpha)));
+        let bold_paint = paint.as_ref().map(|f| f.paint.clone());
+        s.set_fill(Some(paint.unwrap_or_else(|| fill(color, alpha))));
         s.set_stroke(if bold {
-            Some(Stroke { paint: rgb::Color::new(color.0, color.1, color.2).into(), width: size * 0.03, opacity: norm(alpha), ..Default::default() })
+            Some(Stroke {
+                paint: bold_paint.unwrap_or_else(|| rgb::Color::new(color.0, color.1, color.2).into()),
+                width: size * 0.03,
+                opacity: norm(alpha),
+                ..Default::default()
+            })
         } else {
             None
         });
@@ -1138,7 +1346,8 @@ impl Exporter<'_> {
                 s.draw_glyphs(Point::from_xy(x0, y0), &kg, font, &txt, size, false);
             }
             None => {
-                if let Some(path) = glyph_outlines(face, size, glyphs) {
+                // The italic shear is already on the transform stack here.
+                if let Some(path) = glyph_outlines(face, size, glyphs, None) {
                     s.draw_path(&path);
                 }
             }
@@ -1343,7 +1552,7 @@ impl Exporter<'_> {
                     pen.push((g.gid, x + g.x_offset as f32 * k, -(g.y_offset as f32) * k));
                     x += g.x_advance as f32 * k;
                 }
-                if let Some(path) = glyph_outlines(&face, size, &pen) {
+                if let Some(path) = glyph_outlines(&face, size, &pen, None) {
                     s.draw_path(&path);
                 }
             }
