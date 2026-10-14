@@ -188,7 +188,8 @@ if ($env:WORDCRAFT_PRINT_DRYRUN -eq '1') {
             $pixels = Get-RenderSize $sheet 150
             $bitmap = Render-Sheet $page $sheet 150
             try {
-                if ($bitmap.Width -ne $pixels.Width -or $bitmap.Height -ne $pixels.Height) {
+                $scale = $bitmap.Width / [double]$pixels.Width
+                if ($scale -lt 0.5 -or [Math]::Abs($bitmap.Height - ($pixels.Height * $scale)) -gt 2) {
                     throw 'the PDF renderer changed the requested sheet dimensions'
                 }
             } finally { $bitmap.Dispose() }

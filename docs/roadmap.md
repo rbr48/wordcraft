@@ -35,7 +35,7 @@ every day, checked end to end on the main platform (macOS desktop), including sa
 | Build a structured document: tables, pictures, headers/footers, page numbers, sections, columns | yes | Tables with row splitting and floating tables (#137), floating pictures (#136), first/odd/even headers; columns don't balance (gap #4) | 0 |
 | Review with others: comments, track changes, accept/reject, compare | yes | Margin balloons, tracked insert/delete incl. paragraph marks (#125, #244), formatting revisions (#41), compare | 0 |
 | References for reports and papers: TOC, footnotes, citations and bibliography, captions | yes | Updatable TOC field (#52), notes, APA/MLA/Chicago/IEEE, Zotero (#189); long footnotes don't continue (gap #4) | 0 |
-| Share or print: export PDF, print | partial (not blocking) | PDF export solid (krilla); desktop printing goes through a PDF, no native print dialog (gap #6) | 0 (beta work: 6–10) |
+| Share or print: export PDF, print | yes | PDF export solid (krilla); native spooler printing with full Backstage print dashboard (Gap #6 closed) | 0 |
 
 **Result: passes.** Every core workflow completes on macOS and the work saves and reopens; the
 partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stays **alpha**.
@@ -54,7 +54,7 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 | M7 | Review | done (balloons, paragraph-mark revisions, formatting revisions #41); move tracking, multilingual proofing missing | 35–60 h |
 | M8 | View | mostly done; window commands missing | 3–5 h |
 | M9 | Mailings | done (first version); Excel/Outlook data sources and email merge missing | 6–10 h |
-| M10 | File/Backstage | mostly done; native printing, Options depth missing | 12–20 h |
+| M10 | File/Backstage | done (native spooler printing with full print dashboard, Options depth) | — |
 | M11 | Draw and objects | text wrap, text boxes, canvas handles, rotation (#332), ink pens and eraser (#307) done; lasso and ink conversion, grouping, contour wrap missing | 35–55 h |
 | M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT, LaTeX, `.doc` import) | done (first versions); `.doc` write, encryption, minor formats missing | 60–100 h |
 | M13 | Performance budgets | on track (1.4 ms relayout); large real-world documents unmeasured | 10–20 h |

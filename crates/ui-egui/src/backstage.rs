@@ -101,7 +101,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             "new" => new_page(app, ui),
             "open" => open_page(app, ui),
             "info" => info_page(app, ui),
-            "print" | "export" => export_page(app, ui),
+            "print" => print_page(app, ui),
+            "export" => export_page(app, ui),
             "options" => options_page(app, ui),
             _ => home_page(app, ui),
         });
@@ -322,38 +323,261 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
-fn export_page(app: &mut WordApp, ui: &mut Ui) {
-    let is_print = app.ui.backstage_page == "print";
-    heading(ui, if is_print { "Print" } else { "Export" });
-    if is_print && app.services.print.is_some() {
+fn print_page(app: &mut WordApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    heading(ui, "Print");
+
+    if app.services.print.is_some() {
         ui.label(tl!("Send the document straight to the system print dialog, or save a copy in another format below."));
         ui.add_space(12.0);
         if ui.add(egui::Button::new(egui::RichText::new(tl!("Print")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             let _ = app.run("ui.print", json!({}));
         }
-        ui.add_space(12.0);
+        ui.add_space(18.0);
         ui.separator();
-        ui.add_space(12.0);
-        ui.label(tl!("Or save a copy in another format:"));
-    } else if is_print {
-        ui.label(tl!("Print your document directly to your system's printer or export to PDF."));
-        ui.add_space(8.0);
-        let print_btn = ui.add(
-            egui::Button::new(egui::RichText::new(tl!("Print to Default Printer")).font(medium(14.0)).color(egui::Color32::WHITE))
-                .fill(crate::theme::APP_COLOR)
-                .min_size(vec2(320.0, 38.0)),
-        );
-        if print_btn.clicked() {
-            let _ = app.run("file.printNative", json!({}));
-            app.status(tl!("Sent document to printer"));
-        }
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(12.0);
-        ui.label(tl!("Or save a copy in another format:"));
-    } else {
-        ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
+        ui.add_space(14.0);
+        render_export_buttons(app, ui);
+        return;
     }
+
+    // Fetch system printers via engine command
+    let printers_resp = app.run("file.printers", json!({})).unwrap_or(json!({"printers": []}));
+    let printers = printers_resp.get("printers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    // Default printer auto-selection if none is active
+    if app.ui.print.printer.is_empty() {
+        if let Some(def) = printers.iter().find(|p| p.get("default").and_then(|v| v.as_bool()) == Some(true)) {
+            if let Some(name) = def.get("name").and_then(|v| v.as_str()) {
+                app.ui.print.printer = name.to_string();
+            }
+        } else if let Some(first) = printers.first().and_then(|p| p.get("name").and_then(|v| v.as_str())) {
+            app.ui.print.printer = first.to_string();
+        }
+    }
+
+    // Top action row: [ Print ] button and Copies counter
+    ui.horizontal(|ui| {
+        let print_btn = ui.add(
+            egui::Button::new(egui::RichText::new(format!("🖶  {}", tl!("Print"))).font(medium(15.0)).color(egui::Color32::WHITE))
+                .fill(crate::theme::APP_COLOR)
+                .min_size(vec2(140.0, 42.0)),
+        );
+
+        if print_btn.clicked() {
+            let mut params = json!({
+                "copies": app.ui.print.copies,
+                "collate": app.ui.print.collate,
+                "scaling": app.ui.print.scaling,
+                "grayscale": app.ui.print.grayscale,
+            });
+            if !app.ui.print.printer.is_empty() {
+                params["printer"] = json!(app.ui.print.printer);
+            }
+            if app.ui.print.duplex != "default" {
+                params["duplex"] = json!(app.ui.print.duplex);
+            }
+            match app.ui.print.pages_mode.as_str() {
+                "current" => {
+                    params["currentPage"] = json!(true);
+                }
+                "custom" => {
+                    params["range"] = json!(app.ui.print.custom_range);
+                }
+                _ => {}
+            }
+            match app.run("file.printNative", params) {
+                Ok(_) => app.status(tl!("Document sent to printer")),
+                Err(e) => app.status(format!("{}: {}", tl!("Print error"), e)),
+            }
+        }
+
+        ui.add_space(24.0);
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new(tl!("Copies:")).font(medium(12.5)));
+            ui.horizontal(|ui| {
+                if ui.button(" - ").clicked() && app.ui.print.copies > 1 {
+                    app.ui.print.copies -= 1;
+                }
+                ui.add(egui::DragValue::new(&mut app.ui.print.copies).range(1..=100));
+                if ui.button(" + ").clicked() && app.ui.print.copies < 100 {
+                    app.ui.print.copies += 1;
+                }
+            });
+        });
+    });
+
+    ui.add_space(18.0);
+    ui.separator();
+    ui.add_space(14.0);
+
+    // Section 1: Printer Selection
+    ui.label(egui::RichText::new(tl!("Printer")).font(semibold(16.0)));
+    ui.add_space(6.0);
+
+    let current_printer = if app.ui.print.printer.is_empty() { tl!("Default Printer").to_string() } else { app.ui.print.printer.clone() };
+
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("backstage_printer_select")
+            .selected_text(egui::RichText::new(&current_printer).font(medium(13.5)))
+            .width(360.0)
+            .show_ui(ui, |ui| {
+                if printers.is_empty() {
+                    ui.selectable_value(&mut app.ui.print.printer, String::new(), tl!("(No printers discovered)"));
+                } else {
+                    for p in &printers {
+                        let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
+                        let is_def = p.get("default").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let label = if is_def { format!("{name}  [{}]", tl!("Default")) } else { name.to_string() };
+                        ui.selectable_value(&mut app.ui.print.printer, name.to_string(), label);
+                    }
+                }
+            });
+    });
+
+    if !printers.is_empty() {
+        let is_selected_def = printers.iter().any(|p| {
+            p.get("name").and_then(|v| v.as_str()) == Some(app.ui.print.printer.as_str()) && p.get("default").and_then(|v| v.as_bool()) == Some(true)
+        });
+        let status_desc = if is_selected_def { tl!("Status: Ready · System Default") } else { tl!("Status: Ready") };
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(status_desc).font(regular(11.5)).color(t.text_dim));
+    }
+
+    ui.add_space(18.0);
+    ui.separator();
+    ui.add_space(14.0);
+
+    // Section 2: Print Settings
+    ui.label(egui::RichText::new(tl!("Settings")).font(semibold(16.0)));
+    ui.add_space(8.0);
+
+    // Helper for aligned setting rows
+    let setting_label = |ui: &mut Ui, label: &str| {
+        ui.add_sized(vec2(100.0, 20.0), egui::Label::new(egui::RichText::new(format!("{label}:")).font(medium(13.0))));
+    };
+
+    // Pages Mode
+    ui.horizontal(|ui| {
+        setting_label(ui, tl!("Pages"));
+        let mode_text = match app.ui.print.pages_mode.as_str() {
+            "current" => tl!("Print Current Page"),
+            "custom" => tl!("Custom Print"),
+            _ => tl!("Print All Pages"),
+        };
+        egui::ComboBox::from_id_salt("backstage_pages_mode").selected_text(egui::RichText::new(mode_text).font(medium(13.0))).width(260.0).show_ui(
+            ui,
+            |ui| {
+                ui.selectable_value(&mut app.ui.print.pages_mode, "all".into(), tl!("Print All Pages (The entire document)"));
+                ui.selectable_value(&mut app.ui.print.pages_mode, "current".into(), tl!("Print Current Page (Just this page)"));
+                ui.selectable_value(&mut app.ui.print.pages_mode, "custom".into(), tl!("Custom Print (Enter specific pages)"));
+            },
+        );
+    });
+
+    if app.ui.print.pages_mode == "custom" {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            setting_label(ui, tl!("Range"));
+            ui.add(egui::TextEdit::singleline(&mut app.ui.print.custom_range).hint_text("e.g. 1-3, 5, 8-11").desired_width(260.0));
+        });
+    }
+
+    ui.add_space(8.0);
+
+    // Print Sides (Duplex)
+    ui.horizontal(|ui| {
+        setting_label(ui, tl!("Print Sides"));
+        let duplex_text = match app.ui.print.duplex.as_str() {
+            "off" => tl!("Print One Sided"),
+            "long-edge" => tl!("Print on Both Sides (Flip on Long Edge)"),
+            "short-edge" => tl!("Print on Both Sides (Flip on Short Edge)"),
+            _ => tl!("Printer Default"),
+        };
+        egui::ComboBox::from_id_salt("backstage_duplex_select")
+            .selected_text(egui::RichText::new(duplex_text).font(medium(13.0)))
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut app.ui.print.duplex, "default".into(), tl!("Printer Default"));
+                ui.selectable_value(&mut app.ui.print.duplex, "off".into(), tl!("Print One Sided"));
+                ui.selectable_value(&mut app.ui.print.duplex, "long-edge".into(), tl!("Print on Both Sides (Flip on Long Edge)"));
+                ui.selectable_value(&mut app.ui.print.duplex, "short-edge".into(), tl!("Print on Both Sides (Flip on Short Edge)"));
+            });
+    });
+
+    ui.add_space(8.0);
+
+    // Collate
+    ui.horizontal(|ui| {
+        setting_label(ui, tl!("Collation"));
+        let collate_text = if app.ui.print.collate { tl!("Collated (1,2,3  1,2,3)") } else { tl!("Uncollated (1,1,1  2,2,2)") };
+        egui::ComboBox::from_id_salt("backstage_collate_select")
+            .selected_text(egui::RichText::new(collate_text).font(medium(13.0)))
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut app.ui.print.collate, true, tl!("Collated (1,2,3  1,2,3)"));
+                ui.selectable_value(&mut app.ui.print.collate, false, tl!("Uncollated (1,1,1  2,2,2)"));
+            });
+    });
+
+    ui.add_space(8.0);
+
+    // Color / Grayscale
+    ui.horizontal(|ui| {
+        setting_label(ui, tl!("Color Mode"));
+        let color_text = if app.ui.print.grayscale { tl!("Grayscale (Black & White)") } else { tl!("Color") };
+        egui::ComboBox::from_id_salt("backstage_color_select")
+            .selected_text(egui::RichText::new(color_text).font(medium(13.0)))
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut app.ui.print.grayscale, false, tl!("Color"));
+                ui.selectable_value(&mut app.ui.print.grayscale, true, tl!("Grayscale (Black & White)"));
+            });
+    });
+
+    ui.add_space(8.0);
+
+    // Paper Scaling
+    ui.horizontal(|ui| {
+        setting_label(ui, tl!("Scaling"));
+        let scaling_text = match app.ui.print.scaling.as_str() {
+            "shrink-to-fit" => tl!("Shrink to Printable Area"),
+            _ => tl!("100% (No Scaling / Exact Size)"),
+        };
+        egui::ComboBox::from_id_salt("backstage_scaling_select")
+            .selected_text(egui::RichText::new(scaling_text).font(medium(13.0)))
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut app.ui.print.scaling, "exact".into(), tl!("100% (No Scaling / Exact Size)"));
+                ui.selectable_value(&mut app.ui.print.scaling, "shrink-to-fit".into(), tl!("Shrink to Printable Area"));
+            });
+    });
+
+    ui.add_space(24.0);
+    ui.separator();
+    ui.add_space(14.0);
+    render_export_buttons(app, ui);
+}
+
+fn render_export_buttons(app: &mut WordApp, ui: &mut Ui) {
+    ui.label(egui::RichText::new(tl!("Or export to other formats:")).font(medium(13.5)));
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        for (label, ext) in [
+            ("PDF document (*.pdf)", "pdf"),
+            ("Word document (*.docx)", "docx"),
+            ("EPUB 3 eBook (*.epub)", "epub"),
+            ("OpenDocument Text (*.odt)", "odt"),
+        ] {
+            if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(regular(12.5))).min_size(vec2(180.0, 30.0))).clicked() {
+                app.export_dialog(ext);
+            }
+        }
+    });
+}
+
+fn export_page(app: &mut WordApp, ui: &mut Ui) {
+    heading(ui, "Export");
+    ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
     ui.add_space(12.0);
     for (label, ext) in [
         ("PDF document (*.pdf)", "pdf"),

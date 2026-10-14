@@ -64,8 +64,11 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+P")
         .pure(),
+        CommandSpec::new("file.printers", "List Printers", "File", list_printers)
+            .params(r#"{}"#)
+            .pure(),
         CommandSpec::new("file.printNative", "Print (Native)", "File", print_native)
-            .params(r#"{"path"?: string (a PDF to print; default: the document), "printer"?: string (default: the system default printer), "copies"?: n (1–100)}"#)
+            .params(r#"{"path"?: string, "printer"?: string, "copies"?: n (1–100), "collate"?: bool, "duplex"?: "off|long-edge|short-edge", "scaling"?: "exact|shrink-to-fit", "grayscale"?: bool, "pages"?: string | [n], "currentPage"?: bool}"#)
             .pure(),
         CommandSpec::new("file.close", "Close", "File", |s, _| {
             s.ui_requests.push(json!({"close": true}));
@@ -461,8 +464,31 @@ fn layout_summary(s: &mut Session, _: &Value) -> CmdResult {
 #[cfg(not(target_arch = "wasm32"))]
 const PRINT_JOB_MAX_BYTES: u64 = 256 << 20;
 
+/// List available system printers, their default status, and duplex support.
+fn list_printers(_s: &mut Session, _v: &Value) -> CmdResult {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Ok(json!({"printers": []}))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let list = wordcraft_print::printers();
+        let printers: Vec<Value> = list
+            .into_iter()
+            .map(|p| {
+                json!({
+                    "name": p.name,
+                    "default": p.default,
+                    "two_sided": p.two_sided,
+                })
+            })
+            .collect();
+        Ok(json!({"printers": printers}))
+    }
+}
+
 /// Print the document (or the PDF at `path`) through the system print spooler (`wordcraft_print`):
-/// `copies` copies on `printer`, or on the default printer when none is named.
+/// `copies` copies on `printer`, with options for duplex, collation, scaling, grayscale, and page ranges.
 fn print_native(s: &mut Session, v: &Value) -> CmdResult {
     let copies = u32::try_from(p::u64(v, "copies").unwrap_or(1).clamp(1, 100)).unwrap_or(1);
     #[cfg(target_arch = "wasm32")]
@@ -473,20 +499,104 @@ fn print_native(s: &mut Session, v: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let title = if s.doc.core.title.trim().is_empty() { "WordCraft document".to_string() } else { s.doc.core.title.clone() };
+        let pages = parse_page_range(v, s);
         let pdf = match p::str(v, "path") {
             Some(path) => read_print_pdf(path)?,
-            None => crate::io::save_bytes_with("print.pdf", &s.doc, None).map_err(CmdError::Failed)?,
+            None => {
+                let opts = wordcraft_pdf::PdfOptions { pages: pages.clone(), ..Default::default() };
+                wordcraft_pdf::export(&s.doc, &opts).map_err(|e| CmdError::Failed(e.to_string()))?
+            }
         };
+        let collate = p::bool(v, "collate").unwrap_or(true);
+        let duplex = match p::str(v, "duplex") {
+            Some("long-edge") => Some(wordcraft_print::Duplex::LongEdge),
+            Some("short-edge") => Some(wordcraft_print::Duplex::ShortEdge),
+            Some("off" | "simplex") => Some(wordcraft_print::Duplex::Off),
+            _ => None,
+        };
+        let scaling = match p::str(v, "scaling") {
+            Some("shrink-to-fit") => wordcraft_print::Scaling::ShrinkToFit,
+            _ => wordcraft_print::Scaling::Exact,
+        };
+        let grayscale = p::bool(v, "grayscale").unwrap_or(false);
         let job = wordcraft_print::Job {
             printer: p::str(v, "printer").filter(|n| !n.is_empty()).map(str::to_string),
             copies,
+            collate,
+            duplex,
+            scaling,
+            grayscale,
             title,
-            ..wordcraft_print::Job::default()
+            options: Vec::new(),
         };
         let receipt = wordcraft_print::submit(&pdf, &job).map_err(|e| CmdError::Failed(e.to_string()))?;
         s.status = format!("Document sent to the printer ({copies} copy/copies)");
-        Ok(json!({"success": true, "copies": copies, "printer": job.printer, "receipt": receipt}))
+        Ok(json!({
+            "success": true,
+            "copies": copies,
+            "printer": job.printer,
+            "receipt": receipt,
+            "pages": pages,
+        }))
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_page_range(v: &Value, s: &Session) -> Option<Vec<usize>> {
+    if let Some(arr) = v.get("pages").and_then(Value::as_array) {
+        let pages: Vec<usize> = arr.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect();
+        if !pages.is_empty() {
+            return Some(pages);
+        }
+    }
+
+    let mut lay_cache = wordcraft_layout::LayoutCache::new();
+    let lay = wordcraft_layout::layout(&s.doc, &mut lay_cache, &Default::default());
+    let total_pages = lay.pages.len();
+    if total_pages == 0 {
+        return None;
+    }
+
+    if p::bool(v, "currentPage").unwrap_or(false) {
+        let cur = lay.index.get(&(s.sel.focus.story, s.sel.focus.path.clone())).and_then(|v| v.first().map(|(p, _)| *p)).unwrap_or(0);
+        return Some(vec![cur]);
+    }
+
+    let range_str = p::str(v, "range").or_else(|| p::str(v, "pages"));
+    if let Some(spec) = range_str {
+        let spec = spec.trim();
+        if spec.is_empty() || spec.eq_ignore_ascii_case("all") {
+            return None;
+        }
+        let mut pages = Vec::new();
+        for part in spec.split(',') {
+            let part = part.trim();
+            if let Some((start_s, end_s)) = part.split_once('-') {
+                if let (Ok(start), Ok(end)) = (start_s.trim().parse::<usize>(), end_s.trim().parse::<usize>()) {
+                    let start = start.max(1);
+                    let end = end.min(total_pages);
+                    if start <= end {
+                        for p in start..=end {
+                            let p0 = p - 1;
+                            if !pages.contains(&p0) {
+                                pages.push(p0);
+                            }
+                        }
+                    }
+                }
+            } else if let Some(p) = part.parse::<usize>().ok().filter(|&p| (1..=total_pages).contains(&p)) {
+                let p0 = p - 1;
+                if !pages.contains(&p0) {
+                    pages.push(p0);
+                }
+            }
+        }
+        if !pages.is_empty() {
+            return Some(pages);
+        }
+    }
+
+    None
 }
 
 /// The PDF `file.printNative` prints from `path`. Only PDFs are printed: the spooler gets a

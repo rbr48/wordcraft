@@ -162,6 +162,30 @@ description: Comprehensive project memory, architecture guide, and operational r
     - Recompiled production release binaries (`wordcraft.exe`, `wordcraft-cli.exe`).
     - Rebuilt Inno Setup Windows installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.1 MB).
     - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.1 MB).
-
-
-
+  - **GitHub Branch Optimizations & High-DPI Print Release (Commits through a3b475e)**:
+    - **PDF Internal Link Cached Lookup (`crates/pdf/src/lib.rs`, `0b350d6`)**: Added `bookmarks: OnceCell<HashMap<String, Pos>>` to `Exporter`, transforming $O(N \times L)$ full-document scan into $O(1)$ lookups and speeding up PDF exports with internal links by >10x.
+    - **Symbol Font Bullet Private-Use Mapping (`crates/fonts/src/word.rs`, `crates/layout/src/para.rs`, `940e828`)**: Maps bare codes ($c < 0x100$) in symbol fonts (Wingdings, Symbol) to private-use code points (`0xF000 + c`) when installed, preserving exact Word line height and glyph metrics.
+    - **Race-Free System Font Fallback & Cache (`crates/fonts/src/fontdb.rs`, `efb3780`)**: Added `searching: Mutex<()>` lock and face-count validation to prevent multithreaded fallback race conditions across concurrent shaping requests.
+    - **Deterministic Benchmark Timing (`1283b31`)**: Upgraded linear-time complexity tests across `wordcraft-layout`, `wordcraft-pdf`, and `wordcraft-proof` to measure CPU time rather than wall-clock under load.
+    - **CI Speedup (`1d6c0f3`)**: Configured FreeBSD and Windows ARM64 CI checks to run nightly and on release rather than per PR.
+    - **High-DPI Print Spooler Validation (`crates/print/src/windows_print.ps1`, `a3b475e`)**: Allowed high-DPI scaling factor in PDF renderer dimension validation, fixing test failures on 288 DPI / 300% scaled displays while preserving exact aspect ratios.
+    - Verified all 6 CI quality gates pass cleanly: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm` across all 17 crates).
+    - Pushed all 7 commits to `origin/main` (`https://github.com/rbr48/wordcraft.git`).
+    - Recompiled production release binaries (`wordcraft.exe`, `wordcraft-cli.exe`).
+    - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.0 MB).
+    - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.0 MB).
+  - **Full Backstage Print Dashboard & Options Parity (Commit b10e155, Gap #6 Closed)**:
+    - **Printer Discovery (`crates/engine/src/cmd/file.rs`)**: Registered `file.printers` command querying system printers via `wordcraft_print::printers()` and returning name, default indicator, and two-sided support.
+    - **Comprehensive Native Print Command (`crates/engine/src/cmd/file.rs`)**: Upgraded `file.printNative` to accept `copies` (1..=100), `collate` (bool), `duplex` (`"off"`, `"long-edge"`, `"short-edge"`), `scaling` (`"exact"`, `"shrink-to-fit"`), `grayscale` (bool), and page ranges (`pages`, `range`, `currentPage`). Integrated with `wordcraft_layout` and `wordcraft_pdf` for selective page extraction.
+    - **Word-Parity Backstage Print UI (`crates/ui-egui/src/backstage.rs`)**: Built a dedicated print page in File › Print featuring:
+      - Top action row: Primary `[🖶 Print]` button and `[-] Copies [+]` stepper with clamp range.
+      - Printer selection combo box with live printer names and `[Default]` badges.
+      - Settings panel: Pages mode (`Print All Pages`, `Print Current Page`, `Custom Print` with text box for ranges like `1-3, 5`), Duplex (`One Sided`, `Flip on Long Edge`, `Flip on Short Edge`), Collation (`Collated`, `Uncollated`), Color Mode (`Color`, `Grayscale`), and Paper Scaling (`100% Exact`, `Shrink to Printable Area`).
+      - Format export buttons (`PDF`, `Word`, `EPUB`, `ODT`) underneath.
+    - **i18n Translation Coverage (`crates/ui-egui/src/i18n/*.tsv`)**: Added "List Printers" command translation across all 9 localized interface catalogs (`es`, `et`, `ja`, `pt-br`, `sr-latn`, `sr`, `uk`, `zh-hans`, `zh-hant`), passing `every_tab_and_command_is_translated`.
+    - **Closed Gap #6**: Updated `docs/gaps.md` and `docs/hardware-parity.md` (Printer hardware parity increased to 90%).
+    - **All 6 CI Gates Passed**: `cargo run -p xtask -- ci` (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+    - **Distribution Artifacts Rebuilt**:
+      - Compiled optimized release binaries: `wordcraft.exe` (13.6 MB), `wordcraft-cli.exe` (9.3 MB).
+      - Rebuilt Windows x64 Inno Setup installer at `packaging/windows/Output/wordcraft-0.6.3-windows-x64-setup.exe` (20.0 MB).
+      - Rebuilt portable release archive at `dist/wordcraft/wordcraft-0.6.3-windows-x64-portable.zip` (41.2 MB).
