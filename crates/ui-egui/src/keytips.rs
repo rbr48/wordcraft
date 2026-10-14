@@ -305,7 +305,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Next", "review.nextChange"),
             c("Compare", "review.compare"),
             c("Block Authors", "review.blockAuthors"),
-            c("Restrict Editing", "review.restrict"),
+            d("Restrict Editing", "restrict"),
             c("Hide Ink", "review.hideInk"),
         ],
         "View" => vec![
