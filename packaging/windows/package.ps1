@@ -155,6 +155,28 @@ $Zip = Join-Path $Dist "wordcraft-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip
 
+# ---- Inno Setup setup.exe (x64) -----------------------------------------------------------------
+if ($Arch -eq 'x64') {
+  $Iscc = Get-Command iscc -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+  if (-not $Iscc -and (Test-Path "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe")) {
+    $Iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+  }
+  if (-not $Iscc -and (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+    $Iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+  }
+  if ($Iscc) {
+    $SetupExe = Join-Path $Dist "wordcraft-$Version-windows-x64-setup.exe"
+    Invoke-Native 'Inno Setup build (setup.exe)' {
+      & $Iscc "/DMyAppVersion=$Version" "/DSrcDir=$Portable" "/O$Dist" "/Fwordcraft-$Version-windows-x64-setup" (Join-Path $PSScriptRoot 'wordcraft.iss')
+    }
+    if (Test-Path $SetupExe) {
+      & (Join-Path $PSScriptRoot 'sign.ps1') $SetupExe
+    }
+  } else {
+    Write-Warning "Inno Setup compiler (ISCC.exe) not found; skipping .setup.exe creation."
+  }
+}
+
 # Smoke-test the CLI when this machine can run it. An ARM64 build made on an x64 runner can't run
 # here; .github/workflows/windows-arm64.yml installs and runs it on ARM64 instead.
 $HostArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
@@ -163,4 +185,4 @@ if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
 } else {
   Write-Output "skipping wordcraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
 }
-Get-Item $Msi, $Zip | Format-Table Name, Length
+Get-ChildItem -Path (Join-Path $Dist "*windows*") | Format-Table Name, Length

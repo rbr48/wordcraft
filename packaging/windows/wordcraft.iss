@@ -16,12 +16,16 @@
 ; ── Definitions ──────────────────────────────────────────────────────────────
 
 #define MyAppName      "WordCraft"
+#ifndef MyAppVersion
 #define MyAppVersion   "0.6.3"
+#endif
 #define MyAppPublisher "M S Rana / Izhaan Intellect"
 #define MyAppURL       "https://github.com/rbr48/wordcraft"
 #define MyAppExe       "wordcraft.exe"
 #define MyCliExe       "wordcraft-cli.exe"
+#ifndef SrcDir
 #define SrcDir         "..\..\dist\wordcraft\wordcraft-0.6.3-windows-x64-portable"
+#endif
 #define IconDir        "..\..\assets\app-icon"
 
 ; ProgID names (must be unique, never re-use Microsoft's ProgIDs)
@@ -102,9 +106,9 @@ Name: "assoc_md";   Description: "Set as default app for .md  (Markdown)";      
 [Files]
 Source: "{#SrcDir}\{#MyAppExe}";      DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\{#MyCliExe}";      DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SrcDir}\README.md";         DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SrcDir}\LICENSE-APACHE";    DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SrcDir}\LICENSE-MIT";       DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SrcDir}\README.md";         DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SrcDir}\LICENSE-APACHE";    DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SrcDir}\LICENSE-MIT";       DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#SrcDir}\OFL-*.txt";         DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 ; ── Icons (Start menu + Desktop + Quick-launch) ───────────────────────────────

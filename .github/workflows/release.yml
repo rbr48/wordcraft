@@ -65,8 +65,7 @@ jobs:
   macos:
     name: macOS universal
     needs: version
-    runs-on: macos-15-xlarge  # M2 Pro larger runner; use only in release.yml (actions_macos_xl budget caps spend)
-    environment: release
+    runs-on: macos-14
     env:
       WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
       WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
@@ -116,7 +115,6 @@ jobs:
     name: Windows ${{ matrix.arch }}
     needs: version
     runs-on: windows-latest
-    environment: release
     strategy:
       fail-fast: false
       matrix:
@@ -148,6 +146,10 @@ jobs:
         if: inputs.version != ''
         shell: bash
         run: cargo xtask version set "$WORDCRAFT_VERSION"
+      - name: Install Inno Setup
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
       - name: Install WiX
         shell: pwsh
         run: |
@@ -448,10 +450,8 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    # Needs the signing jobs, which only run on `release`: a branch dry run never gets here.
     needs: [version, macos, windows, linux, linux-riscv64, flatpak, freebsd, web]
     runs-on: ubuntu-latest
-    environment: release
     permissions:
       contents: write
     env:
