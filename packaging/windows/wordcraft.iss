@@ -17,14 +17,14 @@
 
 #define MyAppName      "WordCraft"
 #ifndef MyAppVersion
-#define MyAppVersion   "0.6.3"
+#define MyAppVersion   "0.7.0"
 #endif
 #define MyAppPublisher "M S Rana / Izhaan Intellect"
 #define MyAppURL       "https://github.com/rbr48/wordcraft"
 #define MyAppExe       "wordcraft.exe"
 #define MyCliExe       "wordcraft-cli.exe"
 #ifndef SrcDir
-#define SrcDir         "..\..\dist\wordcraft\wordcraft-0.6.3-windows-x64-portable"
+#define SrcDir         "..\..\dist\wordcraft\wordcraft-0.7.0-windows-x64-portable"
 #endif
 #define IconDir        "..\..\assets\app-icon"
 

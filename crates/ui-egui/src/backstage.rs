@@ -651,6 +651,12 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     ui.label(egui::RichText::new(tl!("Opening files")).font(semibold(15.0)));
     ui.checkbox(&mut app.session.prefs.convert_legacy, tl!("Convert Word 97–2003 files (.doc) to .docx when opening"));
     ui.label(egui::RichText::new(tl!("A .docx is saved beside the original, which is left unchanged.")).font(crate::theme::regular(11.0)).weak());
+    ui.checkbox(&mut app.session.prefs.convert_bijoy_on_open, tl!("Convert legacy Bijoy / SutonnyMJ text to Unicode on open"));
+    ui.label(
+        egui::RichText::new(tl!("When unchecked, preserves raw Bijoy ANSI characters and font names for legacy round-tripping."))
+            .font(crate::theme::regular(11.0))
+            .weak(),
+    );
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Proofing")).font(semibold(15.0)));
     if ui.button(tl!("AutoCorrect Options…")).clicked() {

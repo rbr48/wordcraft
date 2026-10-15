@@ -80,6 +80,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
         CommandSpec::new("file.options", "Options", "File", |s, v| {
+            if let Some(b) = p::bool(v, "convertBijoyOnOpen") {
+                s.prefs.convert_bijoy_on_open = b;
+            }
+            if let Some(b) = p::bool(v, "convertLegacy") {
+                s.prefs.convert_legacy = b;
+            }
             let mut remove = Vec::new();
             if let Some(list) = v.get("removeWords").and_then(|x| x.as_array()) {
                 for w in list {
@@ -105,12 +111,17 @@ pub fn specs() -> Vec<CommandSpec> {
             if !remove.is_empty() || v.get("addWords").is_some() {
                 s.persist_user_dictionary(&remove);
                 s.relayout();
-            } else {
+            } else if v.get("convertBijoyOnOpen").is_none() && v.get("convertLegacy").is_none() {
                 s.ui_requests.push(json!({"open": "options"}));
             }
-            sel_result(s)
+            let mut r = sel_result(s)?;
+            if let Some(obj) = r.as_object_mut() {
+                obj.insert("convertBijoyOnOpen".into(), json!(s.prefs.convert_bijoy_on_open));
+                obj.insert("convertLegacy".into(), json!(s.prefs.convert_legacy));
+            }
+            Ok(r)
         })
-        .params(r#"{"addWords"?: [string], "removeWords"?: [string]}"#)
+        .params(r#"{"addWords"?: [string], "removeWords"?: [string], "convertBijoyOnOpen"?: bool, "convertLegacy"?: bool}"#)
         .pure(),
         CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
             .params(r#"{"name": string (author of new tracked changes and comments)}"#)
@@ -162,11 +173,12 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         return sel_result(s);
     };
     let password = p::str(v, "password");
+    let settings = crate::io::DocOpenSettings { convert_bijoy: s.prefs.convert_bijoy_on_open };
     let (doc, encrypted) = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
-        crate::io::open_bytes_with(path, &bytes, password).map_err(CmdError::Failed)?
+        crate::io::open_bytes_opts(path, &bytes, password, &settings).map_err(CmdError::Failed)?
     } else {
-        crate::io::open_path_with(std::path::Path::new(path), password).map_err(CmdError::Failed)?
+        crate::io::open_path_opts(std::path::Path::new(path), password, &settings).map_err(CmdError::Failed)?
     };
     s.set_document(doc);
     s.path = Some(path.into());

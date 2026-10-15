@@ -24,7 +24,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$Version  = "0.6.3"
+$Version  = "0.7.0"
 $PortDir  = Join-Path $RepoRoot "dist\wordcraft\wordcraft-$Version-windows-x64-portable"
 
 Write-Host ""

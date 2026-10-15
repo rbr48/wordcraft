@@ -325,11 +325,17 @@ pub struct Prefs {
     /// Opening a Word 97–2003 file (`.doc`, `.dot`) converts it to the current format: a `.docx`
     /// (`.dotx`) beside the original, which is left as it was (File › Info › Convert).
     pub convert_legacy: bool,
+    /// When opening a document containing Bijoy / SutonnyMJ legacy ANSI Bengali text, automatically
+    /// normalize it to Unicode and set the font to a Unicode Bengali font.
+    ///
+    /// When disabled, preserves raw Bijoy ANSI bytes and font names unchanged for round-trip
+    /// compatibility with legacy environments.
+    pub convert_bijoy_on_open: bool,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { count_notes: true, markup: Default::default(), convert_legacy: true }
+        Prefs { count_notes: true, markup: Default::default(), convert_legacy: true, convert_bijoy_on_open: true }
     }
 }
 

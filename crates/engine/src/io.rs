@@ -78,6 +78,23 @@ pub fn can_encrypt(name: &str) -> bool {
     is_word_package(&ext_of(name))
 }
 
+/// Options controlling document opening behavior.
+#[derive(Clone, Debug)]
+pub struct DocOpenSettings {
+    /// Whether to normalize legacy Bijoy / SutonnyMJ ANSI text to Unicode on import.
+    pub convert_bijoy: bool,
+}
+
+impl Default for DocOpenSettings {
+    fn default() -> Self {
+        Self { convert_bijoy: true }
+    }
+}
+
+impl DocOpenSettings {
+    pub const DEFAULT: Self = Self { convert_bijoy: true };
+}
+
 /// Parse a document from bytes; `name` gives the format by extension.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Document, String> {
     open_bytes_with(name, bytes, None).map(|(doc, _)| doc)
@@ -88,10 +105,17 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Document, String> {
 /// whether the file was encrypted. Without the password needed the error satisfies
 /// [`needs_password`]; with a wrong one, [`wrong_password`].
 pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Document, bool), String> {
+    open_bytes_opts(name, bytes, password, &DocOpenSettings::DEFAULT)
+}
+
+/// [`open_bytes_with`] taking explicit [`DocOpenSettings`].
+pub fn open_bytes_opts(name: &str, bytes: &[u8], password: Option<&str>, opts: &DocOpenSettings) -> Result<(Document, bool), String> {
     let ext = ext_of(name);
     if matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "dot") && wordcraft_docx::is_encrypted(bytes) {
         let mut doc = wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string())?;
-        normalize_bijoy_fonts(&mut doc);
+        if opts.convert_bijoy {
+            normalize_bijoy_fonts(&mut doc);
+        }
         doc.ensure_nonempty();
         return Ok((doc, true));
     }
@@ -103,7 +127,9 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>) -> Resu
             None => return Err(format!("{name}: unsupported format `.{other}`")),
         },
     };
-    normalize_bijoy_fonts(&mut doc);
+    if opts.convert_bijoy {
+        normalize_bijoy_fonts(&mut doc);
+    }
     doc.ensure_nonempty();
     Ok((doc, false))
 }
@@ -175,6 +201,12 @@ pub fn open_path(path: &std::path::Path) -> Result<Document, String> {
 /// [`open_path`] for a file that may be password-protected (see [`open_bytes_with`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<(Document, bool), String> {
+    open_path_opts(path, password, &DocOpenSettings::DEFAULT)
+}
+
+/// [`open_path_with`] taking explicit [`DocOpenSettings`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_path_opts(path: &std::path::Path, password: Option<&str>, opts: &DocOpenSettings) -> Result<(Document, bool), String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if meta.len() > 2 << 30 {
         return Err(format!("{}: file is larger than 2 GB", path.display()));
@@ -186,10 +218,13 @@ pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<
         let images = LocalImages::new(path.parent().unwrap_or(std::path::Path::new("")));
         let mut doc = wordcraft_formats::html::import_with(&wordcraft_formats::html::decode(&bytes), &|src| images.load(src));
         fit_pictures(&mut doc);
+        if opts.convert_bijoy {
+            normalize_bijoy_fonts(&mut doc);
+        }
         doc.ensure_nonempty();
         return Ok((doc, false));
     }
-    open_bytes_with(&name, &bytes, password)
+    open_bytes_opts(&name, &bytes, password, opts)
 }
 
 /// The pictures an HTML file names by a path relative to its folder.
@@ -296,7 +331,12 @@ fn read_regular_file(path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn open_path_with(path: &std::path::Path, _password: Option<&str>) -> Result<(Document, bool), String> {
+pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<(Document, bool), String> {
+    open_path_opts(path, password, &DocOpenSettings::DEFAULT)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn open_path_opts(path: &std::path::Path, _password: Option<&str>, _opts: &DocOpenSettings) -> Result<(Document, bool), String> {
     Err(format!("{}: files are opened through the browser on the web", path.display()))
 }
 
@@ -1459,5 +1499,16 @@ mod tests {
         normalize_bijoy_fonts(&mut doc);
         let marks: Vec<(String, Option<u32>)> = runs_of(&doc).into_iter().map(|r| (r.0, r.1.props.del)).collect();
         assert_eq!(marks, vec![("খ্র".to_string(), None), ("ি".to_string(), Some(0))]);
+    }
+
+    #[test]
+    fn open_with_convert_bijoy_disabled_preserves_raw_ansi() {
+        let doc = document_in_runs(&[("evsjv‡`k", sutonny(CharProps::default()))]);
+        let bytes = save_bytes("doc.docx", &doc).expect("save docx");
+        let (opened_with_convert, _) = open_bytes_opts("doc.docx", &bytes, None, &DocOpenSettings { convert_bijoy: true }).expect("open");
+        assert_eq!(body_text(&opened_with_convert), "বাংলাদেশ");
+
+        let (opened_raw, _) = open_bytes_opts("doc.docx", &bytes, None, &DocOpenSettings { convert_bijoy: false }).expect("open");
+        assert_eq!(body_text(&opened_raw), "evsjv‡`k");
     }
 }
