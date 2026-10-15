@@ -407,5 +407,17 @@ description: Comprehensive project memory, architecture guide, and operational r
       - Added right-click `Text Direction ▸` submenu in the canvas context menu for shapes and text boxes.
     - **Quality Gates**:
       - All 6 CI quality gates passed cleanly (`fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `wasm`).
+  - **Version 0.7.0 Upgrade, Bijoy Preservation Option & Automated GitHub Release**:
+    - **Version Bump Across Workspace (`0.7.0`)**: Bumped workspace package version from `0.6.3` to `0.7.0` across all 22 workspace crates in `Cargo.toml`, `Cargo.lock`, `packaging/windows/wordcraft.iss` (`MyAppVersion "0.7.0"` and `SrcDir "..\..\dist\wordcraft\wordcraft-0.7.0-windows-x64-portable"`), `packaging/windows/build-installer.ps1`, `packaging/android/AndroidManifest.xml` (`versionCode="70"`, `versionName="0.7.0"`), and `packaging/android/build-apk.ps1`.
+    - **Trunk / Web WASM Release Fix (`apps/wordcraft-web/index.html`)**: Replaced root-absolute URL `<a href="/">` with fully-qualified URL `<a href="https://office.izhaanintellect.fun">` to satisfy Trunk's post-build subpath asset check, resolving the prior release CI failure on run 38591860402.
+    - **Bijoy Legacy Font Preservation Option**:
+      - `crates/engine/src/session.rs`: Added `pub convert_bijoy_on_open: bool` to `Prefs` (default `true`).
+      - `crates/engine/src/io.rs`: Defined `DocOpenSettings { convert_bijoy: bool }` (default `true`) and implemented `open_bytes_opts` and `open_path_opts` (native and wasm32), allowing users to preserve raw Bijoy ANSI bytes and font names unchanged for round-trip compatibility with legacy environments. Added unit test `open_with_convert_bijoy_disabled_preserves_raw_ansi`.
+      - `crates/engine/src/cmd/file.rs`: Added `convertBijoyOnOpen` parameter and return serialization to `file.options` command; passed `DocOpenSettings` from session prefs in `open()`.
+      - `crates/ui-egui/src/backstage.rs`: Added "Convert legacy Bijoy / SutonnyMJ text to Unicode on open" checkbox and explanation under "Opening files" in File ▸ Options.
+    - **Automated GitHub Release Multi-Platform Build**:
+      - Pushed commit `8955ac4` to `origin/release` and synchronized `origin/main`.
+      - Triggered multi-platform GitHub Release workflow run `38671340197` on `rbr48/wordcraft` compiling Windows (x64, x86, ARM64), macOS universal, Linux (x86_64, aarch64, riscv64), FreeBSD x86_64, and Web (WASM).
+
 
 
