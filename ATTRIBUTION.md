@@ -34,8 +34,10 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `assets/fonts/Inter-Medium.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface (Latin UI/document font, carried over from DesignCraft) |
 | `assets/fonts/Inter-Regular.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface (Latin UI/document font, carried over from DesignCraft) |
 | `assets/fonts/Inter-SemiBold.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface (Latin UI/document font, carried over from DesignCraft) |
+| `assets/fonts/Kalpurush-Regular.ttf` | Tanbin Islam Siyam / Avro Font Development Project | http://www.omicronlab.com | OFL-1.0 (`assets/fonts/OFL-Kalpurush.txt`) | Open-source typeface (Bengali UI/document font) |
 | `assets/fonts/JetBrainsMono-Regular.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 (`assets/fonts/OFL-JetBrainsMono.txt`) | Open-source typeface (Latin UI/document font, carried over from DesignCraft) |
 | `assets/fonts/OFL-Inter.txt` | (licence text) | upstream project | — |  |
+| `assets/fonts/OFL-Kalpurush.txt` | (licence text) | upstream project | — |  |
 | `assets/fonts/OFL-JetBrainsMono.txt` | (licence text) | upstream project | — |  |
 | `assets/fonts/OFL-SourceSans3.txt` | (licence text) | upstream project | — |  |
 | `assets/fonts/OFL-SourceSerif4.txt` | (licence text) | upstream project | — |  |

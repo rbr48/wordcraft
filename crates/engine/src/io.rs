@@ -653,6 +653,7 @@ fn is_bijoy_font(font_name: &str) -> bool {
     let lower = font_name.trim().to_ascii_lowercase();
     lower.contains("sutonnymj")
         || lower.contains("sutonny")
+        || lower.contains("sulekha")
         || lower.contains("siyam rupali ansi")
         || lower.contains("bijoy")
         || lower == "classic bangla"
@@ -2156,6 +2157,18 @@ mod tests {
         let p_norm = doc_norm.body[0].as_para().expect("paragraph");
         assert_eq!(p_norm.text, "বাংলাদেশ", "converted to Unicode Bengali");
         assert_eq!(p_norm.runs[0].props.font.as_deref(), Some("Kalpurush"), "font normalized to Kalpurush");
+    }
+
+    #[test]
+    fn sulekhat_font_is_normalized_to_kalpurush_and_unicode() {
+        let text = "evsjv‡`k\r";
+        let (word, table) = make_synthetic_doc_streams(text, "SulekhaT");
+        let doc_bytes = cfb_file(&[("WordDocument", &word), ("0Table", &table)]);
+        let (doc, _) = open_bytes_opts("test.doc", &doc_bytes, None, &wordcraft_geom::Region::default(), &DocOpenSettings::default())
+            .expect("opens test.doc with SulekhaT font");
+        let p = doc.body[0].as_para().expect("paragraph");
+        assert_eq!(p.text, "বাংলাদেশ", "SulekhaT legacy text converts to Unicode");
+        assert_eq!(p.runs[0].props.font.as_deref(), Some("Kalpurush"), "SulekhaT font normalizes to Kalpurush");
     }
 
     #[test]

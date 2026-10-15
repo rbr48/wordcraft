@@ -217,7 +217,7 @@ fn is_persian_sans(f: &str) -> bool {
     NAMES.contains(&f) || f.starts_with("iransans") || f.starts_with("iranyekan")
 }
 
-/// True for legacy Bijoy / ANSI Bengali font families (e.g. SutonnyMJ, BijoyMJ, Kalpurush ANSI).
+/// True for legacy Bijoy / ANSI Bengali font families (e.g. SutonnyMJ, BijoyMJ, Kalpurush ANSI, SulekhaT).
 pub fn is_bengali_ansi_family(family: &str) -> bool {
     let f = family.to_ascii_lowercase();
     const NAMES: &[&str] = &[
@@ -231,9 +231,13 @@ pub fn is_bengali_ansi_family(family: &str) -> bool {
         "durgamj",
         "sutonnycmj",
         "sutonnysushreemj",
+        "sulekha",
+        "sulekhat",
+        "sulekhati",
+        "sulekhate",
     ];
     let f_str = f.as_str();
-    NAMES.contains(&f_str) || f_str.contains("sutonny") || f_str.contains("bijoy") || f_str.contains("ansi") || f_str.ends_with("mj")
+    NAMES.contains(&f_str) || f_str.contains("sutonny") || f_str.contains("sulekha") || f_str.contains("bijoy") || f_str.contains("ansi") || f_str.ends_with("mj")
 }
 
 /// Bengali fonts (both ANSI/Bijoy legacy and Unicode faces).
@@ -255,10 +259,13 @@ pub fn is_bengali_family(family: &str) -> bool {
         "bijoy",
         "boshonto",
         "durgamj",
+        "sulekha",
+        "sulekhat",
     ];
     let f_str = f.as_str();
     NAMES.contains(&f_str)
         || f_str.contains("sutonny")
+        || f_str.contains("sulekha")
         || f_str.contains("bijoy")
         || f_str.contains("bangla")
         || f_str.contains("bengali")
@@ -434,10 +441,13 @@ mod tests {
         assert!(is_bengali_ansi_family("Bijoy"));
         assert!(is_bengali_ansi_family("Classic Bangla"));
         assert!(is_bengali_ansi_family("Kalpurush ANSI"));
+        assert!(is_bengali_ansi_family("Sulekha"));
+        assert!(is_bengali_ansi_family("SulekhaT"));
         assert!(!is_bengali_ansi_family("SolaimanLipi"));
         assert!(!is_bengali_ansi_family("Nikosh"));
 
         assert!(is_bengali_family("sutonnymj"));
+        assert!(is_bengali_family("SulekhaT"));
         assert!(is_bengali_family("Kalpurush"));
         assert!(is_bengali_family("SolaimanLipi"));
         assert!(is_bengali_family("Nikosh"));
