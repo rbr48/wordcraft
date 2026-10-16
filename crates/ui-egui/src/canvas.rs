@@ -796,6 +796,40 @@ fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
     step
 }
 
+/// Check if the running environment is a touch device / mobile browser.
+#[cfg(target_arch = "wasm32")]
+pub fn is_touch_device() -> bool {
+    let global = js_sys::global();
+    if js_sys::Reflect::has(&global, &js_sys::wasm_bindgen::JsValue::from_str("ontouchstart")).unwrap_or(false) {
+        return true;
+    }
+    if let Ok(nav) = js_sys::Reflect::get(&global, &js_sys::wasm_bindgen::JsValue::from_str("navigator"))
+        && !nav.is_undefined()
+    {
+        if let Ok(mtp) = js_sys::Reflect::get(&nav, &js_sys::wasm_bindgen::JsValue::from_str("maxTouchPoints"))
+            && let Some(n) = mtp.as_f64()
+            && n > 0.0
+        {
+            return true;
+        }
+        if let Ok(ua) = js_sys::Reflect::get(&nav, &js_sys::wasm_bindgen::JsValue::from_str("userAgent"))
+            && let Some(s) = ua.as_string()
+        {
+            let s_lower = s.to_lowercase();
+            if s_lower.contains("android") || s_lower.contains("iphone") || s_lower.contains("ipad") || s_lower.contains("mobile") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if the running environment is a touch device.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_touch_device() -> bool {
+    false
+}
+
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
@@ -998,46 +1032,16 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // Dragging a selection near the viewport's edge scrolls on (#688): from a crawl at the margin
     // to full speed at the edge, through the same offset the wheel writes.
     let screen_w = area.width();
+    let is_touch_dev = is_touch_device();
     let (down, pressed, released, pointer, dt) = ui.input(|i| {
         let has_touch = i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })) || i.multi_touch().is_some();
-        if has_touch || screen_w < 780.0 {
+        if is_touch_dev || has_touch || screen_w < 780.0 {
             app.canvas.is_touch = true;
-        } else if i.pointer.is_moving() && !i.pointer.primary_down() {
+        } else if !is_touch_dev && i.pointer.is_moving() && !i.pointer.primary_down() {
             app.canvas.is_touch = false;
         }
         (i.pointer.primary_down(), i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.latest_pos(), i.stable_dt)
     });
-    if pressed && app.canvas.is_touch {
-        app.canvas.touch_press_pos = pointer;
-        let on_handle = pointer.and_then(|p| {
-            app.canvas.caret_handle_rect.map(|hr| hr.contains(p))
-        }).unwrap_or(false);
-        if on_handle {
-            app.canvas.touch_caret_drag = true;
-            app.canvas.touch_drag = false;
-            app.canvas.dragging = true;
-        } else {
-            app.canvas.touch_caret_drag = false;
-            app.canvas.touch_drag = true;
-        }
-    }
-    if released {
-        if app.canvas.is_touch
-            && let Some(start_p) = app.canvas.touch_press_pos.take()
-            && let Some(end_p) = pointer
-            && start_p.distance(end_p) < 18.0
-            && let Some((page, x, y)) = page_at(&geo.rects, &layout, geo.scale, end_p)
-            && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story)
-        {
-            let pj = serde_json::to_value(&pos).unwrap_or_default();
-            let _ = app.run("caret.set", json!({"pos": pj, "extend": false}));
-            app.session.page_hint = page;
-            app.canvas.caret_visible_since = crate::now_ms();
-            app.canvas.last_touch_pos = Some(pos);
-        }
-        app.canvas.touch_drag = false;
-        app.canvas.touch_caret_drag = false;
-    }
     // A release `mouse` returned before seeing (double-click paths, off the canvas) ends the drag here (#1019).
     if app.canvas.dragging && !down && !released {
         app.canvas.dragging = false;
@@ -1094,22 +1098,43 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     let out = scroll_area.show_viewport(&mut ui_area, |ui, viewport| {
         origin = ui.min_rect().min - viewport.min.to_vec2();
-        let content = Rect::from_min_size(ui.min_rect().min, geo.size);
+        let content_origin = ui.min_rect().min;
+        let screen_rects: Vec<Rect> = geo.rects.iter().map(|pr| pr.translate(content_origin.to_vec2())).collect();
+        let content = Rect::from_min_size(content_origin, geo.size);
         let resp = ui.allocate_rect(content, Sense::click_and_drag());
-        if app.canvas.touch_drag && resp.dragged() {
-            let d = resp.drag_delta();
-            if d != egui::Vec2::ZERO {
-                app.canvas.scroll_offset -= d;
-                app.canvas.scroll_offset = app.canvas.scroll_offset.clamp(egui::Vec2::ZERO, app.canvas.scroll_max);
-                app.canvas.scroll_request = Some(app.canvas.scroll_offset);
-                ui.ctx().request_repaint();
+
+        if pressed && app.canvas.is_touch {
+            app.canvas.touch_press_pos = pointer;
+            let on_handle = pointer.and_then(|p| {
+                app.canvas.caret_handle_rect.map(|hr| hr.contains(p))
+            }).unwrap_or(false);
+            let near_caret = pointer.is_some_and(|p| {
+                if let Some(c) = layout.caret_on(&app.session.sel.focus, app.session.page_hint)
+                    && let Some(pr) = screen_rects.get(c.page)
+                {
+                    let s = layout.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                    let cx = pr.min.x + c.x * s;
+                    let cy = pr.min.y + (c.top + c.height) * s;
+                    p.distance(pos2(cx, cy)) < 36.0
+                } else {
+                    false
+                }
+            });
+            if on_handle || near_caret {
+                app.canvas.touch_caret_drag = true;
+                app.canvas.touch_drag = false;
+                app.canvas.dragging = true;
+            } else {
+                app.canvas.touch_caret_drag = false;
+                app.canvas.touch_drag = true;
             }
         }
+
         if app.canvas.touch_caret_drag && (resp.dragged() || down)
             && let Some(p) = pointer
         {
-            let sample_p = pos2(p.x, p.y - 20.0);
-            if let Some((page, x, y)) = page_at(&geo.rects, &layout, geo.scale, sample_p)
+            let sample_p = pos2(p.x, p.y - 24.0);
+            if let Some((page, x, y)) = page_at(&screen_rects, &layout, geo.scale, sample_p)
                 && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story)
                 && pos != app.session.sel_ends().focus
             {
@@ -1119,9 +1144,52 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 app.canvas.caret_visible_since = crate::now_ms();
                 app.canvas.last_touch_pos = Some(pos);
             }
+        } else if app.canvas.touch_drag && resp.dragged() {
+            let d = resp.drag_delta();
+            if d != egui::Vec2::ZERO {
+                app.canvas.scroll_offset -= d;
+                app.canvas.scroll_offset = app.canvas.scroll_offset.clamp(egui::Vec2::ZERO, app.canvas.scroll_max);
+                app.canvas.scroll_request = Some(app.canvas.scroll_offset);
+                ui.ctx().request_repaint();
+            }
         }
+
+        if app.canvas.is_touch && released {
+            if let Some(start_p) = app.canvas.touch_press_pos.take()
+                && let Some(end_p) = pointer
+                && start_p.distance(end_p) < 20.0
+                && let Some((page, x, y)) = page_at(&screen_rects, &layout, geo.scale, end_p)
+                && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story)
+            {
+                app.ui.phonetic_buffer.clear();
+                app.ui.phonetic_rendered_len = 0;
+                app.ui.phonetic_candidates.clear();
+                app.ui.phonetic_expected_caret = None;
+                let pj = serde_json::to_value(&pos).unwrap_or_default();
+                let _ = app.run("caret.set", json!({"pos": pj, "extend": false}));
+                app.session.page_hint = page;
+                app.canvas.caret_visible_since = crate::now_ms();
+                app.canvas.last_touch_pos = Some(pos);
+            }
+            app.canvas.touch_drag = false;
+            app.canvas.touch_caret_drag = false;
+            app.canvas.dragging = false;
+        }
+
+        if app.canvas.is_touch && (resp.double_clicked() || resp.triple_clicked())
+            && let Some(p) = pointer
+            && let Some((page, x, y)) = page_at(&screen_rects, &layout, geo.scale, p)
+            && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story)
+        {
+            let pj = serde_json::to_value(&pos).unwrap_or_default();
+            let _ = app.run("caret.set", json!({"pos": pj, "extend": false}));
+            app.session.page_hint = page;
+            app.canvas.caret_visible_since = crate::now_ms();
+            app.canvas.last_touch_pos = Some(pos);
+        }
+
         if let Some(tr) = scroll_target {
-            ui.scroll_to_rect(Rect::from_min_size(ui.min_rect().min + tr.min.to_vec2(), tr.size()), None);
+            ui.scroll_to_rect(Rect::from_min_size(content_origin + tr.min.to_vec2(), tr.size()), None);
         }
         let painter = ui.painter_at(ui.clip_rect());
         let ppp = ui.ctx().pixels_per_point();
@@ -1130,10 +1198,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let mut rendered = 0;
         let t0 = crate::now_ms();
         let mut rects = Vec::with_capacity(geo.rects.len());
-        let content_origin = ui.min_rect().min;
         let view = view_key(app, dim_body);
-        for (i, pr) in geo.rects.iter().enumerate() {
-            let sr = pr.translate(content_origin.to_vec2());
+        for (i, &sr) in screen_rects.iter().enumerate() {
             let Some(page) = layout.pages.get(i) else { continue };
             let (band_top, band_bot) = geo.bands.get(i).copied().unwrap_or((0.0, sr.height()));
             // A Web/Draft page can be arbitrarily tall. Shrinking the whole page into one GPU
@@ -1459,13 +1525,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 if app.canvas.is_touch {
                     let handle_color = t.accent;
                     let knob_center = if c.width > 0.0 {
-                        pos2(look.bar[1].x + 5.0, look.bar[1].y)
+                        pos2(look.bar[1].x + 7.0, look.bar[1].y)
                     } else {
-                        pos2(look.bar[1].x, look.bar[1].y + 5.0)
+                        pos2(look.bar[1].x, look.bar[1].y + 7.0)
                     };
-                    painter.line_segment([look.bar[1], knob_center], Stroke::new(2.0, handle_color));
-                    painter.circle_filled(knob_center, 5.0, handle_color);
-                    let handle_rect = Rect::from_center_size(knob_center, egui::vec2(36.0, 36.0));
+                    painter.line_segment([look.bar[1], knob_center], Stroke::new(2.5, handle_color));
+                    painter.circle_filled(knob_center, 6.0, handle_color);
+                    painter.circle_stroke(knob_center, 6.0, Stroke::new(1.0, Color32::WHITE));
+                    let handle_rect = Rect::from_center_size(knob_center, egui::vec2(40.0, 40.0));
                     app.canvas.caret_handle_rect = Some(handle_rect);
                 } else {
                     app.canvas.caret_handle_rect = None;
@@ -2241,6 +2308,13 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     }
     // A press on a table's selection area, insert button or move handle.
     if crate::table_mouse::pointer(app, ui, resp, rects, layout, scale) {
+        return;
+    }
+    // On touch devices, text navigation, single tap caret positioning, double tap caret placement,
+    // and teardrop handle dragging are handled exclusively by touch events in show_viewport.
+    // Desktop mouse text selection routines (which drag-select text with extend: true or trigger
+    // margin selection bar) must never run on touch devices.
+    if app.canvas.is_touch || is_touch_device() {
         return;
     }
     let Some(p) = pointer else { return };
@@ -5001,6 +5075,45 @@ mod tests {
             h.step();
         }
         assert!(h.state().session.sel.is_collapsed(), "touch double tap must not select word on touch screen");
+    }
+
+    /// On touch devices, dragging the caret handle slides the cursor character by character without selecting text.
+    #[test]
+    fn touch_caret_handle_drag_moves_cursor_character_by_character() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "Hello world text here."})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        let at = h.state().canvas.page_rects.first().map(|r| r.center()).expect("a page");
+        // Tap to place caret and reveal handle knob
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+        let handle_rect = h.state().canvas.caret_handle_rect.expect("caret handle visible");
+        let handle_pos = handle_rect.center();
+
+        // Grab the handle and drag horizontally
+        h.event(egui::Event::PointerMoved(handle_pos));
+        h.event(egui::Event::PointerButton { pos: handle_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        let drag_to = handle_pos + egui::vec2(30.0, 0.0);
+        h.event(egui::Event::PointerMoved(drag_to));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: drag_to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+
+        assert!(h.state().session.sel.is_collapsed(), "dragging touch handle must keep caret collapsed (no selection)");
     }
 
     fn page_at_index(rects: &[Rect], p: Pos2) -> Option<usize> {
