@@ -174,8 +174,14 @@ impl CanvasScroll {
         let mut touchpad = Vec2::ZERO;
         let mut lifted = false;
         let mut stop = false;
+        if let Some(multi) = input.multi_touch() {
+            touchpad += multi.translation_delta;
+        }
         for event in &input.events {
             match event {
+                Event::Touch { phase, .. } => {
+                    lifted |= matches!(phase, TouchPhase::End | TouchPhase::Cancel);
+                }
                 Event::MouseWheel { unit, delta, phase, modifiers } => {
                     // Ctrl/⌘+wheel zooms (egui turns it into a zoom factor).
                     if !hovered || modifiers.matches_any(opts.zoom_modifier) {

@@ -13,6 +13,7 @@ const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt",
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
 mod font_store;
+mod draft_store;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
 
@@ -29,8 +30,25 @@ pub fn start() {
         };
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
-        if let Err(e) = guard_unload(dirty.clone(), saves.clone()) {
+        let draft_mirror: Rc<RefCell<Option<(Vec<u8>, Option<String>)>>> = Rc::new(RefCell::new(None));
+        if let Err(e) = guard_unload(dirty.clone(), saves.clone(), draft_mirror.clone()) {
             log::error!("no unsaved-changes guard: {e}");
+        }
+        let active_draft = draft_store::load_active_draft().await;
+        let mut restored_doc = None;
+        let mut restored_title = None;
+        if !query().contains("sample")
+            && let Some((bytes, title)) = active_draft
+        {
+            match wordcraft_engine::io::open_bytes("draft.docx", &bytes) {
+                Ok(doc) => {
+                    log::info!("restored active draft from browser storage");
+                    *draft_mirror.borrow_mut() = Some((bytes, title.clone()));
+                    restored_doc = Some(doc);
+                    restored_title = title;
+                }
+                Err(e) => log::warn!("couldn't open stored draft: {e}"),
+            }
         }
         let mut options = eframe::WebOptions::default();
         if query().contains("webgl")
@@ -57,19 +75,36 @@ pub fn start() {
                     // decimal separator (#838).
                     let region = wordcraft_ui_egui::i18n::system_region();
                     let sample = query().contains("sample");
-                    let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
+                    let draft_restored = restored_doc.is_some() && !sample;
+                    let doc = if sample {
+                        wordcraft_engine::sample::sample_document()
+                    } else if let Some(d) = restored_doc {
+                        d
+                    } else {
+                        wordcraft_engine::blank_document(&region)
+                    };
                     let mut session = Session::new(doc);
                     session.system_region = region;
+                    if let Some(t) = restored_title {
+                        session.file_name = Some(t);
+                    }
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut app = WordApp::new(session, services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone()));
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
-                    // No document to show: start on File › Home, as the desktop app does (#766).
-                    if !sample {
+                    if draft_restored {
+                        app.status(wordcraft_ui_egui::i18n::t("Restored your previous session."));
+                    } else if !sample {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        messages,
+                        draft_mirror,
+                        last_draft_save: 0.0,
+                    }))
                 }),
             )
             .await;
@@ -92,6 +127,8 @@ struct WebShell {
     app: WordApp,
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
+    draft_mirror: Rc<RefCell<Option<(Vec<u8>, Option<String>)>>>,
+    last_draft_save: f64,
 }
 
 impl eframe::App for WebShell {
@@ -116,6 +153,32 @@ impl eframe::App for WebShell {
             self.app.status(msg);
         }
         self.app.logic(ctx);
+
+        let now = js_sys::Date::now();
+        if now - self.last_draft_save > 1500.0 {
+            let is_start_screen = self.app.ui.backstage && self.app.ui.backstage_page == "home" && self.app.session.undo_depth() == 0 && !self.app.session.dirty;
+            let has_content = !self.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim().is_empty();
+            let is_dirty_or_edited = self.app.session.dirty || self.app.session.undo_depth() > 0;
+
+            if !is_start_screen && (is_dirty_or_edited || has_content) {
+                self.last_draft_save = now;
+                let title = self.app.session.file_name.clone();
+                if let Ok(bytes) = wordcraft_engine::io::save_bytes("draft.docx", &self.app.session.doc) {
+                    *self.draft_mirror.borrow_mut() = Some((bytes.clone(), title.clone()));
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let _ = draft_store::save_draft(bytes, title).await;
+                    });
+                }
+            } else if (is_start_screen || (!has_content && !is_dirty_or_edited))
+                && self.draft_mirror.borrow().is_some()
+            {
+                *self.draft_mirror.borrow_mut() = None;
+                self.last_draft_save = now;
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = draft_store::clear_draft().await;
+                });
+            }
+        }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -328,9 +391,13 @@ fn animations_enabled() -> Box<dyn Fn() -> Option<bool>> {
 
 /// Closing, reloading or leaving the tab with unsaved changes asks first. Browsers show their own
 /// confirmation (a page can only ask for it), so there is no Save button: Cancel, then File › Save.
-fn guard_unload(dirty: Rc<Cell<bool>>, saves: AsyncSaves) -> Result<(), String> {
+fn guard_unload(dirty: Rc<Cell<bool>>, saves: AsyncSaves, draft_mirror: Rc<RefCell<Option<(Vec<u8>, Option<String>)>>>) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
+    let dm_unload = draft_mirror.clone();
     let on_unload = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
+        if let Some((bytes, title)) = &*dm_unload.borrow() {
+            draft_store::sync_save_local(bytes, title.as_deref());
+        }
         // A save still in the browser's picker hasn't written anything yet.
         if dirty.get() || saves.pending() > 0 {
             e.prevent_default();
@@ -341,6 +408,17 @@ fn guard_unload(dirty: Rc<Cell<bool>>, saves: AsyncSaves) -> Result<(), String> 
     window.add_event_listener_with_callback("beforeunload", on_unload.as_ref().unchecked_ref()).map_err(|e| format!("{e:?}"))?;
     // The listener lives as long as the page.
     on_unload.forget();
+
+    let dm_vis = draft_mirror;
+    if let Some(doc) = window.document() {
+        let on_vis = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
+            if let Some((bytes, title)) = &*dm_vis.borrow() {
+                draft_store::sync_save_local(bytes, title.as_deref());
+            }
+        });
+        let _ = doc.add_event_listener_with_callback("visibilitychange", on_vis.as_ref().unchecked_ref());
+        on_vis.forget();
+    }
     Ok(())
 }
 

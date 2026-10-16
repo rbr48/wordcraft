@@ -254,7 +254,12 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 let block = app.autosave_block();
                 let on = app.autosaves();
                 let label = if block.is_some() { t.text_dim.gamma_multiply(0.6) } else { t.text_dim };
-                ui.label(egui::RichText::new(tl!("AutoSave")).font(regular(11.5)).color(label));
+                let screen_w = full.width();
+                let is_compact = screen_w < 650.0;
+                let show_autosave_label = screen_w >= 500.0;
+                if show_autosave_label {
+                    ui.label(egui::RichText::new(tl!("AutoSave")).font(regular(11.5)).color(label));
+                }
                 let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
                 let (fill, stroke, knob_fill) = match (&block, on) {
                     (Some(_), _) => (t.input.gamma_multiply(0.5), t.border.gamma_multiply(0.7), t.text_dim.gamma_multiply(0.45)),
@@ -293,7 +298,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
                     }
                     ui.add_space(8.0);
-                    if app.ui.show_discord {
+                    if app.ui.show_discord && !is_compact {
                         let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
                         ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });
                         icons::paint(
@@ -310,27 +315,30 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         ui.add_space(8.0);
                     }
                     // Search ("Tell me").
-                    let (r, resp) = ui.allocate_exact_size(vec2(260.0, control_h), Sense::click());
+                    let search_w = if is_compact { control_h } else { 260.0 };
+                    let (r, resp) = ui.allocate_exact_size(vec2(search_w, control_h), Sense::click());
                     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
                     icons::paint(
                         ui.painter(),
-                        Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)),
+                        Rect::from_center_size(if is_compact { r.center() } else { pos2(r.min.x + 16.0, r.center().y) }, vec2(16.0, 16.0)),
                         "search",
                         t.text_dim,
                         t.accent,
                     );
-                    let ph = tl!("Search commands and help");
-                    let pfont = TypeRung::Control.regular();
-                    let ptrack = TypeRung::Control.tracking();
-                    paint_text(
-                        ui.painter(),
-                        pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
-                        Align2::LEFT_TOP,
-                        ph,
-                        &pfont,
-                        ptrack,
-                        t.text_dim,
-                    );
+                    if !is_compact {
+                        let ph = tl!("Search commands and help");
+                        let pfont = TypeRung::Control.regular();
+                        let ptrack = TypeRung::Control.tracking();
+                        paint_text(
+                            ui.painter(),
+                            pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
+                            Align2::LEFT_TOP,
+                            ph,
+                            &pfont,
+                            ptrack,
+                            t.text_dim,
+                        );
+                    }
                     if app.ui.keytips == crate::keytips::Phase::Tabs {
                         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
                     }
@@ -496,13 +504,16 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             let _ = app.run("view.zoomIn", json!({}));
                         }
                     }
-                    // Reading zoom changes only reading presentation, never the normal view zoom.
-                    let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
-                    let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
-                    ui.spacing_mut().slider_width = 110.0;
-                    if ui.add(slider).changed() {
-                        let command = if reading { "view.readTextSize" } else { "view.zoom" };
-                        let _ = app.run(command, json!({"value": (v * 100.0).round()}));
+                    let is_compact = ui.max_rect().width() < 650.0;
+                    if !is_compact {
+                        // Reading zoom changes only reading presentation, never the normal view zoom.
+                        let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
+                        let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
+                        ui.spacing_mut().slider_width = 110.0;
+                        if ui.add(slider).changed() {
+                            let command = if reading { "view.readTextSize" } else { "view.zoom" };
+                            let _ = app.run(command, json!({"value": (v * 100.0).round()}));
+                        }
                     }
                     if small_icon(ui, "minus", tl!("Zoom Out")) {
                         if reading {
@@ -511,48 +522,50 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             let _ = app.run("view.zoomOut", json!({}));
                         }
                     }
-                    ui.add_space(10.0);
-                    let mode = app.session.view.mode;
-                    let read = app.session.view.read_mode;
-                    for (icon, id, name, on) in [
-                        ("webLayout", "view.webLayout", tl!("Web Layout"), mode == wordcraft_layout::ViewMode::Web),
-                        ("printLayout", "view.printLayout", tl!("Print Layout"), mode == wordcraft_layout::ViewMode::Print && !read),
-                        ("readMode", "view.readMode", tl!("Read Mode"), read),
-                    ] {
-                        let (r, resp) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
-                        if on {
-                            ui.painter().rect_filled(r, 3.0, t.checked);
-                        } else if resp.hovered() {
+                    if !is_compact {
+                        ui.add_space(10.0);
+                        let mode = app.session.view.mode;
+                        let read = app.session.view.read_mode;
+                        for (icon, id, name, on) in [
+                            ("webLayout", "view.webLayout", tl!("Web Layout"), mode == wordcraft_layout::ViewMode::Web),
+                            ("printLayout", "view.printLayout", tl!("Print Layout"), mode == wordcraft_layout::ViewMode::Print && !read),
+                            ("readMode", "view.readMode", tl!("Read Mode"), read),
+                        ] {
+                            let (r, resp) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
+                            if on {
+                                ui.painter().rect_filled(r, 3.0, t.checked);
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(r, 3.0, t.hover);
+                            }
+                            icons::paint(ui.painter(), r.shrink(3.0), icon, t.icon, t.accent);
+                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, name));
+                            if resp.on_hover_text(name).clicked() {
+                                let _ = app.run(id, json!({}));
+                            }
+                        }
+                        ui.add_space(8.0);
+                        let focus = tl!("Focus");
+                        let focus_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(focus.to_string(), regular(11.5), t.text_dim).size().x);
+                        let (r, resp) = ui.allocate_exact_size(vec2((focus_w + 26.0).max(56.0), 20.0), Sense::click());
+                        if resp.hovered() {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
-                        icons::paint(ui.painter(), r.shrink(3.0), icon, t.icon, t.accent);
-                        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, name));
-                        if resp.on_hover_text(name).clicked() {
-                            let _ = app.run(id, json!({}));
+                        icons::paint(ui.painter(), Rect::from_min_size(r.min + vec2(2.0, 2.0), vec2(16.0, 16.0)), "focus", t.icon, t.accent);
+                        let ffont = TypeRung::Caption.regular();
+                        let ftrack = TypeRung::Caption.tracking();
+                        paint_text(
+                            ui.painter(),
+                            pos2(r.min.x + 22.0, r.center().y - TypeRung::Caption.line_height() / 2.0),
+                            Align2::LEFT_TOP,
+                            focus,
+                            &ffont,
+                            ftrack,
+                            t.text_dim,
+                        );
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, focus));
+                        if resp.clicked() {
+                            let _ = app.run("view.focus", json!({}));
                         }
-                    }
-                    ui.add_space(8.0);
-                    let focus = tl!("Focus");
-                    let focus_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(focus.to_string(), regular(11.5), t.text_dim).size().x);
-                    let (r, resp) = ui.allocate_exact_size(vec2((focus_w + 26.0).max(56.0), 20.0), Sense::click());
-                    if resp.hovered() {
-                        ui.painter().rect_filled(r, 3.0, t.hover);
-                    }
-                    icons::paint(ui.painter(), Rect::from_min_size(r.min + vec2(2.0, 2.0), vec2(16.0, 16.0)), "focus", t.icon, t.accent);
-                    let ffont = TypeRung::Caption.regular();
-                    let ftrack = TypeRung::Caption.tracking();
-                    paint_text(
-                        ui.painter(),
-                        pos2(r.min.x + 22.0, r.center().y - TypeRung::Caption.line_height() / 2.0),
-                        Align2::LEFT_TOP,
-                        focus,
-                        &ffont,
-                        ftrack,
-                        t.text_dim,
-                    );
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, focus));
-                    if resp.clicked() {
-                        let _ = app.run("view.focus", json!({}));
                     }
                 });
             });

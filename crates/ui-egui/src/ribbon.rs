@@ -374,6 +374,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 ui.painter().rect_filled(u, 2.0, t.accent);
                             }
                             if resp.clicked() {
+                                if app.ui.ribbon_collapsed && tab != "File" {
+                                    app.ui.ribbon_collapsed = false;
+                                }
                                 let _ = app.run("ui.tab", json!({"tab": tab}));
                             }
                             if resp.double_clicked() && tab != "File" {
@@ -403,6 +406,22 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 }
                             });
                         }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let (r, resp) = ui.allocate_exact_size(vec2(28.0, 26.0), Sense::click());
+                            if resp.hovered() {
+                                ui.painter().rect_filled(r.shrink2(vec2(2.0, 2.0)), 4.0, t.hover);
+                            }
+                            let icon = if app.ui.ribbon_collapsed { "∨" } else { "∧" };
+                            ui.painter().text(r.center(), Align2::CENTER_CENTER, icon, medium(12.5), t.text);
+                            let tip = if app.ui.ribbon_collapsed {
+                                tl!("Expand Ribbon")
+                            } else {
+                                tl!("Collapse Ribbon (Ctrl+F1)")
+                            };
+                            if resp.on_hover_text(tip).clicked() {
+                                let _ = app.run("ui.collapseRibbon", json!({}));
+                            }
+                        });
                     });
                 });
             });

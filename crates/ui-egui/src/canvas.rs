@@ -139,6 +139,10 @@ pub struct CanvasState {
     pub balloon_rects: Vec<(u32, Rect)>,
     /// A paste event arrived since the last Mod+V release (see `keys::canvas_events`).
     pub(crate) pasted: bool,
+    /// Whether the last pointer interaction was from a touch screen.
+    pub is_touch: bool,
+    /// Active single-finger touch pan/scroll on canvas.
+    pub(crate) touch_drag: bool,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
@@ -228,6 +232,8 @@ impl Default for CanvasState {
             mini_anchor: None,
             mini_dismissed: None,
             pasted: false,
+            is_touch: false,
+            touch_drag: false,
             swallow_text: false,
             alt_code: String::new(),
             alt_code_echo: None,
@@ -979,7 +985,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     };
     // Dragging a selection near the viewport's edge scrolls on (#688): from a crawl at the margin
     // to full speed at the edge, through the same offset the wheel writes.
-    let (down, released, pointer, dt) = ui.input(|i| (i.pointer.primary_down(), i.pointer.primary_released(), i.pointer.latest_pos(), i.stable_dt));
+    let (down, pressed, released, pointer, dt) = ui.input(|i| {
+        let has_touch = i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })) || i.multi_touch().is_some();
+        if has_touch {
+            app.canvas.is_touch = true;
+        } else if i.pointer.is_moving() && !i.pointer.primary_down() {
+            app.canvas.is_touch = false;
+        }
+        (i.pointer.primary_down(), i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.latest_pos(), i.stable_dt)
+    });
+    if pressed && app.canvas.is_touch {
+        app.canvas.touch_drag = true;
+    }
+    if released {
+        app.canvas.touch_drag = false;
+    }
     // A release `mouse` returned before seeing (double-click paths, off the canvas) ends the drag here (#1019).
     if app.canvas.dragging && !down && !released {
         app.canvas.dragging = false;
@@ -1038,6 +1058,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         origin = ui.min_rect().min - viewport.min.to_vec2();
         let content = Rect::from_min_size(ui.min_rect().min, geo.size);
         let resp = ui.allocate_rect(content, Sense::click_and_drag());
+        if app.canvas.touch_drag && resp.dragged() {
+            let d = resp.drag_delta();
+            if d != egui::Vec2::ZERO {
+                app.canvas.scroll_offset -= d;
+                app.canvas.scroll_offset = app.canvas.scroll_offset.clamp(egui::Vec2::ZERO, app.canvas.scroll_max);
+                app.canvas.scroll_request = Some(app.canvas.scroll_offset);
+                ui.ctx().request_repaint();
+            }
+        }
         if let Some(tr) = scroll_target {
             ui.scroll_to_rect(Rect::from_min_size(ui.min_rect().min + tr.min.to_vec2(), tr.size()), None);
         }
@@ -1502,7 +1531,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.hideWhiteSpace", json!({"value": !app.session.view.hide_white_space}));
     } else
     // Draw Table / Eraser own the mouse while on (no caret moves); else the usual editing.
-    if !middle_gesture && !crate::table_pen::pointer(app, ui, &resp, &rects, &layout, geo.scale) {
+    if !middle_gesture && !crate::table_pen::pointer(app, ui, &resp, &rects, &layout, geo.scale)
+        && !(app.canvas.touch_drag && resp.dragged())
+    {
         mouse(app, ui, &resp, &rects, &layout, geo.scale);
     }
     // A click on a check box ticks it; on a list's button opens the list.
