@@ -235,13 +235,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if resp.hovered() {
                         ui.painter().rect_filled(r.shrink2(vec2(1.0, 1.0)), 4.0, t.hover);
                     }
-                    let icon = if app.ui.ribbon_collapsed { "∨" } else { "∧" };
-                    ui.painter().text(r.center(), Align2::CENTER_CENTER, icon, medium(12.5), t.text);
-                    let tip = if app.ui.ribbon_collapsed {
-                        tl!("Expand Ribbon")
-                    } else {
-                        tl!("Collapse Ribbon (Ctrl+F1)")
-                    };
+                    let icon = if app.ui.ribbon_collapsed { "chevronDown" } else { "chevronUp" };
+                    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(12.0, 12.0)), icon, t.text, t.text);
+                    let tip = tl!("Collapse");
                     if resp.on_hover_text(tip).clicked() {
                         let _ = app.run("ui.collapseRibbon", json!({}));
                     }

@@ -143,6 +143,14 @@ pub struct CanvasState {
     pub is_touch: bool,
     /// Active single-finger touch pan/scroll on canvas.
     pub(crate) touch_drag: bool,
+    /// Active touch drag on the caret handle.
+    pub(crate) touch_caret_drag: bool,
+    /// Screen rect of the touch caret handle for hit testing.
+    pub(crate) caret_handle_rect: Option<Rect>,
+    /// Last hit character position on touch, to distinguish tap-to-move from double-tap.
+    pub(crate) last_touch_pos: Option<wordcraft_doc::Pos>,
+    /// Position where touch press started, to verify tap vs drag.
+    pub(crate) touch_press_pos: Option<Pos2>,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
@@ -234,6 +242,10 @@ impl Default for CanvasState {
             pasted: false,
             is_touch: false,
             touch_drag: false,
+            touch_caret_drag: false,
+            caret_handle_rect: None,
+            last_touch_pos: None,
+            touch_press_pos: None,
             swallow_text: false,
             alt_code: String::new(),
             alt_code_echo: None,
@@ -985,9 +997,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     };
     // Dragging a selection near the viewport's edge scrolls on (#688): from a crawl at the margin
     // to full speed at the edge, through the same offset the wheel writes.
+    let screen_w = area.width();
     let (down, pressed, released, pointer, dt) = ui.input(|i| {
         let has_touch = i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })) || i.multi_touch().is_some();
-        if has_touch {
+        if has_touch || screen_w < 780.0 {
             app.canvas.is_touch = true;
         } else if i.pointer.is_moving() && !i.pointer.primary_down() {
             app.canvas.is_touch = false;
@@ -995,10 +1008,35 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (i.pointer.primary_down(), i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.latest_pos(), i.stable_dt)
     });
     if pressed && app.canvas.is_touch {
-        app.canvas.touch_drag = true;
+        app.canvas.touch_press_pos = pointer;
+        let on_handle = pointer.and_then(|p| {
+            app.canvas.caret_handle_rect.map(|hr| hr.expand(14.0).contains(p))
+        }).unwrap_or(false);
+        if on_handle {
+            app.canvas.touch_caret_drag = true;
+            app.canvas.touch_drag = false;
+            app.canvas.dragging = true;
+        } else {
+            app.canvas.touch_caret_drag = false;
+            app.canvas.touch_drag = true;
+        }
     }
     if released {
+        if app.canvas.is_touch
+            && let Some(start_p) = app.canvas.touch_press_pos.take()
+            && let Some(end_p) = pointer
+            && start_p.distance(end_p) < 8.0
+            && let Some((page, x, y)) = page_at(&geo.rects, &layout, geo.scale, end_p)
+            && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story)
+        {
+            let pj = serde_json::to_value(&pos).unwrap_or_default();
+            let _ = app.run("caret.set", json!({"pos": pj, "extend": false}));
+            app.session.page_hint = page;
+            app.canvas.caret_visible_since = crate::now_ms();
+            app.canvas.last_touch_pos = Some(pos);
+        }
         app.canvas.touch_drag = false;
+        app.canvas.touch_caret_drag = false;
     }
     // A release `mouse` returned before seeing (double-click paths, off the canvas) ends the drag here (#1019).
     if app.canvas.dragging && !down && !released {
@@ -1400,7 +1438,23 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let shown = app.session.sel.is_collapsed() && focused;
             let look = crate::caret_glide::look(app, ui, content_origin, &geo, bar, shown, since, on);
             if shown && look.opacity > 0.0 {
-                painter.line_segment(look.bar, Stroke::new(1.5, caret_color(app).gamma_multiply(look.opacity)));
+                let color = caret_color(app).gamma_multiply(look.opacity);
+                painter.line_segment(look.bar, Stroke::new(1.5, color));
+                if app.canvas.is_touch {
+                    let knob_center = if c.width > 0.0 {
+                        pos2(look.bar[1].x + 6.0, look.bar[1].y)
+                    } else {
+                        pos2(look.bar[1].x, look.bar[1].y + 6.0)
+                    };
+                    let knob_radius = 5.5;
+                    painter.circle_filled(knob_center, knob_radius, color);
+                    let handle_rect = Rect::from_center_size(knob_center, egui::vec2(28.0, 28.0));
+                    app.canvas.caret_handle_rect = Some(handle_rect);
+                } else {
+                    app.canvas.caret_handle_rect = None;
+                }
+            } else if !shown {
+                app.canvas.caret_handle_rect = None;
             }
             if focused {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
@@ -2251,10 +2305,30 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             let _ = app.run("fields.setCode", json!({}));
             return;
         }
+        if app.canvas.is_touch
+            && let Some(pos) = layout.hit(page, x, y, story)
+            && let Some(last) = &app.canvas.last_touch_pos
+            && *last != pos
+        {
+            let pj = serde_json::to_value(&pos).unwrap_or_default();
+            let _ = app.run("caret.set", json!({"pos": pj, "extend": false}));
+            app.canvas.last_touch_pos = Some(pos);
+            return;
+        }
         let _ = app.run("select.word", json!({}));
         return;
     }
     if resp.triple_clicked() {
+        if app.canvas.is_touch
+            && let Some(pos) = layout.hit(page, x, y, story)
+            && let Some(last) = &app.canvas.last_touch_pos
+            && *last != pos
+        {
+            let pj = serde_json::to_value(&pos).unwrap_or_default();
+            let _ = app.run("caret.set", json!({"pos": pj, "extend": false}));
+            app.canvas.last_touch_pos = Some(pos);
+            return;
+        }
         let _ = app.run("select.paragraph", json!({}));
         return;
     }
@@ -2266,7 +2340,17 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         app.ui.phonetic_expected_caret = None;
         let now = ui.input(|i| i.time);
         let (delay, dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
-        let clicks = press_count(app.canvas.last_press, now, p, delay, dist);
+        let mut clicks = press_count(app.canvas.last_press, now, p, delay, dist);
+        if app.canvas.is_touch
+            && let Some(pos) = layout.hit(page, x, y, story)
+        {
+            if let Some(last) = &app.canvas.last_touch_pos
+                && *last != pos
+            {
+                clicks = 1;
+            }
+            app.canvas.last_touch_pos = Some(pos);
+        }
         app.canvas.last_press = Some((now, p, clicks));
         app.canvas.unit_drag = None;
         // A double-click that enters or leaves a header/footer is handled on release.
@@ -2305,6 +2389,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         // extends by lines; dragging grows the selection by the clicked unit.
         if story == StoryRef::Body
             && !mods.alt
+            && !app.canvas.is_touch
             && let Some(line) = layout.selection_bar_at(page, x, y)
         {
             app.canvas.column_drag = None;
@@ -2340,6 +2425,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         let Some(pos) = layout.hit(page, x, y, story) else { return };
         // Ctrl/⌘+click follows a hyperlink.
         if mods.command
+            && !app.canvas.is_touch
             && let Some(link) = link_under(app, layout, page, x, y, &pos)
         {
             if let Some(name) = link.strip_prefix('#') {
@@ -2371,7 +2457,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             _ if mods.shift => None,
             3 if !hf_switch => Some("paragraph"),
             2 if !hf_switch => Some("word"),
-            1 if mods.command => Some("sentence"),
+            1 if mods.command && !app.canvas.is_touch => Some("sentence"),
             _ => None,
         };
         if let Some(unit) = unit {
@@ -2420,7 +2506,8 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             && pos != app.session.sel_ends().focus
         {
             let pj = serde_json::to_value(&pos).unwrap_or_default();
-            let _ = app.session.run("caret.set", &json!({"pos": pj, "extend": true}));
+            let extend = !app.canvas.is_touch;
+            let _ = app.session.run("caret.set", &json!({"pos": pj, "extend": extend}));
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
@@ -4848,6 +4935,35 @@ mod tests {
             h.step();
         }
         assert_eq!(ime_interrupted(&h), Some(true), "a click still interrupts composition");
+    }
+
+    /// On touch devices (or mobile viewports), tapping text must place a single caret
+    /// and show the touch handle, never triggering sentence selection even with command modifier.
+    #[test]
+    fn touch_tap_places_caret_without_selecting_sentence() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "First sentence. Second sentence."})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        assert!(h.state().canvas.is_touch, "mobile width (<780) activates is_touch");
+        let at = h.state().canvas.page_rects.first().map(|r| r.center()).expect("a page");
+        let mods = egui::Modifiers { command: true, mac_cmd: true, ctrl: true, ..Default::default() };
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: mods });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: mods });
+        h.step();
+        assert!(h.state().session.sel.is_collapsed(), "touch tap must place caret, not select sentence");
+        assert!(h.state().canvas.caret_handle_rect.is_some(), "touch caret knob handle is visible");
     }
 
     fn page_at_index(rects: &[Rect], p: Pos2) -> Option<usize> {
